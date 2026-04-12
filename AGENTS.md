@@ -50,6 +50,12 @@ The project owner may communicate in Dutch; all project artifacts must be in Eng
 
 ---
 
+## Collaboration Assignment
+
+No fixed agent handoff order is prescribed in this repository. Task ownership and review order are decided at the start of each work session.
+
+---
+
 ## Development Workflow: TDD
 
 **All features are developed using Test-Driven Development (TDD).**
@@ -73,7 +79,7 @@ Follow the red-green-refactor cycle strictly:
 ### Test scope
 
 - **Unit tests**: pure functions with no I/O (config parsing, error factory, role permission logic).
-- **Integration tests**: anything touching Neo4j or HTTP — use the real Neo4j testcontainer and a test FastAPI/Hono app.
+- **Integration tests**: anything touching Neo4j or HTTP — use the real Neo4j testcontainer and a test Hono app.
 - **No mocking of Neo4j**. Use testcontainers for a real instance. Mock only external OIDC/JWKS endpoints using a locally generated RSA key pair.
 
 ### TDD execution order
@@ -108,6 +114,11 @@ tests/
   tools.test.ts
   sharing.test.ts
   namespace.test.ts
+
+docs/
+  PLAN.md
+  DECISIONS.md
+  OPEN_WEBUI_SETUP_EXAMPLE.md
 ```
 
 ---

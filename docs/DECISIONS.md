@@ -12,7 +12,7 @@ New decisions are added here before merging the code that implements them.
 **Date**: 2025-04-12
 **Status**: Accepted
 
-**Decision**: Implement in TypeScript (Node.js 24), not Python.
+**Decision**: Implement in TypeScript (Node.js 24).
 
 **Rationale**:
 - The project owner works primarily in TypeScript; consistency across their stack.
@@ -20,8 +20,6 @@ New decisions are added here before merging the code that implements them.
 - `jose` (npm) is the standard for JWT/JWKS in Node.js — RS256, kid-lookup, JWKS refresh, all first-class.
 - `neo4j-driver` has full official TypeScript support.
 - Node.js 24 includes built-in `fetch`, removing the need for an HTTP client dependency.
-
-**Rejected alternative**: Python (FastAPI + uvicorn + python-jose). Viable, but Python MCP SDK is less mature and inconsistent with the owner's preferred stack.
 
 ---
 
@@ -50,7 +48,7 @@ New decisions are added here before merging the code that implements them.
 **Decision**: Expose `POST /mcp/{namespace}` as an independent namespace-scoped MCP endpoint in addition to `POST /mcp`. Each URL path is treated as an independent MCP server endpoint.
 
 **Rationale**:
-- Open WebUI and Claude Code are configured with one URL per workspace/assistant (e.g., `/mcp/homelab`, `/mcp/personal`, `/mcp/work`). See `OPEN_WEBUI_SETUP_EXAMPLE.md`.
+- Open WebUI and Claude Code are configured with one URL per workspace/assistant (e.g., `/mcp/homelab`, `/mcp/personal`, `/mcp/work`). See `docs/OPEN_WEBUI_SETUP_EXAMPLE.md`.
 - Namespace in URL makes routing explicit and requires no client-side configuration beyond the URL.
 - Simpler operational model than requiring all clients to send `meta.namespace` in the initialize body.
 
@@ -86,7 +84,7 @@ New decisions are added here before merging the code that implements them.
 - Avoids a Redis dependency for a use case with very few concurrent users.
 - Single-process constraint is explicitly documented so it is not violated inadvertently.
 
-**Constraint**: This must be deployed as a single uvicorn/Node process. A multi-instance deployment would require shared session storage (e.g., Redis).
+**Constraint**: This must be deployed as a single Node.js process. A multi-instance deployment would require shared session storage (e.g., Redis).
 
 **Future work**: Redis-backed sessions for multi-worker deployment.
 
@@ -187,7 +185,7 @@ New decisions are added here before merging the code that implements them.
 | 200 | -32003 | RESOURCE_NOT_FOUND | Resource does not exist |
 | 500 | -32004 | INTERNAL_ERROR | Unexpected server/Neo4j error |
 
-**Rationale**: A single source of truth prevents inconsistencies between implementation and tests. Discovered during Codex review (iteration 2) that having both -32600 and -32001 for namespace conflict in different sections caused confusion.
+**Rationale**: A single source of truth prevents inconsistencies between implementation and tests. Earlier drafts used both -32600 and -32001 for namespace conflict in different sections, which caused confusion.
 
 ---
 
@@ -243,7 +241,7 @@ RETURN
   END AS role
 ```
 
-**Rationale**: The original draft plan reused `r` from an OPTIONAL MATCH, which can leave `r` null and prevent the HAS_ACCESS match from resolving. Identified as a CRITICAL bug during Codex review.
+**Rationale**: The original draft plan reused `r` from an OPTIONAL MATCH, which can leave `r` null and prevent the HAS_ACCESS match from resolving. This is a critical correctness issue.
 
 ---
 
@@ -264,7 +262,7 @@ ORDER BY r.updated_at DESC
 SKIP $skip LIMIT $limit
 ```
 
-**Rationale**: A global `MATCH (r:Resource)` scans all resources regardless of user, which grows unboundedly. Traversal from the user is O(user's resources), not O(all resources). Also adds pagination via `SKIP`/`LIMIT`. Identified as MAJOR performance issue during Codex review.
+**Rationale**: A global `MATCH (r:Resource)` scans all resources regardless of user, which grows unboundedly. Traversal from the user is O(user's resources), not O(all resources). Also adds pagination via `SKIP`/`LIMIT`. This prevents a major performance issue.
 
 ---
 
@@ -308,7 +306,7 @@ SKIP $skip LIMIT $limit
 
 **Decision**: Return `"protocolVersion": "2025-03-26"` in the `initialize` result. If the client sends an unsupported version, return a JSON-RPC error with `data: { "supported": ["2025-03-26"] }`.
 
-**Rationale**: The original draft plan incorrectly mixed the 2024-11-05 protocol version with the 2025 Streamable HTTP transport. These are separate spec revisions. Identified as CRITICAL during Codex review (iteration 2).
+**Rationale**: The original draft plan incorrectly mixed the 2024-11-05 protocol version with the 2025 Streamable HTTP transport. These are separate spec revisions and must not be combined.
 
 ---
 

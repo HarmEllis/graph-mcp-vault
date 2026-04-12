@@ -1,7 +1,5 @@
 # PLAN: graph-mcp-vault
 
-> Validated via 5-iteration Codex review loop. All critical/major protocol and security issues resolved before finalizing.
-
 ---
 
 ## Goal
@@ -11,43 +9,30 @@ Build an MCP proxy server that exposes Neo4j as a multi-tenant MCP tool server.
 - Identity management via a standards-compliant OIDC/OAuth2 provider (Pocket ID is one example)
 - Data isolation per `(user_id, namespace)`
 - Graph-native permissions in Neo4j
-- Implementation language: see recommendation below
+- Implementation language: TypeScript (project standard)
 
 ---
 
-## Language Recommendation
+## Implementation Language
 
-### TypeScript (recommended)
-
-The project owner works primarily in TypeScript. This is a **good fit** for this project:
+TypeScript is the fixed implementation language for this project:
 
 - **Official MCP TypeScript SDK** (`@modelcontextprotocol/sdk`) is TypeScript-first and handles: protocol version negotiation, batch JSON-RPC, session headers, tool registry, and message routing — eliminating ~30% of manual protocol implementation work.
 - **`jose`** (npm) — industry-standard JWT/JWKS for Node.js: RS256, kid-lookup, JWKS refresh, all built in.
 - **`neo4j-driver`** — full TypeScript support, officially maintained by Neo4j.
-- **`zod`** — schema validation (equivalent to pydantic).
+- **`zod`** — schema validation.
 - **`testcontainers`** — works in TypeScript/Node.js.
-- HTTP server: **Hono** (lightweight, excellent TypeScript types) or **Fastify**.
+- HTTP server: **Hono**.
 
 **Potential downsides of TypeScript:**
 
 | Risk | Severity | Notes |
 |------|----------|-------|
 | MCP SDK abstracts protocol details | Low | Less raw control, but SDK is spec-compliant |
-| Async Neo4j session patterns differ from Python | Low | Drivers are equivalent; syntax only |
-| testcontainers Node.js slightly less mature | Low | Works fine for Neo4j; actively maintained |
-| Inconsistency if the rest of your stack is Python | Medium | Adds language diversity to deployment |
+| testcontainers Node.js behavior can vary by host OS | Low | Covered by CI and deterministic container setup |
+| Strict TypeScript can slow first implementation pass | Low | Prevents many runtime issues early |
 
-**Conclusion**: no significant downsides. TypeScript with the official MCP SDK is likely the **fastest path to a working implementation**.
-
-### Python (alternative)
-
-Also viable:
-- `fastapi` + `uvicorn`
-- `python-jose[cryptography]` for JWT
-- `mcp` (official Python SDK from modelcontextprotocol)
-- `neo4j` async driver
-
-Choose Python if you want consistency with existing services.
+**Conclusion**: no significant downsides. TypeScript with the official MCP SDK is the **chosen implementation path**.
 
 ---
 
@@ -57,7 +42,7 @@ Choose Python if you want consistency with existing services.
 - **Streamable HTTP 2025-03-26** — JSON-only responses, **no SSE**
 - `POST /mcp` and `POST /mcp/{namespace}` — MCP endpoints
 - `GET /mcp{,/{namespace}}` → 405 Method Not Allowed
-- `/mcp/{namespace}` is a **deliberate proxy-level extension** to the spec (namespace via URL, for Open WebUI / Claude Code workspace isolation per OPEN_WEBUI_SETUP_EXAMPLE.md)
+- `/mcp/{namespace}` is a **deliberate proxy-level extension** to the spec (namespace via URL, for Open WebUI / Claude Code workspace isolation; see `docs/OPEN_WEBUI_SETUP_EXAMPLE.md`)
 
 ### Authentication
 - Bearer JWT only — no API keys, no other schemes
@@ -157,32 +142,36 @@ SKIP $skip LIMIT $limit
 
 ---
 
-## Project Structure (language-agnostic)
+## Project Structure
 
 ```
 graph-mcp-vault/
 ├── src/
-│   ├── main.*               # App entry point, lifespan, router registration
-│   ├── config.*             # Settings from environment variables
-│   ├── auth.*               # JWT validation + JWKS cache
-│   ├── session.*            # In-memory session store + background cleanup
-│   ├── neo4j-client.*       # Async Neo4j driver + all query helpers
-│   ├── schema.*             # Neo4j schema initialization
-│   ├── errors.*             # Error constants + helper factory
+│   ├── main.ts              # App entry point, lifespan, router registration
+│   ├── config.ts            # Settings from environment variables
+│   ├── auth.ts              # JWT validation + JWKS cache
+│   ├── session.ts           # In-memory session store + background cleanup
+│   ├── neo4j-client.ts      # Async Neo4j driver + all query helpers
+│   ├── schema.ts            # Neo4j schema initialization
+│   ├── errors.ts            # Error constants + helper factory
 │   ├── routers/
-│   │   ├── oauth-meta.*     # GET /.well-known/oauth-authorization-server
-│   │   └── mcp.*            # POST /mcp + POST /mcp/{namespace}
+│   │   ├── oauth-meta.ts    # GET /.well-known/oauth-authorization-server
+│   │   └── mcp.ts           # POST /mcp + POST /mcp/{namespace}
 │   └── tools/
-│       ├── registry.*       # MCP tool registry + tool descriptor list
-│       ├── resources.*      # create/get/list/update/delete tools
-│       └── sharing.*        # share/revoke/list_sharing tools
+│       ├── registry.ts      # MCP tool registry + tool descriptor list
+│       ├── resources.ts     # create/get/list/update/delete tools
+│       └── sharing.ts       # share/revoke/list_sharing tools
 ├── tests/
-│   ├── setup.*              # Fixtures: Neo4j testcontainer, RSA keys, test app, make_token
-│   ├── auth.test.*
-│   ├── mcp-lifecycle.test.*
-│   ├── tools.test.*
-│   ├── sharing.test.*
-│   └── namespace.test.*
+│   ├── setup.ts             # Fixtures: Neo4j testcontainer, RSA keys, test app, make_token
+│   ├── auth.test.ts
+│   ├── mcp-lifecycle.test.ts
+│   ├── tools.test.ts
+│   ├── sharing.test.ts
+│   └── namespace.test.ts
+├── docs/
+│   ├── PLAN.md
+│   ├── DECISIONS.md
+│   └── OPEN_WEBUI_SETUP_EXAMPLE.md
 ├── docker-compose.yml
 ├── Dockerfile
 ├── .env.example
@@ -378,8 +367,7 @@ volumes:
 docker compose up -d
 
 # Run test suite
-# TypeScript: npx vitest run
-# Python:     pytest tests/ -v
+pnpm vitest run
 
 # Manual smoke test (requires a valid JWT from your OIDC provider)
 curl -X POST http://localhost:8000/mcp \
