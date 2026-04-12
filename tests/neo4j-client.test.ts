@@ -1,0 +1,402 @@
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { GenericContainer, Wait, type StartedTestContainer } from 'testcontainers';
+import neo4j, { type Driver } from 'neo4j-driver';
+import { initSchema } from '../src/schema.js';
+import { Neo4jClient } from '../src/neo4j-client.js';
+
+// ── Container setup ───────────────────────────────────────────────────────────
+
+const NEO4J_PASSWORD = 'testpassword';
+
+let container: StartedTestContainer;
+let driver: Driver;
+let client: Neo4jClient;
+
+beforeAll(async () => {
+  container = await new GenericContainer('neo4j:5-community')
+    .withEnvironment({ NEO4J_AUTH: `neo4j/${NEO4J_PASSWORD}` })
+    .withExposedPorts(7687)
+    .withWaitStrategy(Wait.forLogMessage('Bolt enabled on'))
+    .start();
+
+  const boltPort = container.getMappedPort(7687);
+  driver = neo4j.driver(
+    `bolt://localhost:${boltPort}`,
+    neo4j.auth.basic('neo4j', NEO4J_PASSWORD),
+  );
+
+  await initSchema(driver);
+  client = new Neo4jClient(driver);
+}, 120_000);
+
+afterAll(async () => {
+  await driver?.close();
+  await container?.stop();
+});
+
+// ── initSchema ────────────────────────────────────────────────────────────────
+
+describe('initSchema', () => {
+  it('creates constraints and indexes without error', async () => {
+    await expect(initSchema(driver)).resolves.toBeUndefined();
+  });
+
+  it('is idempotent — can be called multiple times without error', async () => {
+    await expect(initSchema(driver)).resolves.toBeUndefined();
+    await expect(initSchema(driver)).resolves.toBeUndefined();
+  });
+});
+
+// ── createResource ────────────────────────────────────────────────────────────
+
+describe('Neo4jClient.createResource', () => {
+  it('creates a resource and returns id and created_at', async () => {
+    const result = await client.createResource({
+      userId: 'user-create-a',
+      namespace: 'default',
+      type: 'note',
+      title: 'My Note',
+      content: 'Hello world',
+    });
+
+    expect(typeof result.id).toBe('string');
+    expect(result.id.length).toBeGreaterThan(0);
+    expect(typeof result.created_at).toBe('string');
+  });
+});
+
+// ── getResource ───────────────────────────────────────────────────────────────
+
+describe('Neo4jClient.getResource', () => {
+  it('returns the resource for an existing id', async () => {
+    const created = await client.createResource({
+      userId: 'user-get-b',
+      namespace: 'default',
+      type: 'note',
+      title: 'Fetch Me',
+      content: 'Content here',
+    });
+
+    const resource = await client.getResource(created.id);
+
+    expect(resource).not.toBeNull();
+    expect(resource?.id).toBe(created.id);
+    expect(resource?.title).toBe('Fetch Me');
+    expect(resource?.content).toBe('Content here');
+    expect(resource?.user_id).toBe('user-get-b');
+    expect(resource?.namespace).toBe('default');
+    expect(resource?.type).toBe('note');
+  });
+
+  it('returns null for a non-existent resource id', async () => {
+    const result = await client.getResource('00000000-0000-0000-0000-000000000000');
+    expect(result).toBeNull();
+  });
+});
+
+// ── listResources ─────────────────────────────────────────────────────────────
+
+describe('Neo4jClient.listResources', () => {
+  it('returns resources owned by the user', async () => {
+    const userId = 'user-list-owned';
+    await client.createResource({ userId, namespace: 'ns1', type: 'note', title: 'R1', content: '' });
+    await client.createResource({ userId, namespace: 'ns1', type: 'note', title: 'R2', content: '' });
+
+    const resources = await client.listResources({ userId, namespace: 'ns1' });
+
+    expect(resources.length).toBeGreaterThanOrEqual(2);
+    expect(resources.every((r) => r.user_id === userId)).toBe(true);
+    expect(resources.every((r) => r.ownership === 'owner')).toBe(true);
+  });
+
+  it('filters resources by namespace', async () => {
+    const userId = 'user-ns-filter';
+    await client.createResource({ userId, namespace: 'ns-a', type: 'note', title: 'In A', content: '' });
+    await client.createResource({ userId, namespace: 'ns-b', type: 'note', title: 'In B', content: '' });
+
+    const resources = await client.listResources({ userId, namespace: 'ns-a' });
+
+    expect(resources.every((r) => r.namespace === 'ns-a')).toBe(true);
+    expect(resources.some((r) => r.title === 'In A')).toBe(true);
+    expect(resources.some((r) => r.title === 'In B')).toBe(false);
+  });
+
+  it('filters resources by type', async () => {
+    const userId = 'user-type-filter';
+    await client.createResource({ userId, namespace: 'default', type: 'note', title: 'Note', content: '' });
+    await client.createResource({ userId, namespace: 'default', type: 'task', title: 'Task', content: '' });
+
+    const notes = await client.listResources({ userId, type: 'note' });
+
+    expect(notes.every((r) => r.type === 'note')).toBe(true);
+  });
+
+  it('respects limit and skip for pagination', async () => {
+    const userId = 'user-pagination';
+    for (let i = 0; i < 5; i++) {
+      await client.createResource({ userId, namespace: 'default', type: 'note', title: `Item ${i}`, content: '' });
+    }
+
+    const page1 = await client.listResources({ userId, limit: 2, skip: 0 });
+    const page2 = await client.listResources({ userId, limit: 2, skip: 2 });
+
+    expect(page1.length).toBe(2);
+    expect(page2.length).toBe(2);
+    expect(page1[0]?.id).not.toBe(page2[0]?.id);
+  });
+});
+
+// ── updateResource ────────────────────────────────────────────────────────────
+
+describe('Neo4jClient.updateResource', () => {
+  it('updates title and content of an existing resource', async () => {
+    const created = await client.createResource({
+      userId: 'user-update',
+      namespace: 'default',
+      type: 'note',
+      title: 'Original Title',
+      content: 'Original Content',
+    });
+
+    await client.updateResource(created.id, { title: 'New Title', content: 'New Content' });
+
+    const updated = await client.getResource(created.id);
+    expect(updated?.title).toBe('New Title');
+    expect(updated?.content).toBe('New Content');
+  });
+
+  it('updates updated_at timestamp on modification', async () => {
+    const created = await client.createResource({
+      userId: 'user-update-ts',
+      namespace: 'default',
+      type: 'note',
+      title: 'Title',
+      content: 'Content',
+    });
+
+    const before = await client.getResource(created.id);
+    await new Promise((r) => setTimeout(r, 10));
+    await client.updateResource(created.id, { title: 'Updated' });
+    const after = await client.getResource(created.id);
+
+    expect(after?.updated_at).not.toBe(before?.updated_at);
+  });
+});
+
+// ── deleteResource ────────────────────────────────────────────────────────────
+
+describe('Neo4jClient.deleteResource', () => {
+  it('removes the resource from the database', async () => {
+    const created = await client.createResource({
+      userId: 'user-delete',
+      namespace: 'default',
+      type: 'note',
+      title: 'To Delete',
+      content: '',
+    });
+
+    await client.deleteResource(created.id);
+
+    const result = await client.getResource(created.id);
+    expect(result).toBeNull();
+  });
+
+  it('detaches and deletes all relationships', async () => {
+    const ownerId = 'user-delete-rel';
+    const viewerId = 'user-delete-rel-viewer';
+    const created = await client.createResource({
+      userId: ownerId,
+      namespace: 'default',
+      type: 'note',
+      title: 'Has Relations',
+      content: '',
+    });
+
+    await client.shareResource(created.id, viewerId, 'viewer');
+    await client.deleteResource(created.id);
+
+    const result = await client.getResource(created.id);
+    expect(result).toBeNull();
+  });
+});
+
+// ── getEffectiveRole ──────────────────────────────────────────────────────────
+
+describe('Neo4jClient.getEffectiveRole', () => {
+  it('returns "owner" for the user who created the resource', async () => {
+    const userId = 'user-role-owner';
+    const created = await client.createResource({
+      userId,
+      namespace: 'default',
+      type: 'note',
+      title: 'Owned',
+      content: '',
+    });
+
+    const role = await client.getEffectiveRole(userId, created.id);
+    expect(role).toBe('owner');
+  });
+
+  it('returns null for a user with no relationship to the resource', async () => {
+    const created = await client.createResource({
+      userId: 'user-role-creator',
+      namespace: 'default',
+      type: 'note',
+      title: 'Not Shared',
+      content: '',
+    });
+
+    const role = await client.getEffectiveRole('unrelated-user-xyz', created.id);
+    expect(role).toBeNull();
+  });
+
+  it('returns "viewer" for a user granted viewer access', async () => {
+    const ownerId = 'user-role-grantor-viewer';
+    const viewerId = 'user-role-viewer';
+    const created = await client.createResource({
+      userId: ownerId,
+      namespace: 'default',
+      type: 'note',
+      title: 'Viewer Access',
+      content: '',
+    });
+
+    await client.shareResource(created.id, viewerId, 'viewer');
+    const role = await client.getEffectiveRole(viewerId, created.id);
+    expect(role).toBe('viewer');
+  });
+
+  it('returns "editor" for a user granted editor access', async () => {
+    const ownerId = 'user-role-grantor-editor';
+    const editorId = 'user-role-editor';
+    const created = await client.createResource({
+      userId: ownerId,
+      namespace: 'default',
+      type: 'note',
+      title: 'Editor Access',
+      content: '',
+    });
+
+    await client.shareResource(created.id, editorId, 'editor');
+    const role = await client.getEffectiveRole(editorId, created.id);
+    expect(role).toBe('editor');
+  });
+});
+
+// ── shareResource ─────────────────────────────────────────────────────────────
+
+describe('Neo4jClient.shareResource', () => {
+  it('creates a HAS_ACCESS relationship with the specified role', async () => {
+    const ownerId = 'user-share-owner';
+    const targetId = 'user-share-target';
+    const created = await client.createResource({
+      userId: ownerId,
+      namespace: 'default',
+      type: 'note',
+      title: 'Shareable',
+      content: '',
+    });
+
+    await client.shareResource(created.id, targetId, 'editor');
+
+    const role = await client.getEffectiveRole(targetId, created.id);
+    expect(role).toBe('editor');
+  });
+
+  it('is idempotent — sharing the same user twice updates the role', async () => {
+    const ownerId = 'user-share-idem-owner';
+    const targetId = 'user-share-idem-target';
+    const created = await client.createResource({
+      userId: ownerId,
+      namespace: 'default',
+      type: 'note',
+      title: 'Idempotent Share',
+      content: '',
+    });
+
+    await client.shareResource(created.id, targetId, 'viewer');
+    await client.shareResource(created.id, targetId, 'editor');
+
+    const role = await client.getEffectiveRole(targetId, created.id);
+    expect(role).toBe('editor');
+  });
+
+  it('creates the target User node if it does not exist', async () => {
+    const ownerId = 'user-share-creates-user';
+    const newUserId = 'brand-new-user-' + Date.now();
+    const created = await client.createResource({
+      userId: ownerId,
+      namespace: 'default',
+      type: 'note',
+      title: 'New User Target',
+      content: '',
+    });
+
+    await client.shareResource(created.id, newUserId, 'viewer');
+
+    const role = await client.getEffectiveRole(newUserId, created.id);
+    expect(role).toBe('viewer');
+  });
+});
+
+// ── revokeAccess ──────────────────────────────────────────────────────────────
+
+describe('Neo4jClient.revokeAccess', () => {
+  it('removes the HAS_ACCESS relationship', async () => {
+    const ownerId = 'user-revoke-owner';
+    const targetId = 'user-revoke-target';
+    const created = await client.createResource({
+      userId: ownerId,
+      namespace: 'default',
+      type: 'note',
+      title: 'Revokable',
+      content: '',
+    });
+
+    await client.shareResource(created.id, targetId, 'viewer');
+    await client.revokeAccess(created.id, targetId);
+
+    const role = await client.getEffectiveRole(targetId, created.id);
+    expect(role).toBeNull();
+  });
+});
+
+// ── listSharing ───────────────────────────────────────────────────────────────
+
+describe('Neo4jClient.listSharing', () => {
+  it('returns all users granted HAS_ACCESS to the resource', async () => {
+    const ownerId = 'user-list-sharing-owner';
+    const viewer1 = 'user-list-sharing-v1';
+    const editor1 = 'user-list-sharing-e1';
+    const created = await client.createResource({
+      userId: ownerId,
+      namespace: 'default',
+      type: 'note',
+      title: 'Shared With Many',
+      content: '',
+    });
+
+    await client.shareResource(created.id, viewer1, 'viewer');
+    await client.shareResource(created.id, editor1, 'editor');
+
+    const sharing = await client.listSharing(created.id);
+
+    expect(sharing).toHaveLength(2);
+    expect(sharing.some((s) => s.user_id === viewer1 && s.role === 'viewer')).toBe(true);
+    expect(sharing.some((s) => s.user_id === editor1 && s.role === 'editor')).toBe(true);
+    expect(sharing.every((s) => typeof s.granted_at === 'string')).toBe(true);
+  });
+
+  it('returns an empty array when no users have been granted access', async () => {
+    const created = await client.createResource({
+      userId: 'user-no-sharing',
+      namespace: 'default',
+      type: 'note',
+      title: 'Private',
+      content: '',
+    });
+
+    const sharing = await client.listSharing(created.id);
+    expect(sharing).toHaveLength(0);
+  });
+});

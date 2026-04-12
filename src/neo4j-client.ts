@@ -1,0 +1,293 @@
+import { randomUUID } from 'node:crypto';
+import neo4j, { type Driver } from 'neo4j-driver';
+
+// ── Domain types ──────────────────────────────────────────────────────────────
+
+export interface Resource {
+  id: string;
+  user_id: string;
+  namespace: string;
+  type: string;
+  title: string;
+  content: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ResourceWithOwnership extends Resource {
+  ownership: 'owner' | 'shared';
+}
+
+export interface SharingEntry {
+  user_id: string;
+  role: 'viewer' | 'editor';
+  granted_at: string;
+}
+
+// ── Neo4jClient ───────────────────────────────────────────────────────────────
+
+/**
+ * Thin async wrapper around the Neo4j driver.
+ *
+ * All query logic lives here; tool handlers must never open sessions directly.
+ * Properties stored as plain strings (ISO dates, UUIDs) to avoid neo4j.Integer
+ * and DateTime conversion concerns in callers.
+ */
+export class Neo4jClient {
+  constructor(private readonly driver: Driver) {}
+
+  // ── Resources ───────────────────────────────────────────────────────────────
+
+  /**
+   * Creates a new Resource node and an OWNS relationship from the User.
+   * MERGEs the User node so missing users are created on the fly.
+   */
+  async createResource(params: {
+    userId: string;
+    namespace: string;
+    type: string;
+    title: string;
+    content: string;
+  }): Promise<{ id: string; created_at: string }> {
+    const id = randomUUID();
+    const now = new Date().toISOString();
+    const session = this.driver.session();
+    try {
+      await session.run(
+        `
+        MERGE (u:User {id: $userId})
+        CREATE (r:Resource {
+          id:         $id,
+          user_id:    $userId,
+          namespace:  $namespace,
+          type:       $type,
+          title:      $title,
+          content:    $content,
+          created_at: $now,
+          updated_at: $now
+        })
+        CREATE (u)-[:OWNS]->(r)
+        `,
+        {
+          userId: params.userId,
+          id,
+          namespace: params.namespace,
+          type: params.type,
+          title: params.title,
+          content: params.content,
+          now,
+        },
+      );
+      return { id, created_at: now };
+    } finally {
+      await session.close();
+    }
+  }
+
+  /** Returns the Resource with the given id, or null if it does not exist. */
+  async getResource(resourceId: string): Promise<Resource | null> {
+    const session = this.driver.session();
+    try {
+      const result = await session.run('MATCH (r:Resource {id: $id}) RETURN r', { id: resourceId });
+      if (result.records.length === 0) return null;
+      const record = result.records[0];
+      if (!record) return null;
+      return record.get('r').properties as Resource;
+    } finally {
+      await session.close();
+    }
+  }
+
+  /**
+   * Returns all resources the user can read (owned + shared via HAS_ACCESS),
+   * optionally filtered by namespace and/or type, with pagination.
+   */
+  async listResources(params: {
+    userId: string;
+    namespace?: string;
+    type?: string;
+    limit?: number;
+    skip?: number;
+  }): Promise<ResourceWithOwnership[]> {
+    const limit = params.limit ?? 50;
+    const skip = params.skip ?? 0;
+    const session = this.driver.session();
+    try {
+      const result = await session.run(
+        `
+        MATCH (u:User {id: $userId})-[:OWNS|HAS_ACCESS]->(r:Resource)
+        WHERE ($namespace IS NULL OR r.namespace = $namespace)
+          AND ($type IS NULL OR r.type = $type)
+        RETURN r,
+          CASE WHEN (u)-[:OWNS]->(r) THEN 'owner' ELSE 'shared' END AS ownership
+        ORDER BY r.updated_at DESC
+        SKIP $skip LIMIT $limit
+        `,
+        {
+          userId: params.userId,
+          namespace: params.namespace ?? null,
+          type: params.type ?? null,
+          skip: neo4j.int(skip),
+          limit: neo4j.int(limit),
+        },
+      );
+      return result.records.map((record) => ({
+        ...(record.get('r').properties as Resource),
+        ownership: record.get('ownership') as 'owner' | 'shared',
+      }));
+    } finally {
+      await session.close();
+    }
+  }
+
+  /**
+   * Updates mutable fields (title and/or content) of an existing Resource.
+   * Always sets updated_at to the current time.
+   */
+  async updateResource(
+    resourceId: string,
+    params: { title?: string; content?: string },
+  ): Promise<void> {
+    const now = new Date().toISOString();
+    const session = this.driver.session();
+    try {
+      await session.run(
+        `
+        MATCH (r:Resource {id: $id})
+        SET r.updated_at = $now
+          ${params.title !== undefined ? ', r.title = $title' : ''}
+          ${params.content !== undefined ? ', r.content = $content' : ''}
+        `,
+        {
+          id: resourceId,
+          now,
+          ...(params.title !== undefined ? { title: params.title } : {}),
+          ...(params.content !== undefined ? { content: params.content } : {}),
+        },
+      );
+    } finally {
+      await session.close();
+    }
+  }
+
+  /** DETACH DELETEs the Resource node, removing all relationships. */
+  async deleteResource(resourceId: string): Promise<void> {
+    const session = this.driver.session();
+    try {
+      await session.run('MATCH (r:Resource {id: $id}) DETACH DELETE r', { id: resourceId });
+    } finally {
+      await session.close();
+    }
+  }
+
+  // ── Roles ────────────────────────────────────────────────────────────────────
+
+  /**
+   * Returns the effective role of `userId` on `resourceId`:
+   * - `'owner'` if the user has an OWNS relationship to the resource
+   * - `'editor'` or `'viewer'` if the user has a matching HAS_ACCESS relationship
+   * - `null` if the user has no relationship to the resource
+   */
+  async getEffectiveRole(
+    userId: string,
+    resourceId: string,
+  ): Promise<'owner' | 'editor' | 'viewer' | null> {
+    const session = this.driver.session();
+    try {
+      const result = await session.run(
+        `
+        MATCH (r:Resource {id: $resourceId})
+        OPTIONAL MATCH (u:User {id: $userId})-[:OWNS]->(r)
+        OPTIONAL MATCH (u2:User {id: $userId})-[acc:HAS_ACCESS]->(r)
+        RETURN
+          CASE
+            WHEN u  IS NOT NULL THEN 'owner'
+            WHEN acc IS NOT NULL THEN acc.role
+            ELSE null
+          END AS role
+        `,
+        { userId, resourceId },
+      );
+      if (result.records.length === 0) return null;
+      const record = result.records[0];
+      if (!record) return null;
+      const role = record.get('role') as string | null;
+      if (role === 'owner' || role === 'editor' || role === 'viewer') return role;
+      return null;
+    } finally {
+      await session.close();
+    }
+  }
+
+  // ── Sharing ──────────────────────────────────────────────────────────────────
+
+  /**
+   * Grants `targetUserId` the given `role` on `resourceId`.
+   * MERGEs the target User node (creates it if absent).
+   * The HAS_ACCESS relationship is also MERGEd, so calling this again with a
+   * different role simply updates the existing relationship (idempotent).
+   */
+  async shareResource(
+    resourceId: string,
+    targetUserId: string,
+    role: 'viewer' | 'editor',
+  ): Promise<void> {
+    const now = new Date().toISOString();
+    const session = this.driver.session();
+    try {
+      await session.run(
+        `
+        MATCH (r:Resource {id: $resourceId})
+        MERGE (u:User {id: $targetUserId})
+        MERGE (u)-[acc:HAS_ACCESS]->(r)
+        SET acc.role = $role, acc.granted_at = $now
+        `,
+        { resourceId, targetUserId, role, now },
+      );
+    } finally {
+      await session.close();
+    }
+  }
+
+  /**
+   * Removes the HAS_ACCESS relationship between `targetUserId` and the resource.
+   * No-op if the relationship does not exist.
+   */
+  async revokeAccess(resourceId: string, targetUserId: string): Promise<void> {
+    const session = this.driver.session();
+    try {
+      await session.run(
+        `
+        MATCH (u:User {id: $targetUserId})-[acc:HAS_ACCESS]->(r:Resource {id: $resourceId})
+        DELETE acc
+        `,
+        { targetUserId, resourceId },
+      );
+    } finally {
+      await session.close();
+    }
+  }
+
+  /**
+   * Returns all HAS_ACCESS grants on the resource (does not include the owner).
+   */
+  async listSharing(resourceId: string): Promise<SharingEntry[]> {
+    const session = this.driver.session();
+    try {
+      const result = await session.run(
+        `
+        MATCH (u:User)-[acc:HAS_ACCESS]->(r:Resource {id: $resourceId})
+        RETURN u.id AS user_id, acc.role AS role, acc.granted_at AS granted_at
+        `,
+        { resourceId },
+      );
+      return result.records.map((record) => ({
+        user_id: record.get('user_id') as string,
+        role: record.get('role') as 'viewer' | 'editor',
+        granted_at: record.get('granted_at') as string,
+      }));
+    } finally {
+      await session.close();
+    }
+  }
+}
