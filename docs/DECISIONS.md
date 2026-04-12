@@ -243,7 +243,7 @@ RETURN
   END AS role
 ```
 
-**Rationale**: The original MASTER_PLAN reused `r` from an OPTIONAL MATCH, which can leave `r` null and prevent the HAS_ACCESS match from resolving. Identified as a CRITICAL bug during Codex review.
+**Rationale**: The original draft plan reused `r` from an OPTIONAL MATCH, which can leave `r` null and prevent the HAS_ACCESS match from resolving. Identified as a CRITICAL bug during Codex review.
 
 ---
 
@@ -308,7 +308,7 @@ SKIP $skip LIMIT $limit
 
 **Decision**: Return `"protocolVersion": "2025-03-26"` in the `initialize` result. If the client sends an unsupported version, return a JSON-RPC error with `data: { "supported": ["2025-03-26"] }`.
 
-**Rationale**: The original MASTER_PLAN incorrectly mixed the 2024-11-05 protocol version with the 2025 Streamable HTTP transport. These are separate spec revisions. Identified as CRITICAL during Codex review (iteration 2).
+**Rationale**: The original draft plan incorrectly mixed the 2024-11-05 protocol version with the 2025 Streamable HTTP transport. These are separate spec revisions. Identified as CRITICAL during Codex review (iteration 2).
 
 ---
 
