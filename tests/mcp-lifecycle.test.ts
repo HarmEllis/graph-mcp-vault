@@ -640,4 +640,147 @@ describe('batch requests', () => {
     const text = await res.text();
     expect(text).toBe('');
   });
+
+  it('each response id matches the corresponding request id', async () => {
+    stubJwks();
+    const token = await makeToken();
+    const { app } = buildApp();
+
+    const { sessionId } = await doInitialize(app, token);
+
+    const res = await post(
+      app,
+      '/mcp',
+      [
+        { jsonrpc: '2.0', id: 42, method: 'tools/list' },
+        { jsonrpc: '2.0', id: 'abc', method: 'tools/list' },
+      ],
+      { Authorization: `Bearer ${token}`, 'Mcp-Session-Id': sessionId },
+    );
+
+    const body = (await res.json()) as Array<{ id: unknown }>;
+    const ids = body.map((r) => r.id);
+    expect(ids).toContain(42);
+    expect(ids).toContain('abc');
+  });
+
+  it('invalid JSON-RPC item in batch gets INVALID_REQUEST error; other items succeed', async () => {
+    stubJwks();
+    const token = await makeToken();
+    const { app } = buildApp();
+
+    const { sessionId } = await doInitialize(app, token);
+
+    const res = await post(
+      app,
+      '/mcp',
+      [
+        { jsonrpc: '2.0', id: 50, method: 'tools/list' },
+        'not-an-object',
+        { jsonrpc: '2.0', id: 51, method: 'tools/list' },
+      ],
+      { Authorization: `Bearer ${token}`, 'Mcp-Session-Id': sessionId },
+    );
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Array<{ id: unknown; result?: unknown; error?: { code: number } }>;
+    expect(body).toHaveLength(3);
+
+    const invalid = body.find((r) => r.id === null);
+    expect(invalid?.error?.code).toBe(ErrorCode.INVALID_REQUEST);
+
+    const valid50 = body.find((r) => r.id === 50);
+    expect(valid50).toHaveProperty('result');
+
+    const valid51 = body.find((r) => r.id === 51);
+    expect(valid51).toHaveProperty('result');
+  });
+
+  it('batch with initialize returns Mcp-Session-Id header', async () => {
+    stubJwks();
+    const token = await makeToken();
+    const { app } = buildApp();
+
+    const res = await post(
+      app,
+      '/mcp',
+      [
+        {
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'initialize',
+          params: {
+            protocolVersion: '2025-03-26',
+            capabilities: {},
+            clientInfo: { name: 'test', version: '1.0' },
+          },
+        },
+      ],
+      { Authorization: `Bearer ${token}` },
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get('mcp-session-id')).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+    );
+  });
+
+  it('batch session errors return HTTP 200 (not 400/404) with error entries', async () => {
+    stubJwks();
+    const token = await makeToken();
+    const { app } = buildApp();
+
+    // Two requests with missing session header — each should get INVALID_REQUEST,
+    // but the batch HTTP status must be 200, not 400.
+    const res = await post(
+      app,
+      '/mcp',
+      [
+        { jsonrpc: '2.0', id: 60, method: 'tools/list' },
+        { jsonrpc: '2.0', id: 61, method: 'tools/list' },
+      ],
+      { Authorization: `Bearer ${token}` }, // no Mcp-Session-Id
+    );
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Array<{ error?: { code: number } }>;
+    expect(body).toHaveLength(2);
+    expect(body.every((r) => r.error?.code === ErrorCode.INVALID_REQUEST)).toBe(true);
+  });
+
+  it('batch with unknown session id returns HTTP 200 with SESSION_NOT_FOUND per entry', async () => {
+    stubJwks();
+    const token = await makeToken();
+    const { app } = buildApp();
+
+    const res = await post(
+      app,
+      '/mcp',
+      [
+        { jsonrpc: '2.0', id: 70, method: 'tools/list' },
+        { jsonrpc: '2.0', id: 71, method: 'tools/list' },
+      ],
+      {
+        Authorization: `Bearer ${token}`,
+        'Mcp-Session-Id': '00000000-0000-0000-0000-000000000000',
+      },
+    );
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Array<{ error?: { code: number } }>;
+    expect(body).toHaveLength(2);
+    expect(body.every((r) => r.error?.code === ErrorCode.SESSION_NOT_FOUND)).toBe(true);
+  });
+
+  it('empty batch array returns HTTP 202 empty', async () => {
+    stubJwks();
+    const token = await makeToken();
+    const { app } = buildApp();
+
+    const res = await post(app, '/mcp', [], { Authorization: `Bearer ${token}` });
+
+    expect(res.status).toBe(202);
+    const text = await res.text();
+    expect(text).toBe('');
+  });
 });
