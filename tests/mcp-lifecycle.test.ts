@@ -1,0 +1,643 @@
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { SignJWT, exportJWK, generateKeyPair } from 'jose';
+import type { KeyLike } from 'jose';
+import { Hono } from 'hono';
+import { createMcpRouter } from '../src/routers/mcp.js';
+import { JwksClient } from '../src/auth.js';
+import { SessionStore } from '../src/session.js';
+import { ErrorCode } from '../src/errors.js';
+import type { Config } from '../src/config.js';
+
+// ── Fixtures ──────────────────────────────────────────────────────────────────
+
+const ISSUER = 'https://oidc.example.com';
+const AUDIENCE = 'graph-mcp-vault';
+const KID = 'test-key-1';
+const JWKS_URI = `${ISSUER}/.well-known/jwks.json`;
+
+let privateKey: KeyLike;
+let jwksDoc: object;
+
+const BASE_CONFIG: Config = {
+  oidcIssuer: ISSUER,
+  oidcAudience: AUDIENCE,
+  jwksCacheTtl: 3600,
+  metadataCacheTtl: 3600,
+  neo4jUri: 'bolt://localhost:7687',
+  neo4jUser: 'neo4j',
+  neo4jPassword: 'secret',
+  host: '0.0.0.0',
+  port: 8000,
+  defaultNamespace: 'default',
+  logLevel: 'info',
+  allowedOrigins: '',
+};
+
+beforeAll(async () => {
+  const pair = await generateKeyPair('RS256');
+  privateKey = pair.privateKey;
+  const jwk = await exportJWK(pair.publicKey);
+  jwksDoc = { keys: [{ ...jwk, kid: KID, use: 'sig' }] };
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function stubJwks(): void {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => jwksDoc }),
+  );
+}
+
+async function makeToken(sub = 'user-123'): Promise<string> {
+  const now = Math.floor(Date.now() / 1000);
+  return new SignJWT({ sub })
+    .setProtectedHeader({ alg: 'RS256', kid: KID })
+    .setIssuer(ISSUER)
+    .setAudience(AUDIENCE)
+    .setIssuedAt()
+    .setExpirationTime(now + 3600)
+    .sign(privateKey);
+}
+
+function buildApp(configOverride: Partial<Config> = {}): {
+  app: Hono;
+  sessionStore: SessionStore;
+} {
+  const config = { ...BASE_CONFIG, ...configOverride };
+  const sessionStore = new SessionStore();
+  const jwksClient = new JwksClient(JWKS_URI, config.jwksCacheTtl * 1000);
+  const app = new Hono();
+  app.route('/', createMcpRouter(config, sessionStore, jwksClient, []));
+  return { app, sessionStore };
+}
+
+async function post(
+  app: Hono,
+  path: string,
+  body: unknown,
+  headers: Record<string, string> = {},
+): Promise<Response> {
+  return app.request(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...headers },
+    body: JSON.stringify(body),
+  });
+}
+
+async function doInitialize(
+  app: Hono,
+  token: string,
+  opts: { metaNamespace?: string; urlPath?: string } = {},
+): Promise<{ sessionId: string; res: Response }> {
+  const params: Record<string, unknown> = {
+    protocolVersion: '2025-03-26',
+    capabilities: {},
+    clientInfo: { name: 'test', version: '1.0' },
+  };
+  if (opts.metaNamespace !== undefined) {
+    params['meta'] = { namespace: opts.metaNamespace };
+  }
+  const path = opts.urlPath ?? '/mcp';
+  const res = await post(app, path, { jsonrpc: '2.0', id: 1, method: 'initialize', params }, {
+    Authorization: `Bearer ${token}`,
+  });
+  const sessionId = res.headers.get('mcp-session-id');
+  if (!sessionId) throw new Error(`No Mcp-Session-Id in response (status ${res.status})`);
+  return { sessionId, res };
+}
+
+// ── GET /mcp → 405 ────────────────────────────────────────────────────────────
+
+describe('GET /mcp', () => {
+  it('returns 405 Method Not Allowed', async () => {
+    const { app } = buildApp();
+    const res = await app.request('/mcp', { method: 'GET' });
+    expect(res.status).toBe(405);
+  });
+
+  it('returns 405 for GET /mcp/:namespace', async () => {
+    const { app } = buildApp();
+    const res = await app.request('/mcp/myns', { method: 'GET' });
+    expect(res.status).toBe(405);
+  });
+});
+
+// ── Parse error ───────────────────────────────────────────────────────────────
+
+describe('malformed JSON body', () => {
+  it('returns HTTP 400 with PARSE_ERROR code', async () => {
+    stubJwks();
+    const token = await makeToken();
+    const { app } = buildApp();
+
+    const res = await app.request('/mcp', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: '{ not valid json',
+    });
+
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error.code).toBe(ErrorCode.PARSE_ERROR);
+  });
+});
+
+// ── Authentication ────────────────────────────────────────────────────────────
+
+describe('authentication', () => {
+  it('returns 401 when Authorization header is absent', async () => {
+    const { app } = buildApp();
+    const res = await post(app, '/mcp', { jsonrpc: '2.0', id: 1, method: 'initialize', params: {} });
+    expect(res.status).toBe(401);
+  });
+
+  it('returns 401 when the token is expired', async () => {
+    stubJwks();
+    const expiredToken = await (async () => {
+      const now = Math.floor(Date.now() / 1000);
+      return new SignJWT({ sub: 'user-x' })
+        .setProtectedHeader({ alg: 'RS256', kid: KID })
+        .setIssuer(ISSUER)
+        .setAudience(AUDIENCE)
+        .setIssuedAt()
+        .setExpirationTime(now - 60)
+        .sign(privateKey);
+    })();
+    const { app } = buildApp();
+    const res = await post(app, '/mcp', { jsonrpc: '2.0', id: 1, method: 'initialize', params: {} }, {
+      Authorization: `Bearer ${expiredToken}`,
+    });
+    expect(res.status).toBe(401);
+  });
+});
+
+// ── CORS origin check ─────────────────────────────────────────────────────────
+
+describe('CORS origin check', () => {
+  it('returns 403 when Origin is not in ALLOWED_ORIGINS', async () => {
+    stubJwks();
+    const token = await makeToken();
+    const { app } = buildApp({ allowedOrigins: 'https://trusted.example.com' });
+
+    const res = await post(
+      app,
+      '/mcp',
+      { jsonrpc: '2.0', id: 1, method: 'initialize', params: {} },
+      { Authorization: `Bearer ${token}`, Origin: 'https://evil.example.com' },
+    );
+
+    expect(res.status).toBe(403);
+  });
+
+  it('allows requests when Origin matches ALLOWED_ORIGINS', async () => {
+    stubJwks();
+    const token = await makeToken();
+    const { app } = buildApp({ allowedOrigins: 'https://trusted.example.com' });
+
+    const params = {
+      protocolVersion: '2025-03-26',
+      capabilities: {},
+      clientInfo: { name: 'test', version: '1.0' },
+    };
+    const res = await post(
+      app,
+      '/mcp',
+      { jsonrpc: '2.0', id: 1, method: 'initialize', params },
+      { Authorization: `Bearer ${token}`, Origin: 'https://trusted.example.com' },
+    );
+
+    expect(res.status).toBe(200);
+  });
+
+  it('allows requests when ALLOWED_ORIGINS is wildcard *', async () => {
+    stubJwks();
+    const token = await makeToken();
+    const { app } = buildApp({ allowedOrigins: '*' });
+
+    const params = {
+      protocolVersion: '2025-03-26',
+      capabilities: {},
+      clientInfo: { name: 'test', version: '1.0' },
+    };
+    const res = await post(
+      app,
+      '/mcp',
+      { jsonrpc: '2.0', id: 1, method: 'initialize', params },
+      { Authorization: `Bearer ${token}`, Origin: 'https://any.example.com' },
+    );
+
+    expect(res.status).toBe(200);
+  });
+
+  it('allows requests when ALLOWED_ORIGINS is empty (no check)', async () => {
+    stubJwks();
+    const token = await makeToken();
+    const { app } = buildApp({ allowedOrigins: '' });
+
+    const params = {
+      protocolVersion: '2025-03-26',
+      capabilities: {},
+      clientInfo: { name: 'test', version: '1.0' },
+    };
+    const res = await post(
+      app,
+      '/mcp',
+      { jsonrpc: '2.0', id: 1, method: 'initialize', params },
+      { Authorization: `Bearer ${token}`, Origin: 'https://any.example.com' },
+    );
+
+    expect(res.status).toBe(200);
+  });
+});
+
+// ── initialize ────────────────────────────────────────────────────────────────
+
+describe('initialize', () => {
+  it('returns HTTP 200 with protocolVersion in result', async () => {
+    stubJwks();
+    const token = await makeToken();
+    const { app } = buildApp();
+
+    const { res } = await doInitialize(app, token);
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.result.protocolVersion).toBe('2025-03-26');
+  });
+
+  it('returns Mcp-Session-Id header', async () => {
+    stubJwks();
+    const token = await makeToken();
+    const { app } = buildApp();
+
+    const { sessionId } = await doInitialize(app, token);
+
+    expect(sessionId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+    );
+  });
+
+  it('includes sessionId in result.meta', async () => {
+    stubJwks();
+    const token = await makeToken();
+    const { app } = buildApp();
+
+    const { sessionId, res } = await doInitialize(app, token);
+    const body = await res.json();
+
+    expect(body.result.meta.sessionId).toBe(sessionId);
+  });
+
+  it('includes serverInfo in result', async () => {
+    stubJwks();
+    const token = await makeToken();
+    const { app } = buildApp();
+
+    const { res } = await doInitialize(app, token);
+    const body = await res.json();
+
+    expect(body.result.serverInfo.name).toBe('graph-mcp-vault');
+  });
+
+  it('includes capabilities.tools in result', async () => {
+    stubJwks();
+    const token = await makeToken();
+    const { app } = buildApp();
+
+    const { res } = await doInitialize(app, token);
+    const body = await res.json();
+
+    expect(body.result.capabilities).toHaveProperty('tools');
+  });
+
+  it('returns INVALID_REQUEST when protocolVersion is unsupported', async () => {
+    stubJwks();
+    const token = await makeToken();
+    const { app } = buildApp();
+
+    const res = await post(
+      app,
+      '/mcp',
+      {
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'initialize',
+        params: {
+          protocolVersion: '1999-01-01',
+          capabilities: {},
+          clientInfo: { name: 'test', version: '1.0' },
+        },
+      },
+      { Authorization: `Bearer ${token}` },
+    );
+
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error.code).toBe(ErrorCode.INVALID_REQUEST);
+    expect(body.error.data.supported).toContain('2025-03-26');
+  });
+
+  it('uses namespace from params.meta.namespace', async () => {
+    stubJwks();
+    const token = await makeToken();
+    const { app, sessionStore } = buildApp();
+
+    const { sessionId } = await doInitialize(app, token, { metaNamespace: 'my-workspace' });
+
+    const session = sessionStore.get(sessionId);
+    expect(session?.namespace).toBe('my-workspace');
+  });
+
+  it('uses namespace from URL path when no meta.namespace', async () => {
+    stubJwks();
+    const token = await makeToken();
+    const { app, sessionStore } = buildApp();
+
+    const { sessionId } = await doInitialize(app, token, { urlPath: '/mcp/url-ns' });
+
+    const session = sessionStore.get(sessionId);
+    expect(session?.namespace).toBe('url-ns');
+  });
+
+  it('falls back to DEFAULT_NAMESPACE when no meta or URL namespace', async () => {
+    stubJwks();
+    const token = await makeToken();
+    const { app, sessionStore } = buildApp({ defaultNamespace: 'fallback-ns' });
+
+    const { sessionId } = await doInitialize(app, token);
+
+    const session = sessionStore.get(sessionId);
+    expect(session?.namespace).toBe('fallback-ns');
+  });
+
+  it('meta.namespace takes priority over URL path namespace', async () => {
+    stubJwks();
+    const token = await makeToken();
+    const { app, sessionStore } = buildApp();
+
+    const { sessionId } = await doInitialize(app, token, {
+      metaNamespace: 'meta-ns',
+      urlPath: '/mcp/url-ns',
+    });
+
+    const session = sessionStore.get(sessionId);
+    expect(session?.namespace).toBe('meta-ns');
+  });
+});
+
+// ── Session validation ────────────────────────────────────────────────────────
+
+describe('session validation', () => {
+  it('returns HTTP 400 INVALID_REQUEST when Mcp-Session-Id header is absent', async () => {
+    stubJwks();
+    const token = await makeToken();
+    const { app } = buildApp();
+
+    const res = await post(
+      app,
+      '/mcp',
+      { jsonrpc: '2.0', id: 2, method: 'tools/list' },
+      { Authorization: `Bearer ${token}` },
+    );
+
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error.code).toBe(ErrorCode.INVALID_REQUEST);
+  });
+
+  it('returns HTTP 404 SESSION_NOT_FOUND for an unknown session id', async () => {
+    stubJwks();
+    const token = await makeToken();
+    const { app } = buildApp();
+
+    const res = await post(
+      app,
+      '/mcp',
+      { jsonrpc: '2.0', id: 2, method: 'tools/list' },
+      {
+        Authorization: `Bearer ${token}`,
+        'Mcp-Session-Id': '00000000-0000-0000-0000-000000000000',
+      },
+    );
+
+    expect(res.status).toBe(404);
+    const body = await res.json();
+    expect(body.error.code).toBe(ErrorCode.SESSION_NOT_FOUND);
+  });
+
+  it('returns HTTP 404 SESSION_NOT_FOUND for an expired session', async () => {
+    stubJwks();
+    const token = await makeToken();
+    const sessionStore = new SessionStore(1); // 1 ms TTL
+    const jwksClient = new JwksClient(JWKS_URI, 3_600_000);
+    const app = new Hono();
+    app.route('/', createMcpRouter(BASE_CONFIG, sessionStore, jwksClient, []));
+
+    const { sessionId } = await doInitialize(app, token);
+    await new Promise((r) => setTimeout(r, 20));
+
+    const res = await post(
+      app,
+      '/mcp',
+      { jsonrpc: '2.0', id: 2, method: 'tools/list' },
+      { Authorization: `Bearer ${token}`, 'Mcp-Session-Id': sessionId },
+    );
+
+    expect(res.status).toBe(404);
+    const body = await res.json();
+    expect(body.error.code).toBe(ErrorCode.SESSION_NOT_FOUND);
+  });
+});
+
+// ── tools/list ────────────────────────────────────────────────────────────────
+
+describe('tools/list', () => {
+  it('returns HTTP 200 with an array of tools', async () => {
+    stubJwks();
+    const token = await makeToken();
+    const { app } = buildApp();
+
+    const { sessionId } = await doInitialize(app, token);
+
+    const res = await post(
+      app,
+      '/mcp',
+      { jsonrpc: '2.0', id: 2, method: 'tools/list' },
+      { Authorization: `Bearer ${token}`, 'Mcp-Session-Id': sessionId },
+    );
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(Array.isArray(body.result.tools)).toBe(true);
+  });
+});
+
+// ── Notifications ─────────────────────────────────────────────────────────────
+
+describe('notifications', () => {
+  it('returns HTTP 202 empty body for a standalone notification (no id)', async () => {
+    stubJwks();
+    const token = await makeToken();
+    const { app } = buildApp();
+
+    const res = await post(
+      app,
+      '/mcp',
+      { jsonrpc: '2.0', method: 'notifications/initialized' },
+      { Authorization: `Bearer ${token}` },
+    );
+
+    expect(res.status).toBe(202);
+    const text = await res.text();
+    expect(text).toBe('');
+  });
+
+  it('returns HTTP 202 for notifications/initialized with a valid session', async () => {
+    stubJwks();
+    const token = await makeToken();
+    const { app } = buildApp();
+
+    const { sessionId } = await doInitialize(app, token);
+
+    const res = await post(
+      app,
+      '/mcp',
+      { jsonrpc: '2.0', method: 'notifications/initialized' },
+      { Authorization: `Bearer ${token}`, 'Mcp-Session-Id': sessionId },
+    );
+
+    expect(res.status).toBe(202);
+  });
+});
+
+// ── Unknown method ────────────────────────────────────────────────────────────
+
+describe('unknown method', () => {
+  it('returns HTTP 200 with METHOD_NOT_FOUND error in body', async () => {
+    stubJwks();
+    const token = await makeToken();
+    const { app } = buildApp();
+
+    const { sessionId } = await doInitialize(app, token);
+
+    const res = await post(
+      app,
+      '/mcp',
+      { jsonrpc: '2.0', id: 3, method: 'bogus/method' },
+      { Authorization: `Bearer ${token}`, 'Mcp-Session-Id': sessionId },
+    );
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.error.code).toBe(ErrorCode.METHOD_NOT_FOUND);
+  });
+});
+
+// ── Happy path ────────────────────────────────────────────────────────────────
+
+describe('happy path', () => {
+  it('initialize → notifications/initialized → tools/list all succeed', async () => {
+    stubJwks();
+    const token = await makeToken();
+    const { app } = buildApp();
+
+    // Step 1: initialize
+    const { sessionId, res: initRes } = await doInitialize(app, token);
+    expect(initRes.status).toBe(200);
+
+    // Step 2: notifications/initialized
+    const notifRes = await post(
+      app,
+      '/mcp',
+      { jsonrpc: '2.0', method: 'notifications/initialized' },
+      { Authorization: `Bearer ${token}`, 'Mcp-Session-Id': sessionId },
+    );
+    expect(notifRes.status).toBe(202);
+
+    // Step 3: tools/list
+    const listRes = await post(
+      app,
+      '/mcp',
+      { jsonrpc: '2.0', id: 2, method: 'tools/list' },
+      { Authorization: `Bearer ${token}`, 'Mcp-Session-Id': sessionId },
+    );
+    expect(listRes.status).toBe(200);
+    const listBody = await listRes.json();
+    expect(Array.isArray(listBody.result.tools)).toBe(true);
+  });
+});
+
+// ── Batch ─────────────────────────────────────────────────────────────────────
+
+describe('batch requests', () => {
+  it('batch of 2 requests returns a JSON array with 2 results', async () => {
+    stubJwks();
+    const token = await makeToken();
+    const { app } = buildApp();
+
+    const { sessionId } = await doInitialize(app, token);
+
+    const res = await post(
+      app,
+      '/mcp',
+      [
+        { jsonrpc: '2.0', id: 10, method: 'tools/list' },
+        { jsonrpc: '2.0', id: 11, method: 'tools/list' },
+      ],
+      { Authorization: `Bearer ${token}`, 'Mcp-Session-Id': sessionId },
+    );
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(Array.isArray(body)).toBe(true);
+    expect(body).toHaveLength(2);
+  });
+
+  it('batch of 1 request + 1 notification returns array with 1 result', async () => {
+    stubJwks();
+    const token = await makeToken();
+    const { app } = buildApp();
+
+    const { sessionId } = await doInitialize(app, token);
+
+    const res = await post(
+      app,
+      '/mcp',
+      [
+        { jsonrpc: '2.0', id: 20, method: 'tools/list' },
+        { jsonrpc: '2.0', method: 'notifications/initialized' },
+      ],
+      { Authorization: `Bearer ${token}`, 'Mcp-Session-Id': sessionId },
+    );
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(Array.isArray(body)).toBe(true);
+    expect(body).toHaveLength(1);
+  });
+
+  it('batch of notifications only returns HTTP 202 empty', async () => {
+    stubJwks();
+    const token = await makeToken();
+    const { app } = buildApp();
+
+    const res = await post(
+      app,
+      '/mcp',
+      [
+        { jsonrpc: '2.0', method: 'notifications/initialized' },
+        { jsonrpc: '2.0', method: 'notifications/progress' },
+      ],
+      { Authorization: `Bearer ${token}` },
+    );
+
+    expect(res.status).toBe(202);
+    const text = await res.text();
+    expect(text).toBe('');
+  });
+});
