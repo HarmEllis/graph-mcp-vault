@@ -110,7 +110,7 @@ async function handleList(
   }
   const resources = await neo4jClient.listResources({
     userId: ctx.userId,
-    namespace: parsed.data.namespace,
+    namespace: parsed.data.namespace ?? ctx.namespace,
     type: parsed.data.type,
     limit: parsed.data.limit,
     skip: parsed.data.skip,
