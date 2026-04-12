@@ -9,7 +9,7 @@ import { initSchema } from './schema.js';
 import { Neo4jClient } from './neo4j-client.js';
 import { OidcMetadataClient, createOAuthMetaRouter } from './routers/oauth-meta.js';
 import { createMcpRouter } from './routers/mcp.js';
-import { TOOL_LIST } from './tools/registry.js';
+import { createResourceTools } from './tools/resources.js';
 
 const config = parseConfig(process.env as Record<string, string | undefined>);
 
@@ -40,7 +40,8 @@ const metadataClient = new OidcMetadataClient(config.oidcIssuer, config.metadata
 
 const app = new Hono();
 app.route('/', createOAuthMetaRouter(metadataClient));
-app.route('/', createMcpRouter(config, sessionStore, jwksClient, TOOL_LIST));
+const tools = createResourceTools(_neo4jClient);
+app.route('/', createMcpRouter(config, sessionStore, jwksClient, tools));
 
 // ── Start server ──────────────────────────────────────────────────────────────
 

@@ -4,7 +4,7 @@ import { validateBearerToken, type JwksClient } from '../auth.js';
 import { ErrorCode, makeJsonRpcError } from '../errors.js';
 import type { SessionStore } from '../session.js';
 import type { Config } from '../config.js';
-import type { McpTool } from '../tools/registry.js';
+import { ToolError, type RegisteredTool, type ToolContext } from '../tools/registry.js';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -68,7 +68,7 @@ export function createMcpRouter(
   config: Config,
   sessionStore: SessionStore,
   jwksClient: JwksClient,
-  tools: McpTool[],
+  tools: RegisteredTool[],
 ): Hono {
   const app = new Hono();
 
@@ -120,12 +120,12 @@ export function createMcpRouter(
 
   // ── Single message ────────────────────────────────────────────────────────
 
-  function handleSingle(
+  async function handleSingle(
     raw: unknown,
     userId: string,
     urlNamespace: string | undefined,
     sessionHeader: string | undefined,
-  ): Response {
+  ): Promise<Response> {
     const msg = parseMessage(raw);
     if (!msg) {
       return Response.json(
@@ -134,12 +134,11 @@ export function createMcpRouter(
       );
     }
 
-    // Notification — no response
     if (!isRequest(msg)) {
       return new Response(null, { status: 202 });
     }
 
-    const result = dispatchRequest(msg, userId, urlNamespace, sessionHeader);
+    const result = await dispatchRequest(msg, userId, urlNamespace, sessionHeader);
     const headers: Record<string, string> = {};
     if (result.sessionId !== null) headers['Mcp-Session-Id'] = result.sessionId;
     return Response.json(result.response, { status: result.httpStatus, headers });
@@ -147,12 +146,12 @@ export function createMcpRouter(
 
   // ── Batch ─────────────────────────────────────────────────────────────────
 
-  function handleBatch(
+  async function handleBatch(
     items: unknown[],
     userId: string,
     urlNamespace: string | undefined,
     sessionHeader: string | undefined,
-  ): Response {
+  ): Promise<Response> {
     const responses: unknown[] = [];
     let newSessionId: string | null = null;
 
@@ -164,9 +163,9 @@ export function createMcpRouter(
         );
         continue;
       }
-      if (!isRequest(msg)) continue; // notifications produce no response entry
+      if (!isRequest(msg)) continue;
 
-      const result = dispatchRequest(msg, userId, urlNamespace, sessionHeader);
+      const result = await dispatchRequest(msg, userId, urlNamespace, sessionHeader);
       if (result.sessionId !== null) newSessionId = result.sessionId;
       responses.push(result.response);
     }
@@ -182,20 +181,18 @@ export function createMcpRouter(
 
   // ── Method dispatch ───────────────────────────────────────────────────────
 
-  function dispatchRequest(
+  async function dispatchRequest(
     req: JsonRpcRequest,
     userId: string,
     urlNamespace: string | undefined,
     sessionHeader: string | undefined,
-  ): DispatchResult {
+  ): Promise<DispatchResult> {
     const { id, method } = req;
 
-    // initialize — creates a new session, no prior session needed
     if (method === 'initialize') {
       return handleInitialize(req, userId, urlNamespace);
     }
 
-    // All other methods require a valid session
     if (!sessionHeader) {
       return {
         response: makeJsonRpcError(id, ErrorCode.INVALID_REQUEST, 'Missing Mcp-Session-Id header'),
@@ -213,7 +210,6 @@ export function createMcpRouter(
       };
     }
 
-    // Namespace conflict check (only when request came via /mcp/:namespace)
     if (urlNamespace !== undefined && urlNamespace !== session.namespace) {
       return {
         response: makeJsonRpcError(id, ErrorCode.SESSION_NAMESPACE_CONFLICT, 'Namespace mismatch'),
@@ -222,13 +218,18 @@ export function createMcpRouter(
       };
     }
 
+    const ctx: ToolContext = { userId: session.userId, namespace: session.namespace };
+
     switch (method) {
       case 'tools/list':
         return {
-          response: { jsonrpc: '2.0', id, result: { tools } },
+          response: { jsonrpc: '2.0', id, result: { tools: tools.map((t) => t.descriptor) } },
           sessionId: null,
           httpStatus: 200,
         };
+
+      case 'tools/call':
+        return handleToolCall(req, ctx);
 
       default:
         return {
@@ -236,6 +237,52 @@ export function createMcpRouter(
           sessionId: null,
           httpStatus: 200,
         };
+    }
+  }
+
+  // ── tools/call handler ────────────────────────────────────────────────────
+
+  async function handleToolCall(req: JsonRpcRequest, ctx: ToolContext): Promise<DispatchResult> {
+    const { id } = req;
+    const params = req.params as Record<string, unknown> | undefined;
+
+    const toolName = params?.['name'];
+    if (typeof toolName !== 'string') {
+      return {
+        response: makeJsonRpcError(id, ErrorCode.INVALID_PARAMS, 'Missing or invalid tool name'),
+        sessionId: null,
+        httpStatus: 200,
+      };
+    }
+
+    const registered = tools.find((t) => t.descriptor.name === toolName);
+    if (!registered) {
+      return {
+        response: makeJsonRpcError(id, ErrorCode.METHOD_NOT_FOUND, `Unknown tool: ${toolName}`),
+        sessionId: null,
+        httpStatus: 200,
+      };
+    }
+
+    const args = (params?.['arguments'] ?? {}) as Record<string, unknown>;
+
+    try {
+      const result = await registered.handler(args, ctx);
+      return { response: { jsonrpc: '2.0', id, result }, sessionId: null, httpStatus: 200 };
+    } catch (err) {
+      if (err instanceof ToolError) {
+        return {
+          response: makeJsonRpcError(id, err.code, err.message),
+          sessionId: null,
+          httpStatus: 200,
+        };
+      }
+      const msg = err instanceof Error ? err.message : 'Internal error';
+      return {
+        response: makeJsonRpcError(id, ErrorCode.INTERNAL_ERROR, msg),
+        sessionId: null,
+        httpStatus: 500,
+      };
     }
   }
 
@@ -249,7 +296,6 @@ export function createMcpRouter(
     const { id } = req;
     const params = req.params as Record<string, unknown> | undefined;
 
-    // Validate protocol version
     const clientVersion = params?.['protocolVersion'];
     if (clientVersion !== SUPPORTED_VERSION) {
       return {
@@ -264,7 +310,6 @@ export function createMcpRouter(
       };
     }
 
-    // Resolve namespace: params.meta.namespace → URL path → DEFAULT_NAMESPACE
     const metaNamespace = (() => {
       const meta = params?.['meta'];
       if (typeof meta === 'object' && meta !== null) {
@@ -275,8 +320,6 @@ export function createMcpRouter(
     })();
 
     const namespace = metaNamespace ?? urlNamespace ?? config.defaultNamespace;
-
-    // Create session
     const sessionId = sessionStore.create(userId, namespace);
 
     return {
