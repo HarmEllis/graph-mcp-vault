@@ -111,9 +111,9 @@ async function handleList(
   const resources = await neo4jClient.listResources({
     userId: ctx.userId,
     namespace: parsed.data.namespace ?? ctx.namespace,
-    type: parsed.data.type,
-    limit: parsed.data.limit,
-    skip: parsed.data.skip,
+    ...(parsed.data.type !== undefined && { type: parsed.data.type }),
+    ...(parsed.data.limit !== undefined && { limit: parsed.data.limit }),
+    ...(parsed.data.skip !== undefined && { skip: parsed.data.skip }),
   });
   return { resources };
 }
@@ -138,7 +138,10 @@ async function handleUpdate(
   const { resource_id, title, content } = parsed.data;
 
   await requirePermission(neo4jClient, ctx.userId, resource_id, 'write');
-  await neo4jClient.updateResource(resource_id, { title, content });
+  await neo4jClient.updateResource(resource_id, {
+    ...(title !== undefined && { title }),
+    ...(content !== undefined && { content }),
+  });
   return {};
 }
 
