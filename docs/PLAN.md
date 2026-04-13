@@ -359,7 +359,7 @@ volumes:
    - Validate discovered `jwks_uri` with zod before use.
    - Remove hardcoded `scopes_supported` behavior; use pass-through by default or a configurable allowlist.
 4. **P1**: Add full-text search without vectors (`search_resources` tool + Neo4j full-text index).
-5. **P1**: Document an LLM smoke-test checklist for tool discovery, create/read/update flows, and namespace isolation checks.
+5. **P1**: Document an LLM smoke-test checklist for tool discovery, create/read/update flows, and namespace isolation checks. → See [`docs/SMOKE_TEST.md`](./SMOKE_TEST.md).
 6. **P2**: Record vector embeddings explicitly as future roadmap work (not implemented now).
 7. Final gate: run full end-to-end MCP validation against the active Docker dev stack (Neo4j + Keycloak) and fix all bugs found before completion.
 8. Last step: Codex performs a full code review, then Claude fixes all accepted issues; ensure all fixes preserve the app's core purpose (MCP Neo4j proxy with namespace isolation and role-based access control).
