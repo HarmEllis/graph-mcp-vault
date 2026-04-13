@@ -54,8 +54,16 @@ export function createOAuthMetaRouter(metadataClient: OidcMetadataClient): Hono 
 
   app.get('/.well-known/oauth-authorization-server', async (c) => {
     try {
-      const metadata = await metadataClient.getMetadata();
-      return c.json(metadata);
+      const metadata = await metadataClient.getMetadata() as Record<string, unknown>;
+      // Expose only end-user OAuth scopes; Keycloak-internal scopes (service_account,
+      // web-origins, etc.) must not be advertised — the MCP SDK sends all scopes_supported
+      // verbatim in its dynamic client registration request, which causes Keycloak's
+      // Allowed Client Scopes policy to reject the registration.
+      const filtered = {
+        ...metadata,
+        scopes_supported: ['openid', 'profile', 'email', 'offline_access', 'graph-mcp-vault-api'],
+      };
+      return c.json(filtered);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'upstream unavailable';
       return c.json({ error: 'upstream_unavailable', detail: message }, 502);
