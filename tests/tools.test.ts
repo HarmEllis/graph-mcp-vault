@@ -150,6 +150,78 @@ async function callTool(
   return { status: res.status, body };
 }
 
+// ── MCP content format helpers ────────────────────────────────────────────────
+
+interface McpContentItem {
+  type: string;
+  text: string;
+}
+
+function parseToolSuccess(body: Record<string, unknown>): Record<string, unknown> {
+  const result = body['result'] as Record<string, unknown>;
+  const content = result['content'] as McpContentItem[];
+  return JSON.parse(content[0]!.text) as Record<string, unknown>;
+}
+
+function parseToolError(body: Record<string, unknown>): { code: number; message: string } {
+  const result = body['result'] as Record<string, unknown>;
+  const content = result['content'] as McpContentItem[];
+  return JSON.parse(content[0]!.text) as { code: number; message: string };
+}
+
+// ── tools/call MCP content format (TDD: these tests define the required shape) ─
+
+describe('tools/call MCP content format', () => {
+  it('wraps success result in content array with type "text"', async () => {
+    const sub = uniqueUser('content-format');
+    const sid = await openSession(sub);
+    const { body } = await callTool(
+      'create_resource',
+      { type: 'note', title: 'Format Test', content: 'test' },
+      sub,
+      sid,
+    );
+
+    const result = body['result'] as Record<string, unknown>;
+    expect(result['isError']).toBe(false);
+    expect(Array.isArray(result['content'])).toBe(true);
+    const content = result['content'] as McpContentItem[];
+    expect(content[0]?.type).toBe('text');
+    expect(typeof content[0]?.text).toBe('string');
+  });
+
+  it('list_resources returns explicit content for empty list', async () => {
+    const sub = uniqueUser('list-empty-content');
+    const sid = await openSession(sub);
+    const { status, body } = await callTool('list_resources', {}, sub, sid);
+
+    expect(status).toBe(200);
+    const result = body['result'] as Record<string, unknown>;
+    expect(result['isError']).toBe(false);
+    const content = result['content'] as McpContentItem[];
+    expect(content[0]?.type).toBe('text');
+    const data = JSON.parse(content[0]!.text) as Record<string, unknown>;
+    expect(data['resources']).toEqual([]);
+  });
+
+  it('tool errors have isError true with code and message in content text', async () => {
+    const sub = uniqueUser('error-content');
+    const sid = await openSession(sub);
+    const { body } = await callTool(
+      'get_resource',
+      { resource_id: '00000000-0000-0000-0000-000000000000' },
+      sub,
+      sid,
+    );
+
+    const result = body['result'] as Record<string, unknown>;
+    expect(result['isError']).toBe(true);
+    const content = result['content'] as McpContentItem[];
+    const errData = JSON.parse(content[0]!.text) as { code: number; message: string };
+    expect(errData['code']).toBe(ErrorCode.RESOURCE_NOT_FOUND);
+  });
+});
+
 // ── create_resource ───────────────────────────────────────────────────────────
 
 describe('create_resource', () => {
@@ -164,9 +236,9 @@ describe('create_resource', () => {
     );
 
     expect(status).toBe(200);
-    const result = body['result'] as Record<string, unknown>;
-    expect(typeof result['id']).toBe('string');
-    expect(typeof result['created_at']).toBe('string');
+    const data = parseToolSuccess(body);
+    expect(typeof data['id']).toBe('string');
+    expect(typeof data['created_at']).toBe('string');
   });
 
   it('uses namespace from args when provided', async () => {
@@ -179,8 +251,7 @@ describe('create_resource', () => {
       sid,
     );
 
-    const result = body['result'] as Record<string, unknown>;
-    const id = result['id'] as string;
+    const id = parseToolSuccess(body)['id'] as string;
 
     // verify the resource was stored in the custom namespace
     const resource = await neo4jClient.getResource(id);
@@ -192,8 +263,7 @@ describe('create_resource', () => {
     const sid = await openSession(sub);
     const { body } = await callTool('create_resource', { type: 'note' }, sub, sid);
 
-    const error = body['error'] as Record<string, unknown>;
-    expect(error['code']).toBe(ErrorCode.INVALID_PARAMS);
+    expect(parseToolError(body)['code']).toBe(ErrorCode.INVALID_PARAMS);
   });
 });
 
@@ -209,16 +279,16 @@ describe('get_resource', () => {
       sub,
       sid,
     );
-    const id = (createBody['result'] as Record<string, unknown>)['id'] as string;
+    const id = parseToolSuccess(createBody)['id'] as string;
 
     const { status, body } = await callTool('get_resource', { resource_id: id }, sub, sid);
 
     expect(status).toBe(200);
-    const result = body['result'] as Record<string, unknown>;
-    expect(result['id']).toBe(id);
-    expect(result['title']).toBe('My Resource');
-    expect(result['content']).toBe('some content');
-    expect(result['role']).toBe('owner');
+    const data = parseToolSuccess(body);
+    expect(data['id']).toBe(id);
+    expect(data['title']).toBe('My Resource');
+    expect(data['content']).toBe('some content');
+    expect(data['role']).toBe('owner');
   });
 
   it('returns RESOURCE_NOT_FOUND for a non-existent id', async () => {
@@ -231,8 +301,7 @@ describe('get_resource', () => {
       sid,
     );
 
-    const error = body['error'] as Record<string, unknown>;
-    expect(error['code']).toBe(ErrorCode.RESOURCE_NOT_FOUND);
+    expect(parseToolError(body)['code']).toBe(ErrorCode.RESOURCE_NOT_FOUND);
   });
 
   it('returns PERMISSION_DENIED when the user has no access', async () => {
@@ -247,11 +316,10 @@ describe('get_resource', () => {
       owner,
       ownerSid,
     );
-    const id = (cb['result'] as Record<string, unknown>)['id'] as string;
+    const id = parseToolSuccess(cb)['id'] as string;
 
     const { body } = await callTool('get_resource', { resource_id: id }, stranger, strangerSid);
-    const error = body['error'] as Record<string, unknown>;
-    expect(error['code']).toBe(ErrorCode.PERMISSION_DENIED);
+    expect(parseToolError(body)['code']).toBe(ErrorCode.PERMISSION_DENIED);
   });
 });
 
@@ -267,8 +335,7 @@ describe('list_resources', () => {
     const { status, body } = await callTool('list_resources', {}, sub, sid);
 
     expect(status).toBe(200);
-    const result = body['result'] as Record<string, unknown>;
-    const resources = result['resources'] as unknown[];
+    const resources = parseToolSuccess(body)['resources'] as unknown[];
     expect(resources.length).toBeGreaterThanOrEqual(2);
   });
 
@@ -279,8 +346,7 @@ describe('list_resources', () => {
     await callTool('create_resource', { type: 'task', title: 'Task', content: '' }, sub, sid);
 
     const { body } = await callTool('list_resources', { type: 'note' }, sub, sid);
-    const result = body['result'] as Record<string, unknown>;
-    const resources = result['resources'] as Array<Record<string, unknown>>;
+    const resources = parseToolSuccess(body)['resources'] as Array<Record<string, unknown>>;
 
     expect(resources.every((r) => r['type'] === 'note')).toBe(true);
   });
@@ -300,8 +366,8 @@ describe('list_resources', () => {
     const { body: b1 } = await callTool('list_resources', { limit: 2, skip: 0 }, sub, sid);
     const { body: b2 } = await callTool('list_resources', { limit: 2, skip: 2 }, sub, sid);
 
-    const r1 = (b1['result'] as Record<string, unknown>)['resources'] as unknown[];
-    const r2 = (b2['result'] as Record<string, unknown>)['resources'] as unknown[];
+    const r1 = parseToolSuccess(b1)['resources'] as unknown[];
+    const r2 = parseToolSuccess(b2)['resources'] as unknown[];
     expect(r1).toHaveLength(2);
     expect(r2).toHaveLength(2);
   });
@@ -319,7 +385,7 @@ describe('update_resource', () => {
       sub,
       sid,
     );
-    const id = (cb['result'] as Record<string, unknown>)['id'] as string;
+    const id = parseToolSuccess(cb)['id'] as string;
 
     const { status } = await callTool(
       'update_resource',
@@ -330,9 +396,9 @@ describe('update_resource', () => {
     expect(status).toBe(200);
 
     const { body: gb } = await callTool('get_resource', { resource_id: id }, sub, sid);
-    const result = gb['result'] as Record<string, unknown>;
-    expect(result['title']).toBe('New');
-    expect(result['content']).toBe('New content');
+    const data = parseToolSuccess(gb);
+    expect(data['title']).toBe('New');
+    expect(data['content']).toBe('New content');
   });
 
   it('editor can update', async () => {
@@ -347,7 +413,7 @@ describe('update_resource', () => {
       owner,
       ownerSid,
     );
-    const id = (cb['result'] as Record<string, unknown>)['id'] as string;
+    const id = parseToolSuccess(cb)['id'] as string;
 
     await neo4jClient.shareResource(id, editor, 'editor');
 
@@ -372,7 +438,7 @@ describe('update_resource', () => {
       owner,
       ownerSid,
     );
-    const id = (cb['result'] as Record<string, unknown>)['id'] as string;
+    const id = parseToolSuccess(cb)['id'] as string;
 
     await neo4jClient.shareResource(id, viewer, 'viewer');
 
@@ -382,8 +448,7 @@ describe('update_resource', () => {
       viewer,
       viewerSid,
     );
-    const error = body['error'] as Record<string, unknown>;
-    expect(error['code']).toBe(ErrorCode.PERMISSION_DENIED);
+    expect(parseToolError(body)['code']).toBe(ErrorCode.PERMISSION_DENIED);
   });
 });
 
@@ -399,14 +464,13 @@ describe('delete_resource', () => {
       sub,
       sid,
     );
-    const id = (cb['result'] as Record<string, unknown>)['id'] as string;
+    const id = parseToolSuccess(cb)['id'] as string;
 
     const { status } = await callTool('delete_resource', { resource_id: id }, sub, sid);
     expect(status).toBe(200);
 
     const { body: gb } = await callTool('get_resource', { resource_id: id }, sub, sid);
-    const error = gb['error'] as Record<string, unknown>;
-    expect(error['code']).toBe(ErrorCode.RESOURCE_NOT_FOUND);
+    expect(parseToolError(gb)['code']).toBe(ErrorCode.RESOURCE_NOT_FOUND);
   });
 
   it('viewer cannot delete — returns PERMISSION_DENIED', async () => {
@@ -421,12 +485,11 @@ describe('delete_resource', () => {
       owner,
       ownerSid,
     );
-    const id = (cb['result'] as Record<string, unknown>)['id'] as string;
+    const id = parseToolSuccess(cb)['id'] as string;
     await neo4jClient.shareResource(id, viewer, 'viewer');
 
     const { body } = await callTool('delete_resource', { resource_id: id }, viewer, viewerSid);
-    const error = body['error'] as Record<string, unknown>;
-    expect(error['code']).toBe(ErrorCode.PERMISSION_DENIED);
+    expect(parseToolError(body)['code']).toBe(ErrorCode.PERMISSION_DENIED);
   });
 
   it('editor cannot delete — returns PERMISSION_DENIED', async () => {
@@ -441,12 +504,11 @@ describe('delete_resource', () => {
       owner,
       ownerSid,
     );
-    const id = (cb['result'] as Record<string, unknown>)['id'] as string;
+    const id = parseToolSuccess(cb)['id'] as string;
     await neo4jClient.shareResource(id, editor, 'editor');
 
     const { body } = await callTool('delete_resource', { resource_id: id }, editor, editorSid);
-    const error = body['error'] as Record<string, unknown>;
-    expect(error['code']).toBe(ErrorCode.PERMISSION_DENIED);
+    expect(parseToolError(body)['code']).toBe(ErrorCode.PERMISSION_DENIED);
   });
 
   it('delete removes all sharing relationships', async () => {
@@ -461,7 +523,7 @@ describe('delete_resource', () => {
       owner,
       ownerSid,
     );
-    const id = (cb['result'] as Record<string, unknown>)['id'] as string;
+    const id = parseToolSuccess(cb)['id'] as string;
     await neo4jClient.shareResource(id, viewer, 'viewer');
 
     // delete as owner
@@ -487,19 +549,17 @@ describe('full lifecycle', () => {
       sub,
       sid,
     );
-    const id = (cb['result'] as Record<string, unknown>)['id'] as string;
+    const id = parseToolSuccess(cb)['id'] as string;
     expect(typeof id).toBe('string');
 
     // get
     const { body: gb1 } = await callTool('get_resource', { resource_id: id }, sub, sid);
-    expect((gb1['result'] as Record<string, unknown>)['title']).toBe('Lifecycle');
-    expect((gb1['result'] as Record<string, unknown>)['role']).toBe('owner');
+    expect(parseToolSuccess(gb1)['title']).toBe('Lifecycle');
+    expect(parseToolSuccess(gb1)['role']).toBe('owner');
 
     // list — resource appears
     const { body: lb } = await callTool('list_resources', {}, sub, sid);
-    const resources = (lb['result'] as Record<string, unknown>)['resources'] as Array<
-      Record<string, unknown>
-    >;
+    const resources = parseToolSuccess(lb)['resources'] as Array<Record<string, unknown>>;
     expect(resources.some((r) => r['id'] === id)).toBe(true);
 
     // update
@@ -507,8 +567,8 @@ describe('full lifecycle', () => {
 
     // get updated
     const { body: gb2 } = await callTool('get_resource', { resource_id: id }, sub, sid);
-    expect((gb2['result'] as Record<string, unknown>)['title']).toBe('Lifecycle v2');
-    expect((gb2['result'] as Record<string, unknown>)['content']).toBe('v2');
+    expect(parseToolSuccess(gb2)['title']).toBe('Lifecycle v2');
+    expect(parseToolSuccess(gb2)['content']).toBe('v2');
 
     // delete
     const { status: ds } = await callTool('delete_resource', { resource_id: id }, sub, sid);
@@ -516,6 +576,6 @@ describe('full lifecycle', () => {
 
     // confirm gone
     const { body: gb3 } = await callTool('get_resource', { resource_id: id }, sub, sid);
-    expect((gb3['error'] as Record<string, unknown>)['code']).toBe(ErrorCode.RESOURCE_NOT_FOUND);
+    expect(parseToolError(gb3)['code']).toBe(ErrorCode.RESOURCE_NOT_FOUND);
   });
 });

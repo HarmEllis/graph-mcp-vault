@@ -148,6 +148,25 @@ async function callTool(
   return { status: res.status, body: (await res.json()) as Record<string, unknown> };
 }
 
+// ── MCP content format helpers ────────────────────────────────────────────────
+
+interface McpContentItem {
+  type: string;
+  text: string;
+}
+
+function parseToolSuccess(body: Record<string, unknown>): Record<string, unknown> {
+  const result = body['result'] as Record<string, unknown>;
+  const content = result['content'] as McpContentItem[];
+  return JSON.parse(content[0]!.text) as Record<string, unknown>;
+}
+
+function parseToolError(body: Record<string, unknown>): { code: number; message: string } {
+  const result = body['result'] as Record<string, unknown>;
+  const content = result['content'] as McpContentItem[];
+  return JSON.parse(content[0]!.text) as { code: number; message: string };
+}
+
 /** Creates a resource as `owner` and returns its id. */
 async function createResource(owner: string, ownerSid: string, title = 'Shared Resource'): Promise<string> {
   const { body } = await callTool(
@@ -156,7 +175,7 @@ async function createResource(owner: string, ownerSid: string, title = 'Shared R
     owner,
     ownerSid,
   );
-  return ((body['result'] as Record<string, unknown>)['id']) as string;
+  return parseToolSuccess(body)['id'] as string;
 }
 
 // ── share_resource ────────────────────────────────────────────────────────────
@@ -194,9 +213,9 @@ describe('share_resource', () => {
     );
 
     const { body } = await callTool('get_resource', { resource_id: id }, viewer, viewerSid);
-    const result = body['result'] as Record<string, unknown>;
-    expect(result['id']).toBe(id);
-    expect(result['role']).toBe('viewer');
+    const data = parseToolSuccess(body);
+    expect(data['id']).toBe(id);
+    expect(data['role']).toBe('viewer');
   });
 
   it('duplicate share updates the role (idempotent MERGE)', async () => {
@@ -222,7 +241,7 @@ describe('share_resource', () => {
     );
 
     const { body } = await callTool('get_resource', { resource_id: id }, target, targetSid);
-    expect((body['result'] as Record<string, unknown>)['role']).toBe('editor');
+    expect(parseToolSuccess(body)['role']).toBe('editor');
   });
 
   it('share to a user who has never been created — stubs User node', async () => {
@@ -260,7 +279,7 @@ describe('share_resource', () => {
       editor,
       editorSid,
     );
-    expect((body['error'] as Record<string, unknown>)['code']).toBe(ErrorCode.PERMISSION_DENIED);
+    expect(parseToolError(body)['code']).toBe(ErrorCode.PERMISSION_DENIED);
   });
 
   it('viewer cannot share — returns PERMISSION_DENIED', async () => {
@@ -279,7 +298,7 @@ describe('share_resource', () => {
       viewer,
       viewerSid,
     );
-    expect((body['error'] as Record<string, unknown>)['code']).toBe(ErrorCode.PERMISSION_DENIED);
+    expect(parseToolError(body)['code']).toBe(ErrorCode.PERMISSION_DENIED);
   });
 
   it('returns RESOURCE_NOT_FOUND for a non-existent resource', async () => {
@@ -293,7 +312,7 @@ describe('share_resource', () => {
       owner,
       ownerSid,
     );
-    expect((body['error'] as Record<string, unknown>)['code']).toBe(ErrorCode.RESOURCE_NOT_FOUND);
+    expect(parseToolError(body)['code']).toBe(ErrorCode.RESOURCE_NOT_FOUND);
   });
 });
 
@@ -324,7 +343,7 @@ describe('revoke_access', () => {
 
     // Viewer can no longer access
     const { body } = await callTool('get_resource', { resource_id: id }, viewer, viewerSid);
-    expect((body['error'] as Record<string, unknown>)['code']).toBe(ErrorCode.PERMISSION_DENIED);
+    expect(parseToolError(body)['code']).toBe(ErrorCode.PERMISSION_DENIED);
   });
 
   it('revoke own access returns PERMISSION_DENIED with "Cannot revoke owner access"', async () => {
@@ -339,9 +358,9 @@ describe('revoke_access', () => {
       ownerSid,
     );
 
-    const error = body['error'] as Record<string, unknown>;
-    expect(error['code']).toBe(ErrorCode.PERMISSION_DENIED);
-    expect(error['message']).toContain('Cannot revoke owner access');
+    const err = parseToolError(body);
+    expect(err['code']).toBe(ErrorCode.PERMISSION_DENIED);
+    expect(err['message']).toContain('Cannot revoke owner access');
   });
 
   it('editor cannot revoke access — returns PERMISSION_DENIED', async () => {
@@ -361,7 +380,7 @@ describe('revoke_access', () => {
       editor,
       editorSid,
     );
-    expect((body['error'] as Record<string, unknown>)['code']).toBe(ErrorCode.PERMISSION_DENIED);
+    expect(parseToolError(body)['code']).toBe(ErrorCode.PERMISSION_DENIED);
   });
 
   it('returns RESOURCE_NOT_FOUND for a non-existent resource', async () => {
@@ -375,7 +394,7 @@ describe('revoke_access', () => {
       owner,
       ownerSid,
     );
-    expect((body['error'] as Record<string, unknown>)['code']).toBe(ErrorCode.RESOURCE_NOT_FOUND);
+    expect(parseToolError(body)['code']).toBe(ErrorCode.RESOURCE_NOT_FOUND);
   });
 });
 
@@ -390,8 +409,7 @@ describe('list_sharing', () => {
     const { status, body } = await callTool('list_sharing', { resource_id: id }, owner, ownerSid);
 
     expect(status).toBe(200);
-    const result = body['result'] as Record<string, unknown>;
-    expect(result['sharing']).toEqual([]);
+    expect(parseToolSuccess(body)['sharing']).toEqual([]);
   });
 
   it('returns all HAS_ACCESS entries with user_id, role, granted_at', async () => {
@@ -415,9 +433,7 @@ describe('list_sharing', () => {
     );
 
     const { body } = await callTool('list_sharing', { resource_id: id }, owner, ownerSid);
-    const sharing = (body['result'] as Record<string, unknown>)['sharing'] as Array<
-      Record<string, unknown>
-    >;
+    const sharing = parseToolSuccess(body)['sharing'] as Array<Record<string, unknown>>;
 
     expect(sharing).toHaveLength(2);
     expect(sharing.some((s) => s['user_id'] === viewer && s['role'] === 'viewer')).toBe(true);
@@ -451,7 +467,7 @@ describe('list_sharing', () => {
     const id = await createResource(owner, ownerSid);
 
     const { body } = await callTool('list_sharing', { resource_id: id }, stranger, strangerSid);
-    expect((body['error'] as Record<string, unknown>)['code']).toBe(ErrorCode.PERMISSION_DENIED);
+    expect(parseToolError(body)['code']).toBe(ErrorCode.PERMISSION_DENIED);
   });
 
   it('returns RESOURCE_NOT_FOUND for a non-existent resource', async () => {
@@ -464,7 +480,7 @@ describe('list_sharing', () => {
       owner,
       ownerSid,
     );
-    expect((body['error'] as Record<string, unknown>)['code']).toBe(ErrorCode.RESOURCE_NOT_FOUND);
+    expect(parseToolError(body)['code']).toBe(ErrorCode.RESOURCE_NOT_FOUND);
   });
 });
 
@@ -488,14 +504,12 @@ describe('full sharing workflow', () => {
 
     // list_sharing shows the grant
     const { body: lb } = await callTool('list_sharing', { resource_id: id }, owner, ownerSid);
-    const sharing = (lb['result'] as Record<string, unknown>)['sharing'] as Array<
-      Record<string, unknown>
-    >;
+    const sharing = parseToolSuccess(lb)['sharing'] as Array<Record<string, unknown>>;
     expect(sharing.some((s) => s['user_id'] === viewer)).toBe(true);
 
     // viewer can read
     const { body: gb } = await callTool('get_resource', { resource_id: id }, viewer, viewerSid);
-    expect((gb['result'] as Record<string, unknown>)['role']).toBe('viewer');
+    expect(parseToolSuccess(gb)['role']).toBe('viewer');
 
     // revoke
     await callTool(
@@ -507,6 +521,6 @@ describe('full sharing workflow', () => {
 
     // viewer access denied
     const { body: gb2 } = await callTool('get_resource', { resource_id: id }, viewer, viewerSid);
-    expect((gb2['error'] as Record<string, unknown>)['code']).toBe(ErrorCode.PERMISSION_DENIED);
+    expect(parseToolError(gb2)['code']).toBe(ErrorCode.PERMISSION_DENIED);
   });
 });

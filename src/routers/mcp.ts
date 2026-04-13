@@ -363,11 +363,31 @@ export function createMcpRouter(
 
     try {
       const result = await registered.handler(args, ctx);
-      return { response: { jsonrpc: '2.0', id, result }, sessionId: null, httpStatus: 200 };
+      return {
+        response: {
+          jsonrpc: '2.0',
+          id,
+          result: {
+            content: [{ type: 'text', text: JSON.stringify(result) }],
+            isError: false,
+          },
+        },
+        sessionId: null,
+        httpStatus: 200,
+      };
     } catch (err) {
       if (err instanceof ToolError) {
         return {
-          response: makeJsonRpcError(id, err.code, err.message),
+          response: {
+            jsonrpc: '2.0',
+            id,
+            result: {
+              content: [
+                { type: 'text', text: JSON.stringify({ code: err.code, message: err.message }) },
+              ],
+              isError: true,
+            },
+          },
           sessionId: null,
           httpStatus: 200,
         };

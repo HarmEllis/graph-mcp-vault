@@ -127,6 +127,19 @@ async function openSession(
   return sid;
 }
 
+// ── MCP content format helpers ────────────────────────────────────────────────
+
+interface McpContentItem {
+  type: string;
+  text: string;
+}
+
+function parseToolSuccess(body: Record<string, unknown>): Record<string, unknown> {
+  const result = body['result'] as Record<string, unknown>;
+  const content = result['content'] as McpContentItem[];
+  return JSON.parse(content[0]!.text) as Record<string, unknown>;
+}
+
 async function callTool(
   name: string,
   args: Record<string, unknown>,
@@ -220,7 +233,7 @@ describe('namespace isolation', () => {
       sub,
       sid,
     );
-    const id = ((body['result'] as Record<string, unknown>)['id']) as string;
+    const id = parseToolSuccess(body)['id'] as string;
     const resource = await neo4jClient.getResource(id);
     expect(resource?.namespace).toBe('iso-ns-a');
   });
@@ -236,14 +249,12 @@ describe('namespace isolation', () => {
       sub,
       sidA,
     );
-    const idInA = ((cb['result'] as Record<string, unknown>)['id']) as string;
+    const idInA = parseToolSuccess(cb)['id'] as string;
 
     // Open a session in ns-b and list resources (no namespace arg → defaults to ns-b)
     const sidB = await openSession(sub, { metaNamespace: 'iso-list-ns-b' });
     const { body: lb } = await callTool('list_resources', {}, sub, sidB);
-    const resources = ((lb['result'] as Record<string, unknown>)['resources']) as Array<
-      Record<string, unknown>
-    >;
+    const resources = parseToolSuccess(lb)['resources'] as Array<Record<string, unknown>>;
 
     expect(resources.every((r) => r['namespace'] === 'iso-list-ns-b')).toBe(true);
     expect(resources.some((r) => r['id'] === idInA)).toBe(false);
@@ -259,7 +270,7 @@ describe('namespace isolation', () => {
       sub,
       sidA,
     );
-    const idInA = ((cb['result'] as Record<string, unknown>)['id']) as string;
+    const idInA = parseToolSuccess(cb)['id'] as string;
 
     // list from a ns-b session but explicitly request ns-a
     const sidB = await openSession(sub, { metaNamespace: 'iso-cross-ns-b' });
@@ -269,9 +280,7 @@ describe('namespace isolation', () => {
       sub,
       sidB,
     );
-    const resources = ((lb['result'] as Record<string, unknown>)['resources']) as Array<
-      Record<string, unknown>
-    >;
+    const resources = parseToolSuccess(lb)['resources'] as Array<Record<string, unknown>>;
 
     expect(resources.some((r) => r['id'] === idInA)).toBe(true);
   });
@@ -284,9 +293,7 @@ describe('namespace isolation', () => {
 
     // List without namespace arg → should only return resources in url-iso-ns
     const { body } = await callTool('list_resources', {}, sub, sid);
-    const resources = ((body['result'] as Record<string, unknown>)['resources']) as Array<
-      Record<string, unknown>
-    >;
+    const resources = parseToolSuccess(body)['resources'] as Array<Record<string, unknown>>;
     expect(resources.every((r) => r['namespace'] === 'url-iso-ns')).toBe(true);
   });
 
@@ -296,9 +303,7 @@ describe('namespace isolation', () => {
     await callTool('create_resource', { type: 'note', title: 'Default NS Resource', content: '' }, sub, sid);
 
     const { body } = await callTool('list_resources', {}, sub, sid);
-    const resources = ((body['result'] as Record<string, unknown>)['resources']) as Array<
-      Record<string, unknown>
-    >;
+    const resources = parseToolSuccess(body)['resources'] as Array<Record<string, unknown>>;
     expect(resources.every((r) => r['namespace'] === BASE_CONFIG.defaultNamespace)).toBe(true);
   });
 });
