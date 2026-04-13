@@ -345,6 +345,22 @@ volumes:
 10. Batch JSON-RPC → extend lifecycle tests → implement
 11. Docker Compose + Dockerfile
 12. README
+13. Full end-to-end MCP validation against the running Docker dev stack (Neo4j + Keycloak) and fix all discovered bugs before completion
+
+---
+
+## Current Implementation Priorities (Agreed)
+
+1. **P0**: Fix the `list_resources` output bug so MCP clients/LLMs consistently receive usable tool output.
+2. **P0**: Implement functional structured logging with real `LOG_LEVEL` enforcement.
+3. **P1**: OIDC hardcoding cleanup.
+   - Add optional `OIDC_DISCOVERY_URL` (fallback to `${OIDC_ISSUER}/.well-known/openid-configuration`).
+   - Validate discovered `jwks_uri` with zod before use.
+   - Remove hardcoded `scopes_supported` behavior; use pass-through by default or a configurable allowlist.
+4. **P1**: Add full-text search without vectors (`search_resources` tool + Neo4j full-text index).
+5. **P1**: Document an LLM smoke-test checklist for tool discovery, create/read/update flows, and namespace isolation checks.
+6. **P2**: Record vector embeddings explicitly as future roadmap work (not implemented now).
+7. Final gate: run full end-to-end MCP validation against the active Docker dev stack (Neo4j + Keycloak) and fix all bugs found before completion.
 
 ---
 
