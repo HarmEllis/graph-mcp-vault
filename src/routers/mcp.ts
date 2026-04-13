@@ -9,6 +9,17 @@ import { ToolError, type RegisteredTool, type ToolContext } from '../tools/regis
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const SUPPORTED_VERSION = '2025-03-26';
+
+// All protocol versions the MCP ecosystem has defined. The server negotiates
+// down to SUPPORTED_VERSION regardless of which version the client proposes,
+// matching the version-negotiation intent of the MCP spec.
+const KNOWN_PROTOCOL_VERSIONS = new Set([
+  '2025-11-25',
+  '2025-06-18',
+  '2025-03-26',
+  '2024-11-05',
+  '2024-10-07',
+]);
 const SERVER_NAME = 'graph-mcp-vault';
 const SERVER_VERSION = '0.1.0';
 
@@ -381,7 +392,7 @@ export function createMcpRouter(
     const params = req.params as Record<string, unknown> | undefined;
 
     const clientVersion = params?.['protocolVersion'];
-    if (clientVersion !== SUPPORTED_VERSION) {
+    if (typeof clientVersion !== 'string' || !KNOWN_PROTOCOL_VERSIONS.has(clientVersion)) {
       return {
         response: makeJsonRpcError(
           id,
