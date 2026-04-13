@@ -360,7 +360,10 @@ volumes:
    - Remove hardcoded `scopes_supported` behavior; use pass-through by default or a configurable allowlist.
 4. **P1**: Add full-text search without vectors (`search_resources` tool + Neo4j full-text index).
 5. **P1**: Document an LLM smoke-test checklist for tool discovery, create/read/update flows, and namespace isolation checks. → See [`docs/SMOKE_TEST.md`](./SMOKE_TEST.md).
-6. **P2**: Record vector embeddings explicitly as future roadmap work (not implemented now).
+6. **P2**: Vector embeddings — future roadmap only, **not implemented**.
+   - **Current state**: `search_resources` uses Neo4j full-text search (Lucene) over `title` and `content` fields. No embedding model, no vector index, no hybrid query is present anywhere in the codebase.
+   - **Not implemented**: embedding generation, vector index (`CREATE VECTOR INDEX …`), cosine/dot-product similarity queries, or a semantic search tool.
+   - **Future increment** (if needed): add an embedding-generation step on write, a Neo4j vector index, and a `semantic_search` tool that combines full-text and vector scores (hybrid search). This is deferred until there is a concrete need.
 7. Final gate: run full end-to-end MCP validation against the active Docker dev stack (Neo4j + Keycloak) and fix all bugs found before completion.
 8. Last step: Codex performs a full code review, then Claude fixes all accepted issues; ensure all fixes preserve the app's core purpose (MCP Neo4j proxy with namespace isolation and role-based access control).
 
@@ -375,6 +378,7 @@ volumes:
 - Neo4j Enterprise named databases
 - Rate limiting per user
 - Resource versioning / history
+- Vector embeddings / semantic search (see roadmap item 6 above)
 
 ---
 
