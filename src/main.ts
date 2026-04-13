@@ -25,10 +25,15 @@ const _neo4jClient = new Neo4jClient(driver);
 
 // ── Auth + sessions ───────────────────────────────────────────────────────────
 
-const jwksClient = new JwksClient(
-  `${config.oidcIssuer}/.well-known/jwks.json`,
-  config.jwksCacheTtl * 1000,
-);
+// Resolve jwks_uri from the OIDC discovery document so we stay compatible
+// with any issuer, not just those that put JWKS at /.well-known/jwks.json.
+const oidcDiscovery = await fetch(`${config.oidcIssuer}/.well-known/openid-configuration`);
+if (!oidcDiscovery.ok) {
+  throw new Error(`OIDC discovery failed: HTTP ${oidcDiscovery.status}`);
+}
+const { jwks_uri } = (await oidcDiscovery.json()) as { jwks_uri: string };
+
+const jwksClient = new JwksClient(jwks_uri, config.jwksCacheTtl * 1000);
 
 const sessionStore = new SessionStore();
 sessionStore.startCleanup();
