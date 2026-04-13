@@ -180,6 +180,55 @@ export class Neo4jClient {
     }
   }
 
+  /**
+   * Full-text search over resource title and content.
+   *
+   * Uses the `resource_text` fulltext index. Results are ordered by relevance
+   * score descending, then by `updated_at` descending for stability.
+   * Only returns resources the caller can read (owned + shared via HAS_ACCESS).
+   */
+  async searchResources(params: {
+    userId: string;
+    query: string;
+    namespace?: string;
+    type?: string;
+    limit?: number;
+    skip?: number;
+  }): Promise<ResourceWithOwnership[]> {
+    const limit = params.limit ?? 20;
+    const skip = params.skip ?? 0;
+    const session = this.driver.session();
+    try {
+      const result = await session.run(
+        `
+        CALL db.index.fulltext.queryNodes('resource_text', $query) YIELD node AS r, score
+        MATCH (u:User {id: $userId})-[:OWNS|HAS_ACCESS]->(r)
+        WHERE ($namespace IS NULL OR r.namespace = $namespace)
+          AND ($type IS NULL OR r.type = $type)
+        RETURN r,
+          CASE WHEN (u)-[:OWNS]->(r) THEN 'owner' ELSE 'shared' END AS ownership,
+          score
+        ORDER BY score DESC, r.updated_at DESC
+        SKIP $skip LIMIT $limit
+        `,
+        {
+          userId: params.userId,
+          query: params.query,
+          namespace: params.namespace ?? null,
+          type: params.type ?? null,
+          skip: neo4j.int(skip),
+          limit: neo4j.int(limit),
+        },
+      );
+      return result.records.map((record) => ({
+        ...(record.get('r').properties as Resource),
+        ownership: record.get('ownership') as 'owner' | 'shared',
+      }));
+    } finally {
+      await session.close();
+    }
+  }
+
   // ── Roles ────────────────────────────────────────────────────────────────────
 
   /**

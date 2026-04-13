@@ -361,6 +361,83 @@ describe('Neo4jClient.revokeAccess', () => {
   });
 });
 
+// ── searchResources ───────────────────────────────────────────────────────────
+
+describe('Neo4jClient.searchResources', () => {
+  it('returns resources matching the query keyword', async () => {
+    const userId = 'user-search-basic';
+    await client.createResource({ userId, namespace: 'default', type: 'note', title: 'Quantum Physics', content: 'Schrodinger equation' });
+    await client.createResource({ userId, namespace: 'default', type: 'note', title: 'Cooking Recipe', content: 'how to bake bread' });
+
+    const results = await client.searchResources({ userId, query: 'Quantum' });
+
+    expect(results.some((r) => r.title === 'Quantum Physics')).toBe(true);
+    expect(results.every((r) => r.title !== 'Cooking Recipe')).toBe(true);
+  });
+
+  it('respects namespace filtering', async () => {
+    const userId = 'user-search-ns';
+    await client.createResource({ userId, namespace: 'ns-search-a', type: 'note', title: 'Nebula Discovery', content: 'astronomy' });
+    await client.createResource({ userId, namespace: 'ns-search-b', type: 'note', title: 'Nebula Notes', content: 'more astronomy' });
+
+    const results = await client.searchResources({ userId, query: 'Nebula', namespace: 'ns-search-a' });
+
+    expect(results.every((r) => r.namespace === 'ns-search-a')).toBe(true);
+    expect(results.some((r) => r.title === 'Nebula Discovery')).toBe(true);
+    expect(results.some((r) => r.title === 'Nebula Notes')).toBe(false);
+  });
+
+  it('only returns resources the user has access to', async () => {
+    const ownerId = 'user-search-perm-owner';
+    const searcherId = 'user-search-perm-seeker';
+    await client.createResource({ userId: ownerId, namespace: 'default', type: 'note', title: 'Classified Photon', content: '' });
+
+    const results = await client.searchResources({ userId: searcherId, query: 'Photon' });
+
+    expect(results.some((r) => r.user_id === ownerId)).toBe(false);
+  });
+
+  it('returns shared resources the user has been granted access to', async () => {
+    const ownerId = 'user-search-shared-owner';
+    const viewerId = 'user-search-shared-viewer';
+    const created = await client.createResource({ userId: ownerId, namespace: 'default', type: 'note', title: 'Shared Quasar Content', content: '' });
+    await client.shareResource(created.id, viewerId, 'viewer');
+
+    const results = await client.searchResources({ userId: viewerId, query: 'Quasar' });
+
+    expect(results.some((r) => r.id === created.id)).toBe(true);
+    expect(results.find((r) => r.id === created.id)?.ownership).toBe('shared');
+  });
+
+  it('filters results by type', async () => {
+    const userId = 'user-search-type';
+    await client.createResource({ userId, namespace: 'default', type: 'note', title: 'Electron Note', content: '' });
+    await client.createResource({ userId, namespace: 'default', type: 'task', title: 'Electron Task', content: '' });
+
+    const results = await client.searchResources({ userId, query: 'Electron', type: 'note' });
+
+    expect(results.every((r) => r.type === 'note')).toBe(true);
+    expect(results.some((r) => r.title === 'Electron Note')).toBe(true);
+  });
+
+  it('respects limit and skip for pagination', async () => {
+    const userId = 'user-search-page';
+    const tag = `Paginate${Date.now()}`;
+    for (let i = 0; i < 4; i++) {
+      await client.createResource({ userId, namespace: 'default', type: 'note', title: `${tag} Item ${i}`, content: '' });
+    }
+
+    const page1 = await client.searchResources({ userId, query: tag, limit: 2, skip: 0 });
+    const page2 = await client.searchResources({ userId, query: tag, limit: 2, skip: 2 });
+
+    expect(page1.length).toBe(2);
+    expect(page2.length).toBe(2);
+    const ids1 = page1.map((r) => r.id);
+    const ids2 = page2.map((r) => r.id);
+    expect(ids1.some((id) => ids2.includes(id))).toBe(false);
+  });
+});
+
 // ── listSharing ───────────────────────────────────────────────────────────────
 
 describe('Neo4jClient.listSharing', () => {

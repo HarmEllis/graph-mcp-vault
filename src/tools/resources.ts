@@ -165,10 +165,40 @@ async function handleDelete(
   return {};
 }
 
+// ── search_resources ──────────────────────────────────────────────────────────
+
+const searchSchema = z.object({
+  query: z.string().min(1),
+  namespace: z.string().optional(),
+  type: z.string().optional(),
+  limit: z.number().int().positive().optional(),
+  skip: z.number().int().min(0).optional(),
+});
+
+async function handleSearch(
+  args: Record<string, unknown>,
+  ctx: ToolContext,
+  neo4jClient: Neo4jClient,
+): Promise<unknown> {
+  const parsed = searchSchema.safeParse(args);
+  if (!parsed.success) {
+    throw new ToolError(ErrorCode.INVALID_PARAMS, `Invalid params: ${parsed.error.message}`);
+  }
+  const resources = await neo4jClient.searchResources({
+    userId: ctx.userId,
+    query: parsed.data.query,
+    namespace: parsed.data.namespace ?? ctx.namespace,
+    ...(parsed.data.type !== undefined && { type: parsed.data.type }),
+    ...(parsed.data.limit !== undefined && { limit: parsed.data.limit }),
+    ...(parsed.data.skip !== undefined && { skip: parsed.data.skip }),
+  });
+  return { resources };
+}
+
 // ── Factory ───────────────────────────────────────────────────────────────────
 
 /**
- * Returns the five resource tool registrations, each closing over `neo4jClient`.
+ * Returns the six resource tool registrations, each closing over `neo4jClient`.
  */
 export function createResourceTools(neo4jClient: Neo4jClient): RegisteredTool[] {
   return [
@@ -245,6 +275,24 @@ export function createResourceTools(neo4jClient: Neo4jClient): RegisteredTool[] 
         },
       },
       handler: (args, ctx) => handleDelete(args, ctx, neo4jClient),
+    },
+    {
+      descriptor: {
+        name: 'search_resources',
+        description: 'Full-text search over resource titles and content. Only returns resources the caller can read.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            query: { type: 'string', description: 'Search keywords' },
+            namespace: { type: 'string', description: 'Namespace to search in (defaults to session namespace)' },
+            type: { type: 'string', description: 'Filter by resource type' },
+            limit: { type: 'number', description: 'Max results (default 20)' },
+            skip: { type: 'number', description: 'Pagination offset (default 0)' },
+          },
+          required: ['query'],
+        },
+      },
+      handler: (args, ctx) => handleSearch(args, ctx, neo4jClient),
     },
   ];
 }

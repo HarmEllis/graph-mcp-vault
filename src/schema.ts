@@ -7,6 +7,7 @@ const SCHEMA_STATEMENTS = [
   'CREATE CONSTRAINT resource_id_unique IF NOT EXISTS FOR (r:Resource) REQUIRE r.id IS UNIQUE',
   'CREATE INDEX resource_scope IF NOT EXISTS FOR (r:Resource) ON (r.user_id, r.namespace)',
   'CREATE INDEX resource_type IF NOT EXISTS FOR (r:Resource) ON (r.type)',
+  'CREATE FULLTEXT INDEX resource_text IF NOT EXISTS FOR (n:Resource) ON EACH [n.title, n.content]',
 ] as const;
 
 /**

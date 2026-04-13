@@ -537,6 +537,97 @@ describe('delete_resource', () => {
   });
 });
 
+// ── search_resources ──────────────────────────────────────────────────────────
+
+describe('search_resources', () => {
+  it('returns resources matching the search query', async () => {
+    const sub = uniqueUser('search-basic');
+    const sid = await openSession(sub);
+    await callTool('create_resource', { type: 'note', title: 'Gravitational Wave', content: 'LIGO detection' }, sub, sid);
+    await callTool('create_resource', { type: 'note', title: 'Recipe Book', content: 'cooking instructions' }, sub, sid);
+
+    const { status, body } = await callTool('search_resources', { query: 'Gravitational' }, sub, sid);
+
+    expect(status).toBe(200);
+    const resources = parseToolSuccess(body)['resources'] as Array<Record<string, unknown>>;
+    expect(resources.some((r) => r['title'] === 'Gravitational Wave')).toBe(true);
+    expect(resources.every((r) => r['title'] !== 'Recipe Book')).toBe(true);
+  });
+
+  it('returns INVALID_PARAMS when query is missing', async () => {
+    const sub = uniqueUser('search-no-query');
+    const sid = await openSession(sub);
+    const { body } = await callTool('search_resources', {}, sub, sid);
+    expect(parseToolError(body)['code']).toBe(ErrorCode.INVALID_PARAMS);
+  });
+
+  it('namespace isolation: only returns resources in the session namespace by default', async () => {
+    const sub = uniqueUser('search-ns');
+    const sidA = await openSession(sub, 'ns-search-x');
+    const sidB = await openSession(sub, 'ns-search-y');
+
+    const tag = Date.now().toString();
+    await callTool('create_resource', { type: 'note', title: `Quark${tag}`, content: 'in x' }, sub, sidA);
+    await callTool('create_resource', { type: 'note', title: `Quark${tag}`, content: 'in y' }, sub, sidB);
+
+    const { body } = await callTool('search_resources', { query: `Quark${tag}` }, sub, sidA);
+    const resources = parseToolSuccess(body)['resources'] as Array<Record<string, unknown>>;
+
+    expect(resources.every((r) => r['namespace'] === 'ns-search-x')).toBe(true);
+  });
+
+  it('permission filtering: user cannot see resources they have no access to', async () => {
+    const owner = uniqueUser('search-perm-owner');
+    const stranger = uniqueUser('search-perm-stranger');
+    const ownerSid = await openSession(owner);
+    const strangerSid = await openSession(stranger);
+
+    const tag = Date.now().toString();
+    await callTool('create_resource', { type: 'note', title: `PrivateMeson${tag}`, content: '' }, owner, ownerSid);
+
+    const { body } = await callTool('search_resources', { query: `PrivateMeson${tag}` }, stranger, strangerSid);
+    const resources = parseToolSuccess(body)['resources'] as Array<Record<string, unknown>>;
+
+    expect(resources).toHaveLength(0);
+  });
+
+  it('filters by type when provided', async () => {
+    const sub = uniqueUser('search-type');
+    const sid = await openSession(sub);
+
+    const tag = Date.now().toString();
+    await callTool('create_resource', { type: 'note', title: `Boson${tag}`, content: '' }, sub, sid);
+    await callTool('create_resource', { type: 'task', title: `Boson${tag} Task`, content: '' }, sub, sid);
+
+    const { body } = await callTool('search_resources', { query: `Boson${tag}`, type: 'note' }, sub, sid);
+    const resources = parseToolSuccess(body)['resources'] as Array<Record<string, unknown>>;
+
+    expect(resources.every((r) => r['type'] === 'note')).toBe(true);
+    expect(resources.some((r) => (r['title'] as string).includes(`Boson${tag}`))).toBe(true);
+  });
+
+  it('respects limit and skip for pagination', async () => {
+    const sub = uniqueUser('search-page');
+    const sid = await openSession(sub);
+
+    const tag = Date.now().toString();
+    for (let i = 0; i < 4; i++) {
+      await callTool('create_resource', { type: 'note', title: `Lepton${tag} item${i}`, content: '' }, sub, sid);
+    }
+
+    const { body: b1 } = await callTool('search_resources', { query: `Lepton${tag}`, limit: 2, skip: 0 }, sub, sid);
+    const { body: b2 } = await callTool('search_resources', { query: `Lepton${tag}`, limit: 2, skip: 2 }, sub, sid);
+
+    const r1 = parseToolSuccess(b1)['resources'] as Array<Record<string, unknown>>;
+    const r2 = parseToolSuccess(b2)['resources'] as Array<Record<string, unknown>>;
+    expect(r1).toHaveLength(2);
+    expect(r2).toHaveLength(2);
+    const ids1 = r1.map((r) => r['id']);
+    const ids2 = r2.map((r) => r['id']);
+    expect(ids1.some((id) => ids2.includes(id))).toBe(false);
+  });
+});
+
 // ── Full lifecycle ────────────────────────────────────────────────────────────
 
 describe('full lifecycle', () => {
