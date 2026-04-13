@@ -6,12 +6,13 @@
     "node": ">=24"
   },
   "scripts": {
+    "dev": "tsx watch src/main.ts",
     "build": "tsc",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "biome check .",
     "format": "biome format --write .",
-    "start": "node dist/main.js"
+    "start": "node dist/src/main.js"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.0",
@@ -26,6 +27,7 @@
     "@biomejs/biome": "^1.9.0",
     "@types/node": "^22.0.0",
     "testcontainers": "^10.24.0",
+    "tsx": "^4.21.0",
     "typescript": "^5.7.0",
     "vitest": "^2.1.0"
   }
