@@ -626,6 +626,49 @@ describe('search_resources', () => {
     const ids2 = r2.map((r) => r['id']);
     expect(ids1.some((id) => ids2.includes(id))).toBe(false);
   });
+
+  it('results include ownership field for owned resources', async () => {
+    const sub = uniqueUser('search-ownership');
+    const sid = await openSession(sub);
+
+    const tag = Date.now().toString();
+    await callTool('create_resource', { type: 'note', title: `Muon${tag}`, content: '' }, sub, sid);
+
+    const { body } = await callTool('search_resources', { query: `Muon${tag}` }, sub, sid);
+    const resources = parseToolSuccess(body)['resources'] as Array<Record<string, unknown>>;
+
+    expect(resources.length).toBeGreaterThanOrEqual(1);
+    expect(resources.every((r) => r['ownership'] === 'owner')).toBe(true);
+  });
+
+  it('explicit namespace arg searches in the specified namespace regardless of session namespace', async () => {
+    const sub = uniqueUser('search-ns-override');
+    const sidA = await openSession(sub, 'ns-override-a');
+    const sidB = await openSession(sub, 'ns-override-b');
+
+    const tag = Date.now().toString();
+    await callTool('create_resource', { type: 'note', title: `Tauon${tag}`, content: '' }, sub, sidA);
+
+    // search from ns-b session but explicitly target ns-a
+    const { body } = await callTool('search_resources', { query: `Tauon${tag}`, namespace: 'ns-override-a' }, sub, sidB);
+    const resources = parseToolSuccess(body)['resources'] as Array<Record<string, unknown>>;
+
+    expect(resources.some((r) => r['title'] === `Tauon${tag}`)).toBe(true);
+    expect(resources.every((r) => r['namespace'] === 'ns-override-a')).toBe(true);
+  });
+
+  it('does not return INTERNAL_ERROR for a query with Lucene special characters', async () => {
+    const sub = uniqueUser('search-lucene');
+    const sid = await openSession(sub);
+
+    const { status, body } = await callTool('search_resources', { query: '(broken query' }, sub, sid);
+
+    expect(status).toBe(200);
+    const result = body['result'] as Record<string, unknown>;
+    expect(result['isError']).toBe(false);
+    const data = parseToolSuccess(body);
+    expect(Array.isArray(data['resources'])).toBe(true);
+  });
 });
 
 // ── Full lifecycle ────────────────────────────────────────────────────────────

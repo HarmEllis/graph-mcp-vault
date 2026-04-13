@@ -436,6 +436,35 @@ describe('Neo4jClient.searchResources', () => {
     const ids2 = page2.map((r) => r.id);
     expect(ids1.some((id) => ids2.includes(id))).toBe(false);
   });
+
+  it('returns ownership "owner" for resources the caller owns', async () => {
+    const userId = 'user-search-ownership-owner';
+    const created = await client.createResource({ userId, namespace: 'default', type: 'note', title: 'Ownership Proton', content: '' });
+
+    const results = await client.searchResources({ userId, query: 'Proton' });
+
+    const found = results.find((r) => r.id === created.id);
+    expect(found).toBeDefined();
+    expect(found?.ownership).toBe('owner');
+  });
+
+  it('does not throw and returns an empty array when the query contains Lucene special characters', async () => {
+    const userId = 'user-search-lucene-special';
+
+    await expect(
+      client.searchResources({ userId, query: '(broken query' }),
+    ).resolves.toEqual([]);
+  });
+
+  it('does not throw for other Lucene operators: *, :, [, ^, ~', async () => {
+    const userId = 'user-search-lucene-ops';
+
+    for (const q of ['*', 'field:value', '[a TO z]', 'term^2', 'fuzzy~']) {
+      await expect(
+        client.searchResources({ userId, query: q }),
+      ).resolves.toBeDefined();
+    }
+  });
 });
 
 // ── listSharing ───────────────────────────────────────────────────────────────

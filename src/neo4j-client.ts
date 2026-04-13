@@ -24,6 +24,19 @@ export interface SharingEntry {
   granted_at: string;
 }
 
+// ── Lucene helpers ────────────────────────────────────────────────────────────
+
+/**
+ * Escapes Lucene special characters in a user-supplied query string so they
+ * are treated as literals rather than query operators.
+ *
+ * Special characters per the Lucene query syntax reference:
+ *   + - && || ! ( ) { } [ ] ^ " ~ * ? : \ /
+ */
+function escapeLuceneQuery(query: string): string {
+  return query.replace(/[+\-&|!(){}[\]^"~*?:\\/]/g, (char) => `\\${char}`);
+}
+
 // ── Neo4jClient ───────────────────────────────────────────────────────────────
 
 /**
@@ -180,12 +193,18 @@ export class Neo4jClient {
     }
   }
 
+  // ── Search ───────────────────────────────────────────────────────────────────
+
   /**
    * Full-text search over resource title and content.
    *
    * Uses the `resource_text` fulltext index. Results are ordered by relevance
    * score descending, then by `updated_at` descending for stability.
    * Only returns resources the caller can read (owned + shared via HAS_ACCESS).
+   *
+   * User-supplied query strings are Lucene-escaped before being passed to the
+   * index so that special characters (`(`, `*`, `:`, etc.) are treated as
+   * literals rather than operators, preventing parse errors.
    */
   async searchResources(params: {
     userId: string;
@@ -213,7 +232,7 @@ export class Neo4jClient {
         `,
         {
           userId: params.userId,
-          query: params.query,
+          query: escapeLuceneQuery(params.query),
           namespace: params.namespace ?? null,
           type: params.type ?? null,
           skip: neo4j.int(skip),
