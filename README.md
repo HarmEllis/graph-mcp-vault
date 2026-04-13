@@ -140,7 +140,7 @@ Fetch a resource by ID. Requires at least read access.
 { "resource_id": "<uuid>" }
 ```
 
-Returns the full resource object plus an `"ownership"` field (`"owner"` or `"shared"`).
+Returns the full resource object plus a `"role"` field (`"owner"`, `"editor"`, or `"viewer"`).
 
 ---
 

@@ -62,6 +62,65 @@ interface DispatchResult {
   httpStatus: number;
 }
 
+interface CorsResolution {
+  allowed: boolean;
+  allowOrigin: string | undefined;
+}
+
+function resolveCorsOrigin(
+  origin: string | undefined,
+  allowedOrigins: string,
+): CorsResolution {
+  if (!origin) {
+    return { allowed: true, allowOrigin: undefined };
+  }
+  if (!allowedOrigins) {
+    return { allowed: true, allowOrigin: undefined };
+  }
+
+  const allowed = allowedOrigins
+    .split(',')
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
+
+  if (allowed.includes('*')) {
+    return { allowed: true, allowOrigin: '*' };
+  }
+  if (allowed.includes(origin)) {
+    return { allowed: true, allowOrigin: origin };
+  }
+  return { allowed: false, allowOrigin: undefined };
+}
+
+function withCorsHeaders(response: Response, allowOrigin: string | undefined): Response {
+  if (!allowOrigin) return response;
+
+  const headers = new Headers(response.headers);
+  headers.set('Access-Control-Allow-Origin', allowOrigin);
+  headers.set('Access-Control-Expose-Headers', 'Mcp-Session-Id');
+  if (allowOrigin !== '*') {
+    headers.append('Vary', 'Origin');
+  }
+  return new Response(response.body, { status: response.status, headers });
+}
+
+function makePreflightResponse(
+  status: number,
+  allowOrigin: string | undefined,
+): Response {
+  const headers = new Headers();
+  if (allowOrigin) {
+    headers.set('Access-Control-Allow-Origin', allowOrigin);
+    headers.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    headers.set('Access-Control-Allow-Headers', 'Authorization, Content-Type, Mcp-Session-Id');
+    headers.set('Access-Control-Max-Age', '86400');
+    if (allowOrigin !== '*') {
+      headers.append('Vary', 'Origin');
+    }
+  }
+  return new Response(null, { status, headers });
+}
+
 // ── createMcpRouter ───────────────────────────────────────────────────────────
 
 export function createMcpRouter(
@@ -76,18 +135,27 @@ export function createMcpRouter(
   app.get('/mcp', (c) => c.text('Method Not Allowed', 405));
   app.get('/mcp/:namespace', (c) => c.text('Method Not Allowed', 405));
 
+  // OPTIONS /mcp and /mcp/:namespace → CORS preflight
+  function handleOptions(c: Context): Response {
+    const cors = resolveCorsOrigin(c.req.header('origin'), config.allowedOrigins);
+    if (!cors.allowed) {
+      return makePreflightResponse(403, cors.allowOrigin);
+    }
+    return makePreflightResponse(204, cors.allowOrigin);
+  }
+
+  app.options('/mcp', handleOptions);
+  app.options('/mcp/:namespace', handleOptions);
+
   // ── Shared POST handler ───────────────────────────────────────────────────
 
   async function handlePost(c: Context): Promise<Response> {
     const urlNamespace = c.req.param('namespace') as string | undefined;
 
     // 1. CORS origin check
-    const origin = c.req.header('origin');
-    if (config.allowedOrigins && origin) {
-      const allowed = config.allowedOrigins.split(',').map((o) => o.trim());
-      if (!allowed.includes('*') && !allowed.includes(origin)) {
-        return c.json({ error: 'forbidden' }, 403);
-      }
+    const cors = resolveCorsOrigin(c.req.header('origin'), config.allowedOrigins);
+    if (!cors.allowed) {
+      return withCorsHeaders(c.json({ error: 'forbidden' }, 403), cors.allowOrigin);
     }
 
     // 2. Parse JSON body
@@ -95,7 +163,10 @@ export function createMcpRouter(
     try {
       rawBody = await c.req.json();
     } catch {
-      return c.json(makeJsonRpcError(null, ErrorCode.PARSE_ERROR, 'Parse error'), 400);
+      return withCorsHeaders(
+        c.json(makeJsonRpcError(null, ErrorCode.PARSE_ERROR, 'Parse error'), 400),
+        cors.allowOrigin,
+      );
     }
 
     // 3. Authenticate
@@ -108,14 +179,20 @@ export function createMcpRouter(
       ));
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unauthorized';
-      return c.json({ error: 'unauthorized', message }, 401);
+      return withCorsHeaders(c.json({ error: 'unauthorized', message }, 401), cors.allowOrigin);
     }
 
     // 4. Batch vs single
     if (Array.isArray(rawBody)) {
-      return handleBatch(rawBody, userId, urlNamespace, c.req.header('mcp-session-id'));
+      return withCorsHeaders(
+        await handleBatch(rawBody, userId, urlNamespace, c.req.header('mcp-session-id')),
+        cors.allowOrigin,
+      );
     }
-    return handleSingle(rawBody, userId, urlNamespace, c.req.header('mcp-session-id'));
+    return withCorsHeaders(
+      await handleSingle(rawBody, userId, urlNamespace, c.req.header('mcp-session-id')),
+      cors.allowOrigin,
+    );
   }
 
   // ── Single message ────────────────────────────────────────────────────────
@@ -203,6 +280,13 @@ export function createMcpRouter(
 
     const session = sessionStore.get(sessionHeader);
     if (!session) {
+      return {
+        response: makeJsonRpcError(id, ErrorCode.SESSION_NOT_FOUND, 'Session not found or expired'),
+        sessionId: null,
+        httpStatus: 404,
+      };
+    }
+    if (session.userId !== userId) {
       return {
         response: makeJsonRpcError(id, ErrorCode.SESSION_NOT_FOUND, 'Session not found or expired'),
         sessionId: null,

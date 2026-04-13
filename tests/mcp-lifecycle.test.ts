@@ -212,6 +212,8 @@ describe('CORS origin check', () => {
     );
 
     expect(res.status).toBe(200);
+    expect(res.headers.get('access-control-allow-origin')).toBe('https://trusted.example.com');
+    expect(res.headers.get('access-control-expose-headers')).toBe('Mcp-Session-Id');
   });
 
   it('allows requests when ALLOWED_ORIGINS is wildcard *', async () => {
@@ -232,6 +234,7 @@ describe('CORS origin check', () => {
     );
 
     expect(res.status).toBe(200);
+    expect(res.headers.get('access-control-allow-origin')).toBe('*');
   });
 
   it('allows requests when ALLOWED_ORIGINS is empty (no check)', async () => {
@@ -252,6 +255,37 @@ describe('CORS origin check', () => {
     );
 
     expect(res.status).toBe(200);
+  });
+
+  it('handles OPTIONS preflight for an allowed origin', async () => {
+    const { app } = buildApp({ allowedOrigins: 'https://trusted.example.com' });
+
+    const res = await app.request('/mcp', {
+      method: 'OPTIONS',
+      headers: {
+        Origin: 'https://trusted.example.com',
+        'Access-Control-Request-Method': 'POST',
+      },
+    });
+
+    expect(res.status).toBe(204);
+    expect(res.headers.get('access-control-allow-origin')).toBe('https://trusted.example.com');
+    expect(res.headers.get('access-control-allow-methods')).toBe('POST, OPTIONS');
+    expect(res.headers.get('access-control-allow-headers')).toContain('Mcp-Session-Id');
+  });
+
+  it('returns 403 for OPTIONS preflight from a disallowed origin', async () => {
+    const { app } = buildApp({ allowedOrigins: 'https://trusted.example.com' });
+
+    const res = await app.request('/mcp', {
+      method: 'OPTIONS',
+      headers: {
+        Origin: 'https://evil.example.com',
+        'Access-Control-Request-Method': 'POST',
+      },
+    });
+
+    expect(res.status).toBe(403);
   });
 });
 
@@ -423,6 +457,26 @@ describe('session validation', () => {
         Authorization: `Bearer ${token}`,
         'Mcp-Session-Id': '00000000-0000-0000-0000-000000000000',
       },
+    );
+
+    expect(res.status).toBe(404);
+    const body = await res.json();
+    expect(body.error.code).toBe(ErrorCode.SESSION_NOT_FOUND);
+  });
+
+  it('returns HTTP 404 SESSION_NOT_FOUND when the session belongs to a different user', async () => {
+    stubJwks();
+    const ownerToken = await makeToken('owner-user');
+    const otherUserToken = await makeToken('other-user');
+    const { app } = buildApp();
+
+    const { sessionId } = await doInitialize(app, ownerToken);
+
+    const res = await post(
+      app,
+      '/mcp',
+      { jsonrpc: '2.0', id: 2, method: 'tools/list' },
+      { Authorization: `Bearer ${otherUserToken}`, 'Mcp-Session-Id': sessionId },
     );
 
     expect(res.status).toBe(404);
