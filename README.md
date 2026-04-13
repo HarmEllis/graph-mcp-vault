@@ -27,13 +27,28 @@ MCP transport: **Streamable HTTP 2025-03-26** — JSON-only responses, no SSE.
 ```bash
 # 1. Copy and fill in your environment
 cp .env.example .env
-$EDITOR .env          # set OIDC_ISSUER, OIDC_AUDIENCE, NEO4J_PASSWORD at minimum
+$EDITOR .env          # set at least NEO4J_PASSWORD
 
-# 2. Start Neo4j + the server
+# 2. Start Neo4j + Keycloak + the server
 docker compose up -d
 
-# 3. Verify the server is up
+# 3. Verify the OAuth metadata endpoint
 curl http://localhost:8000/.well-known/oauth-authorization-server
+
+# 4. Fetch a dev token (preconfigured Keycloak realm/client/user)
+TOKEN="$(curl -sS -X POST http://localhost:8081/realms/graph-mcp-vault/protocol/openid-connect/token \
+  -H 'content-type: application/x-www-form-urlencoded' \
+  -d 'grant_type=password' \
+  -d 'client_id=graph-mcp-vault' \
+  -d 'client_secret=dev-secret' \
+  -d 'username=dev-user' \
+  -d 'password=dev-password' | jq -r '.access_token')"
+
+# 5. Call MCP with Bearer token
+curl -i -X POST http://localhost:8000/mcp \
+  -H "authorization: Bearer $TOKEN" \
+  -H 'content-type: application/json' \
+  -d '{"jsonrpc":"2.0","id":"init-1","method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"curl","version":"1.0.0"}}}'
 ```
 
 The server schema-initialises Neo4j on first boot (idempotent, safe to restart).
@@ -53,11 +68,19 @@ Copy `.env.example` to `.env` before running.
 | `NEO4J_URI` | no | `bolt://neo4j:7687` | Bolt URI for Neo4j (use `bolt://localhost:7687` outside Docker) |
 | `NEO4J_USER` | no | `neo4j` | Neo4j username |
 | `NEO4J_PASSWORD` | yes | — | Neo4j password; also used to configure the neo4j Docker service |
+| `KEYCLOAK_ADMIN` | no | `admin` | Admin username for the bundled Keycloak dev container (Docker Compose only) |
+| `KEYCLOAK_ADMIN_PASSWORD` | no | `admin` | Admin password for the bundled Keycloak dev container (Docker Compose only) |
 | `HOST` | no | `0.0.0.0` | Bind address |
 | `PORT` | no | `8000` | Listen port |
 | `DEFAULT_NAMESPACE` | no | `default` | Namespace used when none is specified at session open |
 | `LOG_LEVEL` | no | `info` | Log verbosity (`debug`, `info`, `warn`, `error`) |
 | `ALLOWED_ORIGINS` | no | `""` | Comma-separated CORS origins; `*` for any; empty = no cross-origin requests |
+
+When running with `docker compose`, if `OIDC_ISSUER` and `OIDC_AUDIENCE` are unset,
+the stack defaults to the bundled Keycloak development realm:
+
+- `OIDC_ISSUER=http://keycloak:8080/realms/graph-mcp-vault`
+- `OIDC_AUDIENCE=graph-mcp-vault`
 
 ---
 
@@ -379,7 +402,7 @@ NEO4J_URI=bolt://localhost:7687 pnpm start
 ### Docker Compose
 
 ```bash
-docker compose up -d          # start Neo4j + server
+docker compose up -d          # start Neo4j + Keycloak + server
 docker compose logs -f        # follow logs
 docker compose down           # stop (data volume persists)
 docker compose down -v        # stop and delete Neo4j data
