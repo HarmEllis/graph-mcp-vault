@@ -3,6 +3,7 @@ import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
 import neo4j from 'neo4j-driver';
 import { parseConfig } from './config.js';
+import { createLogger } from './logger.js';
 import { JwksClient } from './auth.js';
 import { SessionStore } from './session.js';
 import { initSchema } from './schema.js';
@@ -13,8 +14,11 @@ import { createResourceTools } from './tools/resources.js';
 import { createSharingTools } from './tools/sharing.js';
 
 const config = parseConfig(process.env as Record<string, string | undefined>);
+const logger = createLogger(config.logLevel);
 
 // ── Neo4j ─────────────────────────────────────────────────────────────────────
+
+logger.info('startup', { neo4jUri: config.neo4jUri, port: config.port, logLevel: config.logLevel });
 
 const driver = neo4j.driver(
   config.neo4jUri,
@@ -32,6 +36,7 @@ if (!oidcDiscovery.ok) {
   throw new Error(`OIDC discovery failed: HTTP ${oidcDiscovery.status}`);
 }
 const { jwks_uri } = (await oidcDiscovery.json()) as { jwks_uri: string };
+logger.debug('oidc_discovery_ok', { jwksUri: jwks_uri });
 
 const jwksClient = new JwksClient(jwks_uri, config.jwksCacheTtl * 1000);
 
@@ -47,10 +52,10 @@ const metadataClient = new OidcMetadataClient(config.oidcIssuer, config.metadata
 const app = new Hono();
 app.route('/', createOAuthMetaRouter(metadataClient));
 const tools = [...createResourceTools(_neo4jClient), ...createSharingTools(_neo4jClient)];
-app.route('/', createMcpRouter(config, sessionStore, jwksClient, tools));
+app.route('/', createMcpRouter(config, sessionStore, jwksClient, tools, logger));
 
 // ── Start server ──────────────────────────────────────────────────────────────
 
 serve({ fetch: app.fetch, hostname: config.host, port: config.port }, (info) => {
-  console.log(`graph-mcp-vault listening on ${info.address}:${info.port}`);
+  logger.info('server_listening', { address: info.address, port: info.port });
 });
