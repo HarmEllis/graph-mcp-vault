@@ -17,7 +17,7 @@ services:
       start_period: 30s
 
   graph-mcp-vault:
-    build: .
+    image: ghcr.io/harmellis/graph-mcp-vault:latest
     env_file:
       - path: .env
         required: false

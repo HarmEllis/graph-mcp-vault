@@ -1,0 +1,218 @@
+name: Build and Push Docker Image
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build (e.g. v1.2.3)"
+        required: true
+
+permissions:
+  actions: read
+  contents: read
+  packages: write
+  id-token: write  # required for keyless Cosign signing
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # ── Verify CI passed on this commit before releasing ─────────────────────────
+  verify-ci:
+    name: Verify CI
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Resolve commit SHA for tag
+        id: sha
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          SHA=$(gh api "repos/${{ github.repository }}/git/refs/tags/${TAG}" \
+            --jq '.object | if .type == "tag" then .sha else .sha end' 2>/dev/null || \
+            echo "${{ github.sha }}")
+          echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Check latest CI run on commit
+        run: |
+          SHA="${{ steps.sha.outputs.sha }}"
+          CONCLUSION=$(gh api \
+            "repos/${{ github.repository }}/commits/${SHA}/check-runs" \
+            --jq '[.check_runs[] | select(.name == "CI")] | first | .conclusion' \
+            2>/dev/null || echo "not_found")
+          echo "CI conclusion: ${CONCLUSION}"
+          if [[ "${CONCLUSION}" != "success" ]]; then
+            echo "::error::CI did not pass on commit ${SHA} (conclusion: ${CONCLUSION})"
+            exit 1
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  # ── Prepare metadata ──────────────────────────────────────────────────────────
+  prepare:
+    name: Prepare metadata
+    needs: verify-ci
+    runs-on: ubuntu-24.04
+    outputs:
+      image_ref: ${{ steps.image.outputs.ref }}
+      tags: ${{ steps.meta.outputs.tags }}
+      labels: ${{ steps.meta.outputs.labels }}
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      - name: Validate tag format
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          if ! [[ "${TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Tag '${TAG}' is not a valid semver tag (expected vX.Y.Z)"
+            exit 1
+          fi
+
+      - name: Normalise image reference
+        id: image
+        run: |
+          REF="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
+          echo "ref=${REF,,}" >> "$GITHUB_OUTPUT"
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@902fa8ec7d6ecbea8a64d2b0e13cf91c01af52a8  # v5.7.0
+        with:
+          images: ${{ steps.image.outputs.ref }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=raw,value=latest,enable={{is_default_branch}}
+
+  # ── Build amd64 ───────────────────────────────────────────────────────────────
+  build-amd64:
+    name: Build (amd64)
+    needs: prepare
+    runs-on: ubuntu-24.04
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@b5730b4a63a06c4e3d8cad62bcc9f03e65e52f8f  # v3.10.0
+
+      - name: Log in to GHCR
+        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772  # v3.4.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push (amd64)
+        id: push
+        uses: docker/build-push-action@14487ce63c7a62a4a324b0bfb37086795e31c6c1  # v6.16.0
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64
+          labels: ${{ needs.prepare.outputs.labels }}
+          provenance: true
+          sbom: true
+          cache-from: type=gha,scope=amd64
+          cache-to: type=gha,mode=max,scope=amd64
+          outputs: type=image,name=${{ needs.prepare.outputs.image_ref }},push-by-digest=true,name-canonical=true
+
+  # ── Build arm64 ───────────────────────────────────────────────────────────────
+  build-arm64:
+    name: Build (arm64)
+    needs: prepare
+    runs-on: ubuntu-24.04
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@29109295f81e9208d7d86ff9313c6a6b7b7a4d74  # v3.6.0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@b5730b4a63a06c4e3d8cad62bcc9f03e65e52f8f  # v3.10.0
+
+      - name: Log in to GHCR
+        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772  # v3.4.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push (arm64)
+        id: push
+        uses: docker/build-push-action@14487ce63c7a62a4a324b0bfb37086795e31c6c1  # v6.16.0
+        with:
+          context: .
+          push: true
+          platforms: linux/arm64
+          labels: ${{ needs.prepare.outputs.labels }}
+          provenance: true
+          sbom: true
+          cache-from: type=gha,scope=arm64
+          cache-to: type=gha,mode=max,scope=arm64
+          outputs: type=image,name=${{ needs.prepare.outputs.image_ref }},push-by-digest=true,name-canonical=true
+
+  # ── Merge manifests, sign, and scan ──────────────────────────────────────────
+  merge-and-push:
+    name: Merge, sign & scan
+    needs: [prepare, build-amd64, build-arm64]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@b5730b4a63a06c4e3d8cad62bcc9f03e65e52f8f  # v3.10.0
+
+      - name: Log in to GHCR
+        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772  # v3.4.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create and push multi-platform manifest
+        id: manifest
+        run: |
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            "${{ needs.prepare.outputs.image_ref }}@${{ needs.build-amd64.outputs.digest }}" \
+            "${{ needs.prepare.outputs.image_ref }}@${{ needs.build-arm64.outputs.digest }}"
+
+          DIGEST=$(docker buildx imagetools inspect \
+            "${{ needs.prepare.outputs.image_ref }}:${{ needs.prepare.outputs.version }}" \
+            --format '{{.Manifest.Digest}}')
+          echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
+        env:
+          DOCKER_METADATA_OUTPUT_JSON: ${{ needs.prepare.outputs.tags }}
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@d7d6bc7722e3daa8354c50bcb52f4837da5e9b6a  # v3.8.1
+
+      - name: Sign image (keyless)
+        run: |
+          cosign sign --yes \
+            "${{ needs.prepare.outputs.image_ref }}@${{ steps.manifest.outputs.digest }}"
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+
+      - name: Run Trivy vulnerability scan
+        uses: aquasecurity/trivy-action@76071ef0d7ec797419534a183b498b4d6366cf37  # v0.31.0
+        with:
+          image-ref: "${{ needs.prepare.outputs.image_ref }}@${{ steps.manifest.outputs.digest }}"
+          format: sarif
+          output: trivy-results.sarif
+          severity: CRITICAL,HIGH
+          exit-code: "0"  # non-blocking; review results in Security tab
+
+      - name: Upload Trivy results to GitHub Security
+        uses: github/codeql-action/upload-sarif@ff0a06e83cb2de871e5a09832bc6a81e7276941f  # v3.28.18
+        if: always()
+        with:
+          sarif_file: trivy-results.sarif
