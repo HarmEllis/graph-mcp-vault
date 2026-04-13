@@ -354,3 +354,17 @@ SKIP $skip LIMIT $limit
 **Decision**: Cache JWKS keys in memory keyed by `kid`. TTL controlled by `JWKS_CACHE_TTL` (default 3600s). On unknown `kid`: invalidate cache, force a fresh JWKS fetch, retry key lookup once. If still not found: return HTTP 401.
 
 **Rationale**: Handles key rotation gracefully without requiring a server restart. The single retry prevents cascading requests on rotation events.
+
+---
+
+## D-023 — Bundled local OAuth provider for Docker Compose development
+
+**Date**: 2026-04-13
+**Status**: Accepted
+
+**Decision**: Include a preconfigured Keycloak service in `docker-compose.yml` for local development. Import a fixed realm (`graph-mcp-vault`) with a dev client and user at startup.
+
+**Rationale**:
+- Removes the need to manually provision an external OIDC provider for local testing.
+- Keeps production architecture unchanged (proxy remains provider-agnostic and bearer-token-only).
+- Enables quick smoke tests for JWT validation and MCP calls directly after `docker compose up -d`.

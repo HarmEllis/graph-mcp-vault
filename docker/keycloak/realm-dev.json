@@ -1,0 +1,105 @@
+{
+  "realm": "graph-mcp-vault",
+  "enabled": true,
+  "displayName": "graph-mcp-vault-dev",
+  "components": {
+    "org.keycloak.services.clientregistration.policy.ClientRegistrationPolicy": [
+      {
+        "name": "Trusted Hosts",
+        "providerId": "trusted-hosts",
+        "subType": "anonymous",
+        "config": {
+          "host-sending-registration-request-must-match": ["true"],
+          "trusted-hosts": ["localhost", "127.0.0.1", "172.19.0.1"],
+          "client-uris-must-match": ["false"]
+        }
+      },
+      {
+        "name": "Allowed Client Scopes",
+        "providerId": "allowed-client-templates",
+        "subType": "anonymous",
+        "config": {
+          "allow-default-scopes": ["true"],
+          "allowed-client-scopes": ["openid", "profile", "email", "offline_access", "graph-mcp-vault-api"]
+        }
+      }
+    ]
+  },
+  "users": [
+    {
+      "username": "dev-user",
+      "email": "dev@localhost",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Dev",
+      "lastName": "User",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "dev-password",
+          "temporary": false
+        }
+      ],
+      "realmRoles": ["offline_access"]
+    }
+  ],
+  "clientScopes": [
+    {
+      "name": "graph-mcp-vault-api",
+      "protocol": "openid-connect",
+      "protocolMappers": [
+        {
+          "name": "graph-mcp-vault-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "graph-mcp-vault",
+            "id.token.claim": "false",
+            "access.token.claim": "true",
+            "lightweight.claim": "false"
+          }
+        }
+      ]
+    }
+  ],
+  "defaultDefaultClientScopes": [
+    "role_list", "profile", "email", "roles", "web-origins", "acr", "basic", "graph-mcp-vault-api"
+  ],
+  "clients": [
+    {
+      "clientId": "graph-mcp-vault",
+      "name": "graph-mcp-vault",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "dev-secret",
+      "directAccessGrantsEnabled": true,
+      "standardFlowEnabled": true,
+      "serviceAccountsEnabled": true,
+      "redirectUris": [
+        "http://localhost:27123/oauth/callback",
+        "http://localhost:3000/*",
+        "http://localhost:8080/*",
+        "http://localhost:8000/*"
+      ],
+      "webOrigins": [
+        "*"
+      ],
+      "protocolMappers": [
+        {
+          "name": "audience-graph-mcp-vault",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "graph-mcp-vault",
+            "id.token.claim": "false",
+            "access.token.claim": "true",
+            "lightweight.claim": "false"
+          }
+        }
+      ]
+    }
+  ]
+}

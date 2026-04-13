@@ -16,16 +16,33 @@ services:
       retries: 12
       start_period: 30s
 
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.1
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
+    volumes:
+      - ./docker/keycloak/realm-dev.json:/opt/keycloak/data/import/realm-dev.json:ro
+    ports:
+      - "8081:8080"
+    restart: unless-stopped
+
   graph-mcp-vault:
     image: ghcr.io/harmellis/graph-mcp-vault:latest
     env_file:
       - path: .env
         required: false
+    environment:
+      OIDC_ISSUER: ${OIDC_ISSUER:-http://keycloak:8080/realms/graph-mcp-vault}
+      OIDC_AUDIENCE: ${OIDC_AUDIENCE:-graph-mcp-vault}
     ports:
       - "8000:8000"
     depends_on:
       neo4j:
         condition: service_healthy
+      keycloak:
+        condition: service_started
     restart: unless-stopped
 
 volumes:
