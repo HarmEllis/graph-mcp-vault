@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { z } from 'zod';
 import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
 import neo4j from 'neo4j-driver';
@@ -31,11 +32,13 @@ const _neo4jClient = new Neo4jClient(driver);
 
 // Resolve jwks_uri from the OIDC discovery document so we stay compatible
 // with any issuer, not just those that put JWKS at /.well-known/jwks.json.
-const oidcDiscovery = await fetch(`${config.oidcIssuer}/.well-known/openid-configuration`);
+const discoveryUrl = config.oidcDiscoveryUrl ?? `${config.oidcIssuer}/.well-known/openid-configuration`;
+const oidcDiscovery = await fetch(discoveryUrl);
 if (!oidcDiscovery.ok) {
   throw new Error(`OIDC discovery failed: HTTP ${oidcDiscovery.status}`);
 }
-const { jwks_uri } = (await oidcDiscovery.json()) as { jwks_uri: string };
+const discoveryDoc = await oidcDiscovery.json() as Record<string, unknown>;
+const { jwks_uri } = z.object({ jwks_uri: z.string().url() }).parse(discoveryDoc);
 logger.debug('oidc_discovery_ok', { jwksUri: jwks_uri });
 
 const jwksClient = new JwksClient(jwks_uri, config.jwksCacheTtl * 1000);
@@ -45,12 +48,12 @@ sessionStore.startCleanup();
 
 // ── Metadata client ───────────────────────────────────────────────────────────
 
-const metadataClient = new OidcMetadataClient(config.oidcIssuer, config.metadataCacheTtl * 1000);
+const metadataClient = new OidcMetadataClient(config.oidcIssuer, config.metadataCacheTtl * 1000, config.oidcDiscoveryUrl);
 
 // ── Hono app ──────────────────────────────────────────────────────────────────
 
 const app = new Hono();
-app.route('/', createOAuthMetaRouter(metadataClient));
+app.route('/', createOAuthMetaRouter(metadataClient, config.scopesAllowlist));
 const tools = [...createResourceTools(_neo4jClient), ...createSharingTools(_neo4jClient)];
 app.route('/', createMcpRouter(config, sessionStore, jwksClient, tools, logger));
 

@@ -66,4 +66,42 @@ describe('parseConfig', () => {
   it('throws when LOG_LEVEL is not a valid enum value', () => {
     expect(() => parseConfig({ ...required, LOG_LEVEL: 'verbose' })).toThrow();
   });
+
+  // ── OIDC_DISCOVERY_URL ──────────────────────────────────────────────────────
+
+  it('oidcDiscoveryUrl defaults to undefined when OIDC_DISCOVERY_URL is not set', () => {
+    const config = parseConfig(required);
+    expect(config.oidcDiscoveryUrl).toBeUndefined();
+  });
+
+  it('accepts and stores OIDC_DISCOVERY_URL', () => {
+    const config = parseConfig({
+      ...required,
+      OIDC_DISCOVERY_URL: 'https://custom.example.com/.well-known/openid-configuration',
+    });
+    expect(config.oidcDiscoveryUrl).toBe(
+      'https://custom.example.com/.well-known/openid-configuration',
+    );
+  });
+
+  it('throws when OIDC_DISCOVERY_URL is set but not a valid URL', () => {
+    expect(() => parseConfig({ ...required, OIDC_DISCOVERY_URL: 'not-a-url' })).toThrow();
+  });
+
+  // ── SCOPES_ALLOWLIST ────────────────────────────────────────────────────────
+
+  it('scopesAllowlist defaults to undefined when SCOPES_ALLOWLIST is not set', () => {
+    const config = parseConfig(required);
+    expect(config.scopesAllowlist).toBeUndefined();
+  });
+
+  it('parses SCOPES_ALLOWLIST into a trimmed string array', () => {
+    const config = parseConfig({ ...required, SCOPES_ALLOWLIST: 'openid, profile, email' });
+    expect(config.scopesAllowlist).toEqual(['openid', 'profile', 'email']);
+  });
+
+  it('parses SCOPES_ALLOWLIST with no spaces', () => {
+    const config = parseConfig({ ...required, SCOPES_ALLOWLIST: 'openid,profile' });
+    expect(config.scopesAllowlist).toEqual(['openid', 'profile']);
+  });
 });

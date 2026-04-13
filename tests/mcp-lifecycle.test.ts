@@ -31,6 +31,8 @@ const BASE_CONFIG: Config = {
   defaultNamespace: 'default',
   logLevel: 'info',
   allowedOrigins: '',
+  oidcDiscoveryUrl: undefined,
+  scopesAllowlist: undefined,
 };
 
 beforeAll(async () => {

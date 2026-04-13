@@ -16,13 +16,14 @@ export class OidcMetadataClient {
   constructor(
     private readonly oidcIssuer: string,
     private readonly ttlMs: number,
+    private readonly discoveryUrl?: string,
   ) {}
 
   /** Returns the cached metadata, re-fetching if the TTL has elapsed. */
   async getMetadata(): Promise<unknown> {
     if (this.isCacheValid()) return this.cached;
 
-    const url = `${this.oidcIssuer}/.well-known/openid-configuration`;
+    const url = this.discoveryUrl ?? `${this.oidcIssuer}/.well-known/openid-configuration`;
     const resp = await fetch(url);
     if (!resp.ok) {
       throw new Error(`Upstream OIDC metadata fetch failed with HTTP ${resp.status}`);
@@ -49,19 +50,31 @@ export class OidcMetadataClient {
  *   → 200 JSON  — upstream metadata
  *   → 502 JSON  — upstream unavailable
  */
-export function createOAuthMetaRouter(metadataClient: OidcMetadataClient): Hono {
+export function createOAuthMetaRouter(
+  metadataClient: OidcMetadataClient,
+  scopesAllowlist?: string[],
+): Hono {
   const app = new Hono();
 
   app.get('/.well-known/oauth-authorization-server', async (c) => {
     try {
       const metadata = await metadataClient.getMetadata() as Record<string, unknown>;
-      // Expose only end-user OAuth scopes; Keycloak-internal scopes (service_account,
-      // web-origins, etc.) must not be advertised — the MCP SDK sends all scopes_supported
-      // verbatim in its dynamic client registration request, which causes Keycloak's
-      // Allowed Client Scopes policy to reject the registration.
+
+      if (scopesAllowlist === undefined) {
+        return c.json(metadata);
+      }
+
+      // Filter scopes_supported to intersection with the allowlist, if provided.
+      const upstreamScopes = metadata['scopes_supported'];
+      if (!Array.isArray(upstreamScopes)) {
+        return c.json(metadata);
+      }
+
       const filtered = {
         ...metadata,
-        scopes_supported: ['openid', 'profile', 'email', 'offline_access', 'graph-mcp-vault-api'],
+        scopes_supported: upstreamScopes.filter(
+          (s): s is string => typeof s === 'string' && scopesAllowlist.includes(s),
+        ),
       };
       return c.json(filtered);
     } catch (err) {

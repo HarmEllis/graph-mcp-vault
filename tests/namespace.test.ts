@@ -34,6 +34,8 @@ const BASE_CONFIG: Config = {
   defaultNamespace: 'test-default',
   logLevel: 'info',
   allowedOrigins: '',
+  oidcDiscoveryUrl: undefined,
+  scopesAllowlist: undefined,
 };
 
 let container: StartedTestContainer;

@@ -101,9 +101,13 @@ describe('OidcMetadataClient', () => {
 
 // ── createOAuthMetaRouter ─────────────────────────────────────────────────────
 
-function buildApp(ttlMs = 3_600_000): { app: Hono; client: OidcMetadataClient } {
-  const client = new OidcMetadataClient(ISSUER, ttlMs);
-  const router = createOAuthMetaRouter(client);
+function buildApp(
+  ttlMs = 3_600_000,
+  scopesAllowlist?: string[],
+  discoveryUrl?: string,
+): { app: Hono; client: OidcMetadataClient } {
+  const client = new OidcMetadataClient(ISSUER, ttlMs, discoveryUrl);
+  const router = createOAuthMetaRouter(client, scopesAllowlist);
   const app = new Hono();
   app.route('/', router);
   return { app, client };
@@ -188,5 +192,98 @@ describe('GET /.well-known/oauth-authorization-server', () => {
     await app.request('/.well-known/oauth-authorization-server');
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ── scopes_supported passthrough / allowlist ──────────────────────────────────
+
+describe('scopes_supported behavior', () => {
+  it('passes through upstream scopes_supported unchanged when no allowlist is configured', async () => {
+    stubFetch(UPSTREAM_METADATA);
+    const { app } = buildApp();
+
+    const res = await app.request('/.well-known/oauth-authorization-server');
+    const body = await res.json();
+
+    expect(body.scopes_supported).toEqual(UPSTREAM_METADATA.scopes_supported);
+  });
+
+  it('does not inject scopes_supported when upstream does not include it', async () => {
+    const metaWithoutScopes = { ...UPSTREAM_METADATA };
+    const { scopes_supported: _omit, ...rest } = metaWithoutScopes;
+    stubFetch(rest);
+    const { app } = buildApp();
+
+    const res = await app.request('/.well-known/oauth-authorization-server');
+    const body = await res.json();
+
+    expect(body).not.toHaveProperty('scopes_supported');
+  });
+
+  it('with allowlist: returns intersection of allowlist and upstream scopes', async () => {
+    stubFetch(UPSTREAM_METADATA); // upstream has ['openid', 'profile', 'email']
+    const { app } = buildApp(3_600_000, ['openid', 'email', 'offline_access']);
+
+    const res = await app.request('/.well-known/oauth-authorization-server');
+    const body = await res.json();
+
+    // 'offline_access' is in allowlist but not upstream → excluded
+    expect(body.scopes_supported).toEqual(['openid', 'email']);
+  });
+
+  it('with allowlist: excludes scopes not present in upstream', async () => {
+    stubFetch(UPSTREAM_METADATA); // upstream has ['openid', 'profile', 'email']
+    const { app } = buildApp(3_600_000, ['openid', 'graph-mcp-vault-api']);
+
+    const res = await app.request('/.well-known/oauth-authorization-server');
+    const body = await res.json();
+
+    expect(body.scopes_supported).toEqual(['openid']);
+  });
+
+  it('with allowlist and no matching upstream scopes: returns empty array', async () => {
+    stubFetch(UPSTREAM_METADATA);
+    const { app } = buildApp(3_600_000, ['nope', 'also-nope']);
+
+    const res = await app.request('/.well-known/oauth-authorization-server');
+    const body = await res.json();
+
+    expect(body.scopes_supported).toEqual([]);
+  });
+
+  it('preserves all other upstream fields unchanged regardless of allowlist setting', async () => {
+    stubFetch(UPSTREAM_METADATA);
+    const { app } = buildApp(3_600_000, ['openid']);
+
+    const res = await app.request('/.well-known/oauth-authorization-server');
+    const body = await res.json();
+
+    expect(body.issuer).toBe(UPSTREAM_METADATA.issuer);
+    expect(body.authorization_endpoint).toBe(UPSTREAM_METADATA.authorization_endpoint);
+    expect(body.token_endpoint).toBe(UPSTREAM_METADATA.token_endpoint);
+    expect(body.jwks_uri).toBe(UPSTREAM_METADATA.jwks_uri);
+  });
+});
+
+// ── OidcMetadataClient custom discoveryUrl ────────────────────────────────────
+
+describe('OidcMetadataClient: custom discoveryUrl', () => {
+  it('uses the default constructed URL when no discoveryUrl is provided', async () => {
+    const fetchMock = stubFetch(UPSTREAM_METADATA);
+    const client = new OidcMetadataClient(ISSUER, 3_600_000);
+
+    await client.getMetadata();
+
+    expect(fetchMock).toHaveBeenCalledWith(DISCOVERY_URL);
+  });
+
+  it('uses the provided discoveryUrl instead of the default construction', async () => {
+    const custom = 'https://custom.example.com/.well-known/openid-configuration';
+    const fetchMock = stubFetch(UPSTREAM_METADATA);
+    const client = new OidcMetadataClient(ISSUER, 3_600_000, custom);
+
+    await client.getMetadata();
+
+    expect(fetchMock).toHaveBeenCalledWith(custom);
   });
 });
