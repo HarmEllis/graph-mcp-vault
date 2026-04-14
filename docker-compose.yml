@@ -34,8 +34,11 @@ services:
       - path: .env
         required: false
     environment:
-      OIDC_ISSUER: ${OIDC_ISSUER:-http://keycloak:8080/realms/graph-mcp-vault}
+      # External URL — must match the `iss` claim in tokens obtained by clients via localhost:8081
+      OIDC_ISSUER: ${OIDC_ISSUER:-http://localhost:8081/realms/graph-mcp-vault}
       OIDC_AUDIENCE: ${OIDC_AUDIENCE:-graph-mcp-vault}
+      # Internal URL — used by the server to fetch JWKS/discovery within the Docker network
+      OIDC_DISCOVERY_URL: ${OIDC_DISCOVERY_URL:-http://keycloak:8080/realms/graph-mcp-vault/.well-known/openid-configuration}
     ports:
       - "8000:8000"
     depends_on:

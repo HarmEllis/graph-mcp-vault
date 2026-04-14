@@ -27,12 +27,30 @@
   },
   "users": [
     {
+      "id": "7603f537-a456-4c97-8e46-3940ad4a62b6",
       "username": "dev-user",
       "email": "dev@localhost",
       "enabled": true,
       "emailVerified": true,
       "firstName": "Dev",
       "lastName": "User",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "dev-password",
+          "temporary": false
+        }
+      ],
+      "realmRoles": ["offline_access"]
+    },
+    {
+      "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      "username": "dev-user2",
+      "email": "dev2@localhost",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Dev",
+      "lastName": "User2",
       "credentials": [
         {
           "type": "password",
@@ -79,6 +97,7 @@
       "serviceAccountsEnabled": true,
       "redirectUris": [
         "http://localhost:27123/oauth/callback",
+        "http://127.0.0.1:19876/mcp/oauth/callback",
         "http://localhost:3000/*",
         "http://localhost:8080/*",
         "http://localhost:8000/*"
@@ -97,6 +116,15 @@
             "id.token.claim": "false",
             "access.token.claim": "true",
             "lightweight.claim": "false"
+          }
+        },
+        {
+          "name": "sub",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-sub-mapper",
+          "consentRequired": false,
+          "config": {
+            "access.token.claim": "true"
           }
         }
       ]
