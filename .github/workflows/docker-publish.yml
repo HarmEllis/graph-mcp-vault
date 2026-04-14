@@ -79,7 +79,7 @@ jobs:
 
       - name: Extract Docker metadata
         id: meta
-        uses: docker/metadata-action@902fa8ec7d6ecbea8a64d2b0e13cf91c01af52a8  # v5.7.0
+        uses: docker/metadata-action@902fa8ec7d6ecbf8d84d538b9b233a880e428804  # v5.7.0
         with:
           images: ${{ steps.image.outputs.ref }}
           tags: |
@@ -100,7 +100,7 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@b5730b4a63a06c4e3d8cad62bcc9f03e65e52f8f  # v3.10.0
+        uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2  # v3.10.0
 
       - name: Log in to GHCR
         uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772  # v3.4.0
@@ -135,10 +135,10 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@29109295f81e9208d7d86ff9313c6a6b7b7a4d74  # v3.6.0
+        uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392  # v3.6.0
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@b5730b4a63a06c4e3d8cad62bcc9f03e65e52f8f  # v3.10.0
+        uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2  # v3.10.0
 
       - name: Log in to GHCR
         uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772  # v3.4.0
@@ -168,7 +168,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@b5730b4a63a06c4e3d8cad62bcc9f03e65e52f8f  # v3.10.0
+        uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2  # v3.10.0
 
       - name: Log in to GHCR
         uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772  # v3.4.0
@@ -180,8 +180,10 @@ jobs:
       - name: Create and push multi-platform manifest
         id: manifest
         run: |
+          # Build -t <tag> pairs as an array to avoid SC2046 (unquoted word-splitting)
+          mapfile -t TAGS < <(jq -r '.tags[] | "-t", .' <<< "$DOCKER_METADATA_OUTPUT_JSON")
           docker buildx imagetools create \
-            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            "${TAGS[@]}" \
             "${{ needs.prepare.outputs.image_ref }}@${{ needs.build-amd64.outputs.digest }}" \
             "${{ needs.prepare.outputs.image_ref }}@${{ needs.build-arm64.outputs.digest }}"
 
