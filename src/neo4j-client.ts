@@ -7,11 +7,16 @@ export interface Resource {
   id: string;
   user_id: string;
   namespace: string;
-  type: string;
+  entry_type: string;
   title: string;
   content: string;
   created_at: string;
   updated_at: string;
+  topic?: string;
+  tags?: string[];
+  summary?: string;
+  source?: string;
+  last_verified_at?: string;
 }
 
 export interface ResourceWithOwnership extends Resource {
@@ -30,10 +35,12 @@ export interface NamespaceSummary {
   shared_count: number;
 }
 
+export type MatchMode = 'exact' | 'fulltext' | 'fuzzy';
+
 // ── Lucene helpers ────────────────────────────────────────────────────────────
 
 /**
- * Escapes Lucene special characters in a user-supplied query string so they
+ * Escapes Lucene special characters in a user-supplied string so they
  * are treated as literals rather than query operators.
  *
  * Special characters per the Lucene query syntax reference:
@@ -41,6 +48,61 @@ export interface NamespaceSummary {
  */
 function escapeLuceneQuery(query: string): string {
   return query.replace(/[+\-&|!(){}[\]^"~*?:\\/]/g, (char) => `\\${char}`);
+}
+
+/**
+ * Builds a Lucene phrase query by escaping the raw query and wrapping it
+ * in double quotes, producing an exact phrase match.
+ */
+function buildExactQuery(query: string): string {
+  return `"${escapeLuceneQuery(query)}"`;
+}
+
+/**
+ * Builds a fuzzy Lucene query from a user-supplied string:
+ *  1. Tokenise on whitespace.
+ *  2. Remove bare Lucene boolean operators (AND, OR, NOT).
+ *  3. Escape special characters per token.
+ *  4. Apply edit-distance suffix:
+ *       < 3 chars  → no suffix (too short for meaningful fuzzy)
+ *       3–5 chars  → ~1  (1 edit)
+ *       > 5 chars  → ~2  (2 edits)
+ *
+ * Returns null when all tokens are filtered out (caller should short-circuit
+ * and return an empty result set without hitting the index).
+ */
+function buildFuzzyQuery(query: string): string | null {
+  const BOOLEAN_OPS = new Set(['AND', 'OR', 'NOT']);
+
+  const rawTokens = query.split(/\s+/).filter((t) => t.length > 0);
+  const filtered = rawTokens.filter((t) => !BOOLEAN_OPS.has(t));
+
+  if (filtered.length === 0) return null;
+
+  return filtered
+    .map((rawToken) => {
+      const escaped = escapeLuceneQuery(rawToken);
+      const len = rawToken.length;
+      if (len < 3) return escaped;
+      if (len <= 5) return `${escaped}~1`;
+      return `${escaped}~2`;
+    })
+    .join(' ');
+}
+
+/**
+ * Dispatches to the appropriate Lucene query builder based on `mode`.
+ * Returns null only in fuzzy mode when all tokens are filtered out.
+ */
+function buildLuceneQuery(query: string, mode: MatchMode): string | null {
+  switch (mode) {
+    case 'exact':
+      return buildExactQuery(query);
+    case 'fulltext':
+      return escapeLuceneQuery(query);
+    case 'fuzzy':
+      return buildFuzzyQuery(query);
+  }
 }
 
 // ── Neo4jClient ───────────────────────────────────────────────────────────────
@@ -64,12 +126,25 @@ export class Neo4jClient {
   async createResource(params: {
     userId: string;
     namespace: string;
-    type: string;
+    entry_type: string;
     title: string;
     content: string;
+    topic?: string;
+    tags?: string[];
+    summary?: string;
+    source?: string;
+    last_verified_at?: string;
   }): Promise<{ id: string; created_at: string }> {
     const id = randomUUID();
     const now = new Date().toISOString();
+
+    const optionalProps: Record<string, unknown> = {};
+    if (params.topic !== undefined) optionalProps['topic'] = params.topic;
+    if (params.tags !== undefined) optionalProps['tags'] = params.tags;
+    if (params.summary !== undefined) optionalProps['summary'] = params.summary;
+    if (params.source !== undefined) optionalProps['source'] = params.source;
+    if (params.last_verified_at !== undefined) optionalProps['last_verified_at'] = params.last_verified_at;
+
     const session = this.driver.session();
     try {
       await session.run(
@@ -79,22 +154,24 @@ export class Neo4jClient {
           id:         $id,
           user_id:    $userId,
           namespace:  $namespace,
-          type:       $type,
+          entry_type: $entry_type,
           title:      $title,
           content:    $content,
           created_at: $now,
           updated_at: $now
         })
+        SET r += $optionalProps
         CREATE (u)-[:OWNS]->(r)
         `,
         {
           userId: params.userId,
           id,
           namespace: params.namespace,
-          type: params.type,
+          entry_type: params.entry_type,
           title: params.title,
           content: params.content,
           now,
+          optionalProps,
         },
       );
       return { id, created_at: now };
@@ -119,12 +196,12 @@ export class Neo4jClient {
 
   /**
    * Returns all resources the user can read (owned + shared via HAS_ACCESS),
-   * optionally filtered by namespace and/or type, with pagination.
+   * optionally filtered by namespace and/or entry_type, with pagination.
    */
   async listResources(params: {
     userId: string;
     namespace?: string;
-    type?: string;
+    entry_type?: string;
     limit?: number;
     skip?: number;
   }): Promise<ResourceWithOwnership[]> {
@@ -136,7 +213,7 @@ export class Neo4jClient {
         `
         MATCH (u:User {id: $userId})-[:OWNS|HAS_ACCESS]->(r:Resource)
         WHERE ($namespace IS NULL OR r.namespace = $namespace)
-          AND ($type IS NULL OR r.type = $type)
+          AND ($entry_type IS NULL OR r.entry_type = $entry_type)
         RETURN r,
           CASE WHEN (u)-[:OWNS]->(r) THEN 'owner' ELSE 'shared' END AS ownership
         ORDER BY r.updated_at DESC
@@ -145,7 +222,7 @@ export class Neo4jClient {
         {
           userId: params.userId,
           namespace: params.namespace ?? null,
-          type: params.type ?? null,
+          entry_type: params.entry_type ?? null,
           skip: neo4j.int(skip),
           limit: neo4j.int(limit),
         },
@@ -160,30 +237,34 @@ export class Neo4jClient {
   }
 
   /**
-   * Updates mutable fields (title and/or content) of an existing Resource.
+   * Updates mutable fields of an existing Resource.
    * Always sets updated_at to the current time.
    */
   async updateResource(
     resourceId: string,
-    params: { title?: string; content?: string },
+    params: {
+      title?: string;
+      content?: string;
+      topic?: string;
+      tags?: string[];
+      summary?: string;
+      source?: string;
+      last_verified_at?: string;
+    },
   ): Promise<void> {
     const now = new Date().toISOString();
+    const patch: Record<string, unknown> = { updated_at: now };
+    if (params.title !== undefined) patch['title'] = params.title;
+    if (params.content !== undefined) patch['content'] = params.content;
+    if (params.topic !== undefined) patch['topic'] = params.topic;
+    if (params.tags !== undefined) patch['tags'] = params.tags;
+    if (params.summary !== undefined) patch['summary'] = params.summary;
+    if (params.source !== undefined) patch['source'] = params.source;
+    if (params.last_verified_at !== undefined) patch['last_verified_at'] = params.last_verified_at;
+
     const session = this.driver.session();
     try {
-      await session.run(
-        `
-        MATCH (r:Resource {id: $id})
-        SET r.updated_at = $now
-          ${params.title !== undefined ? ', r.title = $title' : ''}
-          ${params.content !== undefined ? ', r.content = $content' : ''}
-        `,
-        {
-          id: resourceId,
-          now,
-          ...(params.title !== undefined ? { title: params.title } : {}),
-          ...(params.content !== undefined ? { content: params.content } : {}),
-        },
-      );
+      await session.run('MATCH (r:Resource {id: $id}) SET r += $patch', { id: resourceId, patch });
     } finally {
       await session.close();
     }
@@ -202,26 +283,34 @@ export class Neo4jClient {
   // ── Search ───────────────────────────────────────────────────────────────────
 
   /**
-   * Full-text search over resource title and content.
+   * Full-text search over resource title, content, summary, topic, and tags.
    *
    * Uses the `resource_text` fulltext index. Results are ordered by relevance
    * score descending, then by `updated_at` descending for stability.
    * Only returns resources the caller can read (owned + shared via HAS_ACCESS).
    *
-   * User-supplied query strings are Lucene-escaped before being passed to the
-   * index so that special characters (`(`, `*`, `:`, etc.) are treated as
-   * literals rather than operators, preventing parse errors.
+   * Three search modes are supported (default: fuzzy):
+   *  - exact:    phrase match (Lucene `"..."` query)
+   *  - fulltext: escaped keyword query (current legacy behaviour)
+   *  - fuzzy:    per-token fuzzy with edit-distance suffix; returns [] when all
+   *              tokens are filtered out (avoids hitting the index for empty queries)
    */
   async searchResources(params: {
     userId: string;
     query: string;
     namespace?: string;
-    type?: string;
+    entry_type?: string;
     limit?: number;
     skip?: number;
+    match_mode?: MatchMode;
   }): Promise<ResourceWithOwnership[]> {
     const limit = params.limit ?? 20;
     const skip = params.skip ?? 0;
+    const mode = params.match_mode ?? 'fuzzy';
+
+    const luceneQuery = buildLuceneQuery(params.query, mode);
+    if (luceneQuery === null) return [];
+
     const session = this.driver.session();
     try {
       const result = await session.run(
@@ -229,7 +318,7 @@ export class Neo4jClient {
         CALL db.index.fulltext.queryNodes('resource_text', $query) YIELD node AS r, score
         MATCH (u:User {id: $userId})-[:OWNS|HAS_ACCESS]->(r)
         WHERE ($namespace IS NULL OR r.namespace = $namespace)
-          AND ($type IS NULL OR r.type = $type)
+          AND ($entry_type IS NULL OR r.entry_type = $entry_type)
         RETURN r,
           CASE WHEN (u)-[:OWNS]->(r) THEN 'owner' ELSE 'shared' END AS ownership,
           score
@@ -238,9 +327,9 @@ export class Neo4jClient {
         `,
         {
           userId: params.userId,
-          query: escapeLuceneQuery(params.query),
+          query: luceneQuery,
           namespace: params.namespace ?? null,
-          type: params.type ?? null,
+          entry_type: params.entry_type ?? null,
           skip: neo4j.int(skip),
           limit: neo4j.int(limit),
         },
@@ -349,9 +438,6 @@ export class Neo4jClient {
    *   1. Count resources the user owns per namespace (OWNS relationships).
    *   2. Count resources the user can access but does not own per namespace
    *      (HAS_ACCESS WHERE NOT OWNS), to prevent owner/self-share double counting.
-   *
-   * Note: the two passes are non-atomic under concurrent writes — a resource
-   * created between the two queries may appear in one count but not the other.
    *
    * Results are returned in deterministic alphabetical order by namespace.
    */

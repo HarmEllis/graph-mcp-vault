@@ -45,6 +45,34 @@ describe('initSchema', () => {
     await expect(initSchema(driver)).resolves.toBeUndefined();
     await expect(initSchema(driver)).resolves.toBeUndefined();
   });
+
+  it('sets schema_version to 2 after migration', async () => {
+    const session = driver.session();
+    try {
+      const result = await session.run('MATCH (s:SchemaInfo) RETURN s.version AS version');
+      expect(result.records.length).toBe(1);
+      const version = neo4j.integer.toNumber(result.records[0]!.get('version'));
+      expect(version).toBe(2);
+    } finally {
+      await session.close();
+    }
+  });
+
+  it('creates the resource_text fulltext index covering summary, topic, and tags', async () => {
+    const session = driver.session();
+    try {
+      const result = await session.run(
+        "SHOW FULLTEXT INDEXES YIELD name, properties WHERE name = 'resource_text'",
+      );
+      expect(result.records.length).toBe(1);
+      const props = result.records[0]!.get('properties') as string[];
+      expect(props).toContain('summary');
+      expect(props).toContain('topic');
+      expect(props).toContain('tags');
+    } finally {
+      await session.close();
+    }
+  });
 });
 
 // ── createResource ────────────────────────────────────────────────────────────
@@ -54,7 +82,7 @@ describe('Neo4jClient.createResource', () => {
     const result = await client.createResource({
       userId: 'user-create-a',
       namespace: 'default',
-      type: 'note',
+      entry_type: 'note',
       title: 'My Note',
       content: 'Hello world',
     });
@@ -62,6 +90,28 @@ describe('Neo4jClient.createResource', () => {
     expect(typeof result.id).toBe('string');
     expect(result.id.length).toBeGreaterThan(0);
     expect(typeof result.created_at).toBe('string');
+  });
+
+  it('stores optional metadata fields', async () => {
+    const result = await client.createResource({
+      userId: 'user-create-meta',
+      namespace: 'default',
+      entry_type: 'note',
+      title: 'With Metadata',
+      content: 'body',
+      topic: 'engineering',
+      tags: ['neo4j', 'test'],
+      summary: 'A short summary',
+      source: 'https://example.com',
+      last_verified_at: '2026-04-14T00:00:00.000Z',
+    });
+
+    const resource = await client.getResource(result.id);
+    expect(resource?.topic).toBe('engineering');
+    expect(resource?.tags).toEqual(['neo4j', 'test']);
+    expect(resource?.summary).toBe('A short summary');
+    expect(resource?.source).toBe('https://example.com');
+    expect(resource?.last_verified_at).toBe('2026-04-14T00:00:00.000Z');
   });
 });
 
@@ -72,7 +122,7 @@ describe('Neo4jClient.getResource', () => {
     const created = await client.createResource({
       userId: 'user-get-b',
       namespace: 'default',
-      type: 'note',
+      entry_type: 'note',
       title: 'Fetch Me',
       content: 'Content here',
     });
@@ -85,7 +135,7 @@ describe('Neo4jClient.getResource', () => {
     expect(resource?.content).toBe('Content here');
     expect(resource?.user_id).toBe('user-get-b');
     expect(resource?.namespace).toBe('default');
-    expect(resource?.type).toBe('note');
+    expect(resource?.entry_type).toBe('note');
   });
 
   it('returns null for a non-existent resource id', async () => {
@@ -99,8 +149,8 @@ describe('Neo4jClient.getResource', () => {
 describe('Neo4jClient.listResources', () => {
   it('returns resources owned by the user', async () => {
     const userId = 'user-list-owned';
-    await client.createResource({ userId, namespace: 'ns1', type: 'note', title: 'R1', content: '' });
-    await client.createResource({ userId, namespace: 'ns1', type: 'note', title: 'R2', content: '' });
+    await client.createResource({ userId, namespace: 'ns1', entry_type: 'note', title: 'R1', content: '' });
+    await client.createResource({ userId, namespace: 'ns1', entry_type: 'note', title: 'R2', content: '' });
 
     const resources = await client.listResources({ userId, namespace: 'ns1' });
 
@@ -111,8 +161,8 @@ describe('Neo4jClient.listResources', () => {
 
   it('filters resources by namespace', async () => {
     const userId = 'user-ns-filter';
-    await client.createResource({ userId, namespace: 'ns-a', type: 'note', title: 'In A', content: '' });
-    await client.createResource({ userId, namespace: 'ns-b', type: 'note', title: 'In B', content: '' });
+    await client.createResource({ userId, namespace: 'ns-a', entry_type: 'note', title: 'In A', content: '' });
+    await client.createResource({ userId, namespace: 'ns-b', entry_type: 'note', title: 'In B', content: '' });
 
     const resources = await client.listResources({ userId, namespace: 'ns-a' });
 
@@ -121,20 +171,20 @@ describe('Neo4jClient.listResources', () => {
     expect(resources.some((r) => r.title === 'In B')).toBe(false);
   });
 
-  it('filters resources by type', async () => {
+  it('filters resources by entry_type', async () => {
     const userId = 'user-type-filter';
-    await client.createResource({ userId, namespace: 'default', type: 'note', title: 'Note', content: '' });
-    await client.createResource({ userId, namespace: 'default', type: 'task', title: 'Task', content: '' });
+    await client.createResource({ userId, namespace: 'default', entry_type: 'note', title: 'Note', content: '' });
+    await client.createResource({ userId, namespace: 'default', entry_type: 'task', title: 'Task', content: '' });
 
-    const notes = await client.listResources({ userId, type: 'note' });
+    const notes = await client.listResources({ userId, entry_type: 'note' });
 
-    expect(notes.every((r) => r.type === 'note')).toBe(true);
+    expect(notes.every((r) => r.entry_type === 'note')).toBe(true);
   });
 
   it('respects limit and skip for pagination', async () => {
     const userId = 'user-pagination';
     for (let i = 0; i < 5; i++) {
-      await client.createResource({ userId, namespace: 'default', type: 'note', title: `Item ${i}`, content: '' });
+      await client.createResource({ userId, namespace: 'default', entry_type: 'note', title: `Item ${i}`, content: '' });
     }
 
     const page1 = await client.listResources({ userId, limit: 2, skip: 0 });
@@ -153,7 +203,7 @@ describe('Neo4jClient.updateResource', () => {
     const created = await client.createResource({
       userId: 'user-update',
       namespace: 'default',
-      type: 'note',
+      entry_type: 'note',
       title: 'Original Title',
       content: 'Original Content',
     });
@@ -165,11 +215,36 @@ describe('Neo4jClient.updateResource', () => {
     expect(updated?.content).toBe('New Content');
   });
 
+  it('updates metadata fields', async () => {
+    const created = await client.createResource({
+      userId: 'user-update-meta',
+      namespace: 'default',
+      entry_type: 'note',
+      title: 'Meta Update',
+      content: 'body',
+    });
+
+    await client.updateResource(created.id, {
+      tags: ['updated', 'test'],
+      summary: 'Updated summary',
+      topic: 'testing',
+      source: 'https://updated.example.com',
+      last_verified_at: '2026-04-14T12:00:00.000Z',
+    });
+
+    const updated = await client.getResource(created.id);
+    expect(updated?.tags).toEqual(['updated', 'test']);
+    expect(updated?.summary).toBe('Updated summary');
+    expect(updated?.topic).toBe('testing');
+    expect(updated?.source).toBe('https://updated.example.com');
+    expect(updated?.last_verified_at).toBe('2026-04-14T12:00:00.000Z');
+  });
+
   it('updates updated_at timestamp on modification', async () => {
     const created = await client.createResource({
       userId: 'user-update-ts',
       namespace: 'default',
-      type: 'note',
+      entry_type: 'note',
       title: 'Title',
       content: 'Content',
     });
@@ -190,7 +265,7 @@ describe('Neo4jClient.deleteResource', () => {
     const created = await client.createResource({
       userId: 'user-delete',
       namespace: 'default',
-      type: 'note',
+      entry_type: 'note',
       title: 'To Delete',
       content: '',
     });
@@ -207,7 +282,7 @@ describe('Neo4jClient.deleteResource', () => {
     const created = await client.createResource({
       userId: ownerId,
       namespace: 'default',
-      type: 'note',
+      entry_type: 'note',
       title: 'Has Relations',
       content: '',
     });
@@ -228,7 +303,7 @@ describe('Neo4jClient.getEffectiveRole', () => {
     const created = await client.createResource({
       userId,
       namespace: 'default',
-      type: 'note',
+      entry_type: 'note',
       title: 'Owned',
       content: '',
     });
@@ -241,7 +316,7 @@ describe('Neo4jClient.getEffectiveRole', () => {
     const created = await client.createResource({
       userId: 'user-role-creator',
       namespace: 'default',
-      type: 'note',
+      entry_type: 'note',
       title: 'Not Shared',
       content: '',
     });
@@ -256,7 +331,7 @@ describe('Neo4jClient.getEffectiveRole', () => {
     const created = await client.createResource({
       userId: ownerId,
       namespace: 'default',
-      type: 'note',
+      entry_type: 'note',
       title: 'Viewer Access',
       content: '',
     });
@@ -272,7 +347,7 @@ describe('Neo4jClient.getEffectiveRole', () => {
     const created = await client.createResource({
       userId: ownerId,
       namespace: 'default',
-      type: 'note',
+      entry_type: 'note',
       title: 'Editor Access',
       content: '',
     });
@@ -292,7 +367,7 @@ describe('Neo4jClient.shareResource', () => {
     const created = await client.createResource({
       userId: ownerId,
       namespace: 'default',
-      type: 'note',
+      entry_type: 'note',
       title: 'Shareable',
       content: '',
     });
@@ -309,7 +384,7 @@ describe('Neo4jClient.shareResource', () => {
     const created = await client.createResource({
       userId: ownerId,
       namespace: 'default',
-      type: 'note',
+      entry_type: 'note',
       title: 'Idempotent Share',
       content: '',
     });
@@ -327,7 +402,7 @@ describe('Neo4jClient.shareResource', () => {
     const created = await client.createResource({
       userId: ownerId,
       namespace: 'default',
-      type: 'note',
+      entry_type: 'note',
       title: 'New User Target',
       content: '',
     });
@@ -348,7 +423,7 @@ describe('Neo4jClient.revokeAccess', () => {
     const created = await client.createResource({
       userId: ownerId,
       namespace: 'default',
-      type: 'note',
+      entry_type: 'note',
       title: 'Revokable',
       content: '',
     });
@@ -366,8 +441,8 @@ describe('Neo4jClient.revokeAccess', () => {
 describe('Neo4jClient.searchResources', () => {
   it('returns resources matching the query keyword', async () => {
     const userId = 'user-search-basic';
-    await client.createResource({ userId, namespace: 'default', type: 'note', title: 'Quantum Physics', content: 'Schrodinger equation' });
-    await client.createResource({ userId, namespace: 'default', type: 'note', title: 'Cooking Recipe', content: 'how to bake bread' });
+    await client.createResource({ userId, namespace: 'default', entry_type: 'note', title: 'Quantum Physics', content: 'Schrodinger equation' });
+    await client.createResource({ userId, namespace: 'default', entry_type: 'note', title: 'Cooking Recipe', content: 'how to bake bread' });
 
     const results = await client.searchResources({ userId, query: 'Quantum' });
 
@@ -377,8 +452,8 @@ describe('Neo4jClient.searchResources', () => {
 
   it('respects namespace filtering', async () => {
     const userId = 'user-search-ns';
-    await client.createResource({ userId, namespace: 'ns-search-a', type: 'note', title: 'Nebula Discovery', content: 'astronomy' });
-    await client.createResource({ userId, namespace: 'ns-search-b', type: 'note', title: 'Nebula Notes', content: 'more astronomy' });
+    await client.createResource({ userId, namespace: 'ns-search-a', entry_type: 'note', title: 'Nebula Discovery', content: 'astronomy' });
+    await client.createResource({ userId, namespace: 'ns-search-b', entry_type: 'note', title: 'Nebula Notes', content: 'more astronomy' });
 
     const results = await client.searchResources({ userId, query: 'Nebula', namespace: 'ns-search-a' });
 
@@ -390,7 +465,7 @@ describe('Neo4jClient.searchResources', () => {
   it('only returns resources the user has access to', async () => {
     const ownerId = 'user-search-perm-owner';
     const searcherId = 'user-search-perm-seeker';
-    await client.createResource({ userId: ownerId, namespace: 'default', type: 'note', title: 'Classified Photon', content: '' });
+    await client.createResource({ userId: ownerId, namespace: 'default', entry_type: 'note', title: 'Classified Photon', content: '' });
 
     const results = await client.searchResources({ userId: searcherId, query: 'Photon' });
 
@@ -400,7 +475,7 @@ describe('Neo4jClient.searchResources', () => {
   it('returns shared resources the user has been granted access to', async () => {
     const ownerId = 'user-search-shared-owner';
     const viewerId = 'user-search-shared-viewer';
-    const created = await client.createResource({ userId: ownerId, namespace: 'default', type: 'note', title: 'Shared Quasar Content', content: '' });
+    const created = await client.createResource({ userId: ownerId, namespace: 'default', entry_type: 'note', title: 'Shared Quasar Content', content: '' });
     await client.shareResource(created.id, viewerId, 'viewer');
 
     const results = await client.searchResources({ userId: viewerId, query: 'Quasar' });
@@ -409,14 +484,14 @@ describe('Neo4jClient.searchResources', () => {
     expect(results.find((r) => r.id === created.id)?.ownership).toBe('shared');
   });
 
-  it('filters results by type', async () => {
+  it('filters results by entry_type', async () => {
     const userId = 'user-search-type';
-    await client.createResource({ userId, namespace: 'default', type: 'note', title: 'Electron Note', content: '' });
-    await client.createResource({ userId, namespace: 'default', type: 'task', title: 'Electron Task', content: '' });
+    await client.createResource({ userId, namespace: 'default', entry_type: 'note', title: 'Electron Note', content: '' });
+    await client.createResource({ userId, namespace: 'default', entry_type: 'task', title: 'Electron Task', content: '' });
 
-    const results = await client.searchResources({ userId, query: 'Electron', type: 'note' });
+    const results = await client.searchResources({ userId, query: 'Electron', entry_type: 'note' });
 
-    expect(results.every((r) => r.type === 'note')).toBe(true);
+    expect(results.every((r) => r.entry_type === 'note')).toBe(true);
     expect(results.some((r) => r.title === 'Electron Note')).toBe(true);
   });
 
@@ -424,7 +499,7 @@ describe('Neo4jClient.searchResources', () => {
     const userId = 'user-search-page';
     const tag = `Paginate${Date.now()}`;
     for (let i = 0; i < 4; i++) {
-      await client.createResource({ userId, namespace: 'default', type: 'note', title: `${tag} Item ${i}`, content: '' });
+      await client.createResource({ userId, namespace: 'default', entry_type: 'note', title: `${tag} Item ${i}`, content: '' });
     }
 
     const page1 = await client.searchResources({ userId, query: tag, limit: 2, skip: 0 });
@@ -439,7 +514,7 @@ describe('Neo4jClient.searchResources', () => {
 
   it('returns ownership "owner" for resources the caller owns', async () => {
     const userId = 'user-search-ownership-owner';
-    const created = await client.createResource({ userId, namespace: 'default', type: 'note', title: 'Ownership Proton', content: '' });
+    const created = await client.createResource({ userId, namespace: 'default', entry_type: 'note', title: 'Ownership Proton', content: '' });
 
     const results = await client.searchResources({ userId, query: 'Proton' });
 
@@ -448,22 +523,84 @@ describe('Neo4jClient.searchResources', () => {
     expect(found?.ownership).toBe('owner');
   });
 
-  it('does not throw and returns an empty array when the query contains Lucene special characters', async () => {
+  it('fulltext mode: does not throw for Lucene special characters', async () => {
     const userId = 'user-search-lucene-special';
 
     await expect(
-      client.searchResources({ userId, query: '(broken query' }),
+      client.searchResources({ userId, query: '(broken query', match_mode: 'fulltext' }),
     ).resolves.toEqual([]);
   });
 
-  it('does not throw for other Lucene operators: *, :, [, ^, ~', async () => {
+  it('fulltext mode: does not throw for other Lucene operators: *, :, [, ^, ~', async () => {
     const userId = 'user-search-lucene-ops';
 
     for (const q of ['*', 'field:value', '[a TO z]', 'term^2', 'fuzzy~']) {
       await expect(
-        client.searchResources({ userId, query: q }),
+        client.searchResources({ userId, query: q, match_mode: 'fulltext' }),
       ).resolves.toBeDefined();
     }
+  });
+
+  it('fuzzy mode: returns empty array when all tokens are boolean operators', async () => {
+    const userId = 'user-search-fuzzy-empty';
+
+    const results = await client.searchResources({ userId, query: 'AND OR NOT', match_mode: 'fuzzy' });
+    expect(results).toEqual([]);
+  });
+
+  it('fuzzy mode: applies ~1 suffix to 3–5 char tokens', async () => {
+    const userId = 'user-search-fuzzy-suffix';
+    const tag = `Fuzz${Date.now()}`;
+    await client.createResource({ userId, namespace: 'default', entry_type: 'note', title: tag, content: '' });
+
+    // Searching with a slight typo should still find it in fuzzy mode
+    await expect(
+      client.searchResources({ userId, query: tag, match_mode: 'fuzzy' }),
+    ).resolves.toBeDefined();
+  });
+
+  it('exact mode: performs phrase match', async () => {
+    const userId = 'user-search-exact';
+    const tag = `ExactPhrase${Date.now()}`;
+    await client.createResource({ userId, namespace: 'default', entry_type: 'note', title: tag, content: '' });
+
+    const results = await client.searchResources({ userId, query: tag, match_mode: 'exact' });
+    expect(results.some((r) => r.title === tag)).toBe(true);
+  });
+
+  it('exact mode: does not throw for Lucene special characters', async () => {
+    const userId = 'user-search-exact-special';
+
+    await expect(
+      client.searchResources({ userId, query: '(broken query', match_mode: 'exact' }),
+    ).resolves.toBeDefined();
+  });
+
+  it('default match_mode is fuzzy', async () => {
+    const userId = 'user-search-default-mode';
+    const tag = `DefaultMode${Date.now()}`;
+    await client.createResource({ userId, namespace: 'default', entry_type: 'note', title: tag, content: '' });
+
+    // No match_mode specified — should default to fuzzy and not throw
+    const results = await client.searchResources({ userId, query: tag });
+    expect(results.some((r) => r.title === tag)).toBe(true);
+  });
+
+  it('searches across summary and topic fields', async () => {
+    const userId = 'user-search-meta-fields';
+    const tag = `MetaFieldSearch${Date.now()}`;
+    const created = await client.createResource({
+      userId,
+      namespace: 'default',
+      entry_type: 'note',
+      title: 'Generic Title',
+      content: 'Generic content',
+      summary: `Summary with ${tag}`,
+      topic: `Topic ${tag}`,
+    });
+
+    const results = await client.searchResources({ userId, query: tag, match_mode: 'exact' });
+    expect(results.some((r) => r.id === created.id)).toBe(true);
   });
 });
 
@@ -472,7 +609,7 @@ describe('Neo4jClient.searchResources', () => {
 describe('Neo4jClient.listNamespaces', () => {
   it('converts Neo4j integer counts to JS numbers', async () => {
     const userId = 'user-ns-int-conv';
-    await client.createResource({ userId, namespace: 'ns-int', type: 'note', title: 'T', content: '' });
+    await client.createResource({ userId, namespace: 'ns-int', entry_type: 'note', title: 'T', content: '' });
 
     const result = await client.listNamespaces({ userId });
 
@@ -485,8 +622,8 @@ describe('Neo4jClient.listNamespaces', () => {
   it('returns owned and shared counts split correctly', async () => {
     const owner = 'user-ns-owned-split';
     const sharer = 'user-ns-shared-split';
-    const r1 = await client.createResource({ userId: owner, namespace: 'ns-split', type: 'note', title: 'Owned', content: '' });
-    const r2 = await client.createResource({ userId: sharer, namespace: 'ns-split', type: 'note', title: 'Shared', content: '' });
+    const r1 = await client.createResource({ userId: owner, namespace: 'ns-split', entry_type: 'note', title: 'Owned', content: '' });
+    const r2 = await client.createResource({ userId: sharer, namespace: 'ns-split', entry_type: 'note', title: 'Shared', content: '' });
     await client.shareResource(r2.id, owner, 'viewer');
 
     const result = await client.listNamespaces({ userId: owner });
@@ -500,10 +637,10 @@ describe('Neo4jClient.listNamespaces', () => {
   it('counts mixed owned and shared within the same namespace', async () => {
     const owner = 'user-ns-mixed-owner';
     const other = 'user-ns-mixed-other';
-    await client.createResource({ userId: owner, namespace: 'ns-mixed', type: 'note', title: 'O1', content: '' });
-    await client.createResource({ userId: owner, namespace: 'ns-mixed', type: 'note', title: 'O2', content: '' });
-    const shared1 = await client.createResource({ userId: other, namespace: 'ns-mixed', type: 'note', title: 'S1', content: '' });
-    const shared2 = await client.createResource({ userId: other, namespace: 'ns-mixed', type: 'note', title: 'S2', content: '' });
+    await client.createResource({ userId: owner, namespace: 'ns-mixed', entry_type: 'note', title: 'O1', content: '' });
+    await client.createResource({ userId: owner, namespace: 'ns-mixed', entry_type: 'note', title: 'O2', content: '' });
+    const shared1 = await client.createResource({ userId: other, namespace: 'ns-mixed', entry_type: 'note', title: 'S1', content: '' });
+    const shared2 = await client.createResource({ userId: other, namespace: 'ns-mixed', entry_type: 'note', title: 'S2', content: '' });
     await client.shareResource(shared1.id, owner, 'viewer');
     await client.shareResource(shared2.id, owner, 'editor');
 
@@ -518,7 +655,7 @@ describe('Neo4jClient.listNamespaces', () => {
   it('excludes self-shared resources from shared_count', async () => {
     const userId = 'user-ns-selfshare';
     const other = 'user-ns-selfshare-other';
-    const r = await client.createResource({ userId, namespace: 'ns-selfshare', type: 'note', title: 'Mine', content: '' });
+    const r = await client.createResource({ userId, namespace: 'ns-selfshare', entry_type: 'note', title: 'Mine', content: '' });
     // Owner self-shares — should not double-count
     await client.shareResource(r.id, userId, 'editor');
 
@@ -532,9 +669,9 @@ describe('Neo4jClient.listNamespaces', () => {
 
   it('returns namespaces in alphabetical order', async () => {
     const userId = 'user-ns-alpha';
-    await client.createResource({ userId, namespace: 'zz-last', type: 'note', title: 'Z', content: '' });
-    await client.createResource({ userId, namespace: 'aa-first', type: 'note', title: 'A', content: '' });
-    await client.createResource({ userId, namespace: 'mm-mid', type: 'note', title: 'M', content: '' });
+    await client.createResource({ userId, namespace: 'zz-last', entry_type: 'note', title: 'Z', content: '' });
+    await client.createResource({ userId, namespace: 'aa-first', entry_type: 'note', title: 'A', content: '' });
+    await client.createResource({ userId, namespace: 'mm-mid', entry_type: 'note', title: 'M', content: '' });
 
     const result = await client.listNamespaces({ userId });
     const ownedNamespaces = result.filter((n) =>
@@ -555,7 +692,7 @@ describe('Neo4jClient.listSharing', () => {
     const created = await client.createResource({
       userId: ownerId,
       namespace: 'default',
-      type: 'note',
+      entry_type: 'note',
       title: 'Shared With Many',
       content: '',
     });
@@ -575,7 +712,7 @@ describe('Neo4jClient.listSharing', () => {
     const created = await client.createResource({
       userId: 'user-no-sharing',
       namespace: 'default',
-      type: 'note',
+      entry_type: 'note',
       title: 'Private',
       content: '',
     });

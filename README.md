@@ -1,7 +1,8 @@
 # graph-mcp-vault
 
-A multi-tenant MCP proxy server that exposes Neo4j as an MCP tool server.
-Each user's data lives in a **namespace** and is access-controlled by role.
+A multi-tenant MCP knowledge memory bank backed by Neo4j.
+Store notes, decisions, facts, and documentation as structured entries in named namespaces,
+with per-user role-based access control.
 Identity is delegated to any standards-compliant OIDC/OAuth2 provider.
 
 MCP transport: **Streamable HTTP 2025-03-26** — JSON-only responses, no SSE.
@@ -51,7 +52,7 @@ curl -i -X POST http://localhost:8000/mcp \
   -d '{"jsonrpc":"2.0","id":"init-1","method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"curl","version":"1.0.0"}}}'
 ```
 
-The server schema-initialises Neo4j on first boot (idempotent, safe to restart).
+On first boot the server runs schema initialisation and migrations against Neo4j (idempotent, safe to restart).
 
 ---
 
@@ -105,8 +106,8 @@ An unknown `kid` triggers a one-time JWKS cache refresh before failing.
 
 ## Namespaces
 
-Every resource belongs to exactly one namespace. Namespaces provide multi-tenant
-data isolation — a session in namespace `work` cannot see resources in `homelab`.
+Every knowledge entry belongs to exactly one namespace. Namespaces provide multi-tenant
+data isolation — a session in namespace `work` cannot see entries in `homelab`.
 
 ### How a session's namespace is resolved (first match wins)
 
@@ -128,7 +129,7 @@ Once a session is created, its namespace is fixed. Sending a request to
 
 ### Cross-namespace reads
 
-Any tool that accepts a `namespace` argument (e.g. `list_resources`) can
+Any tool that accepts a `namespace` argument (e.g. `knowledge_list_entries`) can
 explicitly target a different namespace. The session namespace is the default;
 passing `namespace: "other"` overrides it for that single call.
 
@@ -136,18 +137,27 @@ passing `namespace: "other"` overrides it for that single call.
 
 ## MCP tools
 
-### Resource tools
+The server exposes ten knowledge tools. LLMs should **search before creating** to avoid
+duplicate entries.
 
-#### `create_resource`
+### Knowledge entry tools
 
-Create a new resource in the session namespace (or a specified namespace).
+#### `knowledge_create_entry`
+
+Save a new knowledge entry to the memory bank. Use this to store notes, decisions, facts,
+documentation snippets, or any information worth remembering.
 
 ```json
 {
-  "type": "note",
+  "entry_type": "note",
   "title": "My note",
   "content": "Hello world",
-  "namespace": "optional-override"
+  "namespace": "optional-override",
+  "topic": "optional subject area",
+  "tags": ["optional", "keywords"],
+  "summary": "optional one-sentence summary",
+  "source": "https://optional-source-url.example.com",
+  "last_verified_at": "2026-04-14T00:00:00.000Z"
 }
 ```
 
@@ -155,26 +165,26 @@ Returns `{ "id": "<uuid>", "created_at": "<iso8601>" }`.
 
 ---
 
-#### `get_resource`
+#### `knowledge_get_entry`
 
-Fetch a resource by ID. Requires at least read access.
+Fetch a knowledge entry by ID. Requires at least read access.
 
 ```json
-{ "resource_id": "<uuid>" }
+{ "entry_id": "<uuid>" }
 ```
 
-Returns the full resource object plus a `"role"` field (`"owner"`, `"editor"`, or `"viewer"`).
+Returns the full entry object plus a `"role"` field (`"owner"`, `"editor"`, or `"viewer"`).
 
 ---
 
-#### `list_resources`
+#### `knowledge_list_entries`
 
-List all resources the caller can read (owned + shared) in a namespace.
+List all knowledge entries the caller can read (owned and shared) in a namespace.
 
 ```json
 {
   "namespace": "optional — defaults to session namespace",
-  "type": "optional type filter",
+  "entry_type": "optional type filter",
   "limit": 50,
   "skip": 0
 }
@@ -184,15 +194,21 @@ Returns `{ "resources": [ ... ] }` ordered by `updated_at` descending.
 
 ---
 
-#### `update_resource`
+#### `knowledge_update_entry`
 
-Update the title and/or content of a resource. Requires editor or owner role.
+Update an entry's title, content, or metadata. Requires editor or owner role.
+Retrieve the entry first to see its current state.
 
 ```json
 {
-  "resource_id": "<uuid>",
+  "entry_id": "<uuid>",
   "title": "New title",
-  "content": "New content"
+  "content": "New content",
+  "summary": "Updated summary",
+  "tags": ["updated", "tags"],
+  "topic": "new-topic",
+  "source": "https://new-source.example.com",
+  "last_verified_at": "2026-04-14T12:00:00.000Z"
 }
 ```
 
@@ -200,27 +216,52 @@ Returns `{}`.
 
 ---
 
-#### `delete_resource`
+#### `knowledge_delete_entry`
 
-Delete a resource and all its relationships. Owner only.
+Delete a knowledge entry and all its access grants. Owner only. Irreversible.
 
 ```json
-{ "resource_id": "<uuid>" }
+{ "entry_id": "<uuid>" }
 ```
 
 Returns `{}`.
 
 ---
 
-### Sharing tools
+#### `knowledge_search_entries`
 
-#### `share_resource`
-
-Grant another user access to a resource. Owner only.
+Search the knowledge memory bank by keyword. Always call this before creating new entries
+to avoid duplicates. Only returns entries the caller can read.
 
 ```json
 {
-  "resource_id": "<uuid>",
+  "query": "search keywords",
+  "namespace": "optional — defaults to session namespace",
+  "entry_type": "optional type filter",
+  "limit": 20,
+  "skip": 0,
+  "match_mode": "fuzzy"
+}
+```
+
+`match_mode` options:
+- `"fuzzy"` (default) — per-token fuzzy matching with edit-distance tolerance for typos
+- `"fulltext"` — exact keyword match (Lucene escaped)
+- `"exact"` — phrase match (entire query treated as a phrase)
+
+Returns `{ "resources": [ ... ] }`.
+
+---
+
+### Sharing tools
+
+#### `knowledge_share_entry`
+
+Grant another user access to a knowledge entry. Owner only.
+
+```json
+{
+  "entry_id": "<uuid>",
   "target_user_id": "other-user-sub",
   "role": "viewer"
 }
@@ -231,13 +272,13 @@ Returns `{}`.
 
 ---
 
-#### `revoke_access`
+#### `knowledge_revoke_access`
 
-Remove a user's access to a resource. Owner only. Cannot revoke your own access.
+Remove a user's access to a knowledge entry. Owner only. Cannot revoke your own access.
 
 ```json
 {
-  "resource_id": "<uuid>",
+  "entry_id": "<uuid>",
   "target_user_id": "other-user-sub"
 }
 ```
@@ -246,15 +287,23 @@ Returns `{}`.
 
 ---
 
-#### `list_sharing`
+#### `knowledge_list_access`
 
-List all users with access to a resource. Requires read access.
+List all users with access to a knowledge entry. Requires read access.
 
 ```json
-{ "resource_id": "<uuid>" }
+{ "entry_id": "<uuid>" }
 ```
 
 Returns `{ "sharing": [{ "user_id", "role", "granted_at" }] }`.
+
+---
+
+#### `knowledge_list_namespaces`
+
+List all namespaces the caller owns or has shared access to, with per-namespace entry counts.
+
+Returns `{ "namespaces": [{ "namespace", "owned_count", "shared_count" }] }`.
 
 ---
 
@@ -262,13 +311,13 @@ Returns `{ "sharing": [{ "user_id", "role", "granted_at" }] }`.
 
 | Operation | Minimum role |
 |---|---|
-| Read resource / list sharing | viewer |
-| Update resource | editor |
-| Delete resource | owner |
-| Share resource | owner |
+| Read entry / list access | viewer |
+| Update entry | editor |
+| Delete entry | owner |
+| Share entry | owner |
 | Revoke access | owner |
 
-Roles are stored as `HAS_ACCESS` relationships in Neo4j. The resource creator
+Roles are stored as `HAS_ACCESS` relationships in Neo4j. The entry creator
 automatically becomes the owner via an `OWNS` relationship.
 
 ---
@@ -315,7 +364,7 @@ Send an array of requests/notifications:
 | 404 | -32000 | `SESSION_NOT_FOUND` | Unknown or expired session |
 | 404 | -32001 | `SESSION_NAMESPACE_CONFLICT` | URL namespace ≠ session namespace |
 | 200 | -32002 | `PERMISSION_DENIED` | Insufficient role |
-| 200 | -32003 | `RESOURCE_NOT_FOUND` | Resource does not exist |
+| 200 | -32003 | `RESOURCE_NOT_FOUND` | Entry does not exist |
 | 500 | -32004 | `INTERNAL_ERROR` | Unexpected server error |
 
 ---

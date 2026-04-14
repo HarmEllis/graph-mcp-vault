@@ -169,29 +169,29 @@ function parseToolError(body: Record<string, unknown>): { code: number; message:
   return JSON.parse(content[0]!.text) as { code: number; message: string };
 }
 
-/** Creates a resource as `owner` and returns its id. */
-async function createResource(owner: string, ownerSid: string, title = 'Shared Resource'): Promise<string> {
+/** Creates an entry as `owner` and returns its id. */
+async function createEntry(owner: string, ownerSid: string, title = 'Shared Resource'): Promise<string> {
   const { body } = await callTool(
-    'create_resource',
-    { type: 'note', title, content: '' },
+    'knowledge_create_entry',
+    { entry_type: 'note', title, content: '' },
     owner,
     ownerSid,
   );
   return parseToolSuccess(body)['id'] as string;
 }
 
-// ── share_resource ────────────────────────────────────────────────────────────
+// ── knowledge_share_entry ─────────────────────────────────────────────────────
 
-describe('share_resource', () => {
-  it('owner can share a resource with another user', async () => {
+describe('knowledge_share_entry', () => {
+  it('owner can share an entry with another user', async () => {
     const owner = uid('share-owner');
     const target = uid('share-target');
     const ownerSid = await openSession(owner);
-    const id = await createResource(owner, ownerSid);
+    const id = await createEntry(owner, ownerSid);
 
     const { status, body } = await callTool(
-      'share_resource',
-      { resource_id: id, target_user_id: target, role: 'viewer' },
+      'knowledge_share_entry',
+      { entry_id: id, target_user_id: target, role: 'viewer' },
       owner,
       ownerSid,
     );
@@ -200,21 +200,21 @@ describe('share_resource', () => {
     expect(body['error']).toBeUndefined();
   });
 
-  it('shared user can then read the resource', async () => {
+  it('shared user can then read the entry', async () => {
     const owner = uid('share-read-owner');
     const viewer = uid('share-read-viewer');
     const ownerSid = await openSession(owner);
     const viewerSid = await openSession(viewer);
-    const id = await createResource(owner, ownerSid);
+    const id = await createEntry(owner, ownerSid);
 
     await callTool(
-      'share_resource',
-      { resource_id: id, target_user_id: viewer, role: 'viewer' },
+      'knowledge_share_entry',
+      { entry_id: id, target_user_id: viewer, role: 'viewer' },
       owner,
       ownerSid,
     );
 
-    const { body } = await callTool('get_resource', { resource_id: id }, viewer, viewerSid);
+    const { body } = await callTool('knowledge_get_entry', { entry_id: id }, viewer, viewerSid);
     const data = parseToolSuccess(body);
     expect(data['id']).toBe(id);
     expect(data['role']).toBe('viewer');
@@ -225,24 +225,24 @@ describe('share_resource', () => {
     const target = uid('share-idem-target');
     const ownerSid = await openSession(owner);
     const targetSid = await openSession(target);
-    const id = await createResource(owner, ownerSid);
+    const id = await createEntry(owner, ownerSid);
 
     // First share as viewer
     await callTool(
-      'share_resource',
-      { resource_id: id, target_user_id: target, role: 'viewer' },
+      'knowledge_share_entry',
+      { entry_id: id, target_user_id: target, role: 'viewer' },
       owner,
       ownerSid,
     );
     // Upgrade to editor
     await callTool(
-      'share_resource',
-      { resource_id: id, target_user_id: target, role: 'editor' },
+      'knowledge_share_entry',
+      { entry_id: id, target_user_id: target, role: 'editor' },
       owner,
       ownerSid,
     );
 
-    const { body } = await callTool('get_resource', { resource_id: id }, target, targetSid);
+    const { body } = await callTool('knowledge_get_entry', { entry_id: id }, target, targetSid);
     expect(parseToolSuccess(body)['role']).toBe('editor');
   });
 
@@ -250,17 +250,16 @@ describe('share_resource', () => {
     const owner = uid('share-stub-owner');
     const brand_new = `never-seen-user-${Date.now()}`;
     const ownerSid = await openSession(owner);
-    const id = await createResource(owner, ownerSid);
+    const id = await createEntry(owner, ownerSid);
 
     const { status } = await callTool(
-      'share_resource',
-      { resource_id: id, target_user_id: brand_new, role: 'viewer' },
+      'knowledge_share_entry',
+      { entry_id: id, target_user_id: brand_new, role: 'viewer' },
       owner,
       ownerSid,
     );
     expect(status).toBe(200);
 
-    // Confirm the role was granted via neo4jClient
     const role = await neo4jClient.getEffectiveRole(brand_new, id);
     expect(role).toBe('viewer');
   });
@@ -271,13 +270,13 @@ describe('share_resource', () => {
     const victim = uid('share-ed-victim');
     const ownerSid = await openSession(owner);
     const editorSid = await openSession(editor);
-    const id = await createResource(owner, ownerSid);
+    const id = await createEntry(owner, ownerSid);
 
     await neo4jClient.shareResource(id, editor, 'editor');
 
     const { body } = await callTool(
-      'share_resource',
-      { resource_id: id, target_user_id: victim, role: 'viewer' },
+      'knowledge_share_entry',
+      { entry_id: id, target_user_id: victim, role: 'viewer' },
       editor,
       editorSid,
     );
@@ -290,27 +289,27 @@ describe('share_resource', () => {
     const victim = uid('share-view-victim');
     const ownerSid = await openSession(owner);
     const viewerSid = await openSession(viewer);
-    const id = await createResource(owner, ownerSid);
+    const id = await createEntry(owner, ownerSid);
 
     await neo4jClient.shareResource(id, viewer, 'viewer');
 
     const { body } = await callTool(
-      'share_resource',
-      { resource_id: id, target_user_id: victim, role: 'viewer' },
+      'knowledge_share_entry',
+      { entry_id: id, target_user_id: victim, role: 'viewer' },
       viewer,
       viewerSid,
     );
     expect(parseToolError(body)['code']).toBe(ErrorCode.PERMISSION_DENIED);
   });
 
-  it('returns RESOURCE_NOT_FOUND for a non-existent resource', async () => {
+  it('returns RESOURCE_NOT_FOUND for a non-existent entry', async () => {
     const owner = uid('share-missing-owner');
     const target = uid('share-missing-target');
     const ownerSid = await openSession(owner);
 
     const { body } = await callTool(
-      'share_resource',
-      { resource_id: '00000000-0000-0000-0000-000000000000', target_user_id: target, role: 'viewer' },
+      'knowledge_share_entry',
+      { entry_id: '00000000-0000-0000-0000-000000000000', target_user_id: target, role: 'viewer' },
       owner,
       ownerSid,
     );
@@ -318,44 +317,44 @@ describe('share_resource', () => {
   });
 });
 
-// ── revoke_access ─────────────────────────────────────────────────────────────
+// ── knowledge_revoke_access ───────────────────────────────────────────────────
 
-describe('revoke_access', () => {
+describe('knowledge_revoke_access', () => {
   it('owner can revoke a shared user\'s access', async () => {
     const owner = uid('revoke-owner');
     const viewer = uid('revoke-viewer');
     const ownerSid = await openSession(owner);
     const viewerSid = await openSession(viewer);
-    const id = await createResource(owner, ownerSid);
+    const id = await createEntry(owner, ownerSid);
 
     await callTool(
-      'share_resource',
-      { resource_id: id, target_user_id: viewer, role: 'viewer' },
+      'knowledge_share_entry',
+      { entry_id: id, target_user_id: viewer, role: 'viewer' },
       owner,
       ownerSid,
     );
 
     const { status } = await callTool(
-      'revoke_access',
-      { resource_id: id, target_user_id: viewer },
+      'knowledge_revoke_access',
+      { entry_id: id, target_user_id: viewer },
       owner,
       ownerSid,
     );
     expect(status).toBe(200);
 
     // Viewer can no longer access
-    const { body } = await callTool('get_resource', { resource_id: id }, viewer, viewerSid);
+    const { body } = await callTool('knowledge_get_entry', { entry_id: id }, viewer, viewerSid);
     expect(parseToolError(body)['code']).toBe(ErrorCode.PERMISSION_DENIED);
   });
 
   it('revoke own access returns PERMISSION_DENIED with "Cannot revoke owner access"', async () => {
     const owner = uid('revoke-self-owner');
     const ownerSid = await openSession(owner);
-    const id = await createResource(owner, ownerSid);
+    const id = await createEntry(owner, ownerSid);
 
     const { body } = await callTool(
-      'revoke_access',
-      { resource_id: id, target_user_id: owner },
+      'knowledge_revoke_access',
+      { entry_id: id, target_user_id: owner },
       owner,
       ownerSid,
     );
@@ -371,28 +370,28 @@ describe('revoke_access', () => {
     const viewer = uid('revoke-ed-viewer');
     const ownerSid = await openSession(owner);
     const editorSid = await openSession(editor);
-    const id = await createResource(owner, ownerSid);
+    const id = await createEntry(owner, ownerSid);
 
     await neo4jClient.shareResource(id, editor, 'editor');
     await neo4jClient.shareResource(id, viewer, 'viewer');
 
     const { body } = await callTool(
-      'revoke_access',
-      { resource_id: id, target_user_id: viewer },
+      'knowledge_revoke_access',
+      { entry_id: id, target_user_id: viewer },
       editor,
       editorSid,
     );
     expect(parseToolError(body)['code']).toBe(ErrorCode.PERMISSION_DENIED);
   });
 
-  it('returns RESOURCE_NOT_FOUND for a non-existent resource', async () => {
+  it('returns RESOURCE_NOT_FOUND for a non-existent entry', async () => {
     const owner = uid('revoke-missing-owner');
     const target = uid('revoke-missing-target');
     const ownerSid = await openSession(owner);
 
     const { body } = await callTool(
-      'revoke_access',
-      { resource_id: '00000000-0000-0000-0000-000000000000', target_user_id: target },
+      'knowledge_revoke_access',
+      { entry_id: '00000000-0000-0000-0000-000000000000', target_user_id: target },
       owner,
       ownerSid,
     );
@@ -400,15 +399,15 @@ describe('revoke_access', () => {
   });
 });
 
-// ── list_sharing ──────────────────────────────────────────────────────────────
+// ── knowledge_list_access ─────────────────────────────────────────────────────
 
-describe('list_sharing', () => {
+describe('knowledge_list_access', () => {
   it('returns empty array when no users have been granted access', async () => {
     const owner = uid('list-empty-owner');
     const ownerSid = await openSession(owner);
-    const id = await createResource(owner, ownerSid);
+    const id = await createEntry(owner, ownerSid);
 
-    const { status, body } = await callTool('list_sharing', { resource_id: id }, owner, ownerSid);
+    const { status, body } = await callTool('knowledge_list_access', { entry_id: id }, owner, ownerSid);
 
     expect(status).toBe(200);
     expect(parseToolSuccess(body)['sharing']).toEqual([]);
@@ -419,22 +418,22 @@ describe('list_sharing', () => {
     const viewer = uid('list-entries-viewer');
     const editor = uid('list-entries-editor');
     const ownerSid = await openSession(owner);
-    const id = await createResource(owner, ownerSid);
+    const id = await createEntry(owner, ownerSid);
 
     await callTool(
-      'share_resource',
-      { resource_id: id, target_user_id: viewer, role: 'viewer' },
+      'knowledge_share_entry',
+      { entry_id: id, target_user_id: viewer, role: 'viewer' },
       owner,
       ownerSid,
     );
     await callTool(
-      'share_resource',
-      { resource_id: id, target_user_id: editor, role: 'editor' },
+      'knowledge_share_entry',
+      { entry_id: id, target_user_id: editor, role: 'editor' },
       owner,
       ownerSid,
     );
 
-    const { body } = await callTool('list_sharing', { resource_id: id }, owner, ownerSid);
+    const { body } = await callTool('knowledge_list_access', { entry_id: id }, owner, ownerSid);
     const sharing = parseToolSuccess(body)['sharing'] as Array<Record<string, unknown>>;
 
     expect(sharing).toHaveLength(2);
@@ -443,42 +442,42 @@ describe('list_sharing', () => {
     expect(sharing.every((s) => typeof s['granted_at'] === 'string')).toBe(true);
   });
 
-  it('a viewer can call list_sharing (requires only read)', async () => {
+  it('a viewer can call knowledge_list_access (requires only read)', async () => {
     const owner = uid('list-viewer-owner');
     const viewer = uid('list-viewer-viewer');
     const ownerSid = await openSession(owner);
     const viewerSid = await openSession(viewer);
-    const id = await createResource(owner, ownerSid);
+    const id = await createEntry(owner, ownerSid);
 
     await callTool(
-      'share_resource',
-      { resource_id: id, target_user_id: viewer, role: 'viewer' },
+      'knowledge_share_entry',
+      { entry_id: id, target_user_id: viewer, role: 'viewer' },
       owner,
       ownerSid,
     );
 
-    const { status } = await callTool('list_sharing', { resource_id: id }, viewer, viewerSid);
+    const { status } = await callTool('knowledge_list_access', { entry_id: id }, viewer, viewerSid);
     expect(status).toBe(200);
   });
 
-  it('user with no access cannot list_sharing — returns PERMISSION_DENIED', async () => {
+  it('user with no access cannot list_access — returns PERMISSION_DENIED', async () => {
     const owner = uid('list-denied-owner');
     const stranger = uid('list-denied-stranger');
     const ownerSid = await openSession(owner);
     const strangerSid = await openSession(stranger);
-    const id = await createResource(owner, ownerSid);
+    const id = await createEntry(owner, ownerSid);
 
-    const { body } = await callTool('list_sharing', { resource_id: id }, stranger, strangerSid);
+    const { body } = await callTool('knowledge_list_access', { entry_id: id }, stranger, strangerSid);
     expect(parseToolError(body)['code']).toBe(ErrorCode.PERMISSION_DENIED);
   });
 
-  it('returns RESOURCE_NOT_FOUND for a non-existent resource', async () => {
+  it('returns RESOURCE_NOT_FOUND for a non-existent entry', async () => {
     const owner = uid('list-missing-owner');
     const ownerSid = await openSession(owner);
 
     const { body } = await callTool(
-      'list_sharing',
-      { resource_id: '00000000-0000-0000-0000-000000000000' },
+      'knowledge_list_access',
+      { entry_id: '00000000-0000-0000-0000-000000000000' },
       owner,
       ownerSid,
     );
@@ -489,40 +488,40 @@ describe('list_sharing', () => {
 // ── Full sharing workflow ─────────────────────────────────────────────────────
 
 describe('full sharing workflow', () => {
-  it('share → list_sharing → access as viewer → revoke → access denied', async () => {
+  it('share → list_access → access as viewer → revoke → access denied', async () => {
     const owner = uid('workflow-owner');
     const viewer = uid('workflow-viewer');
     const ownerSid = await openSession(owner);
     const viewerSid = await openSession(viewer);
-    const id = await createResource(owner, ownerSid, 'Workflow Resource');
+    const id = await createEntry(owner, ownerSid, 'Workflow Resource');
 
     // share
     await callTool(
-      'share_resource',
-      { resource_id: id, target_user_id: viewer, role: 'viewer' },
+      'knowledge_share_entry',
+      { entry_id: id, target_user_id: viewer, role: 'viewer' },
       owner,
       ownerSid,
     );
 
-    // list_sharing shows the grant
-    const { body: lb } = await callTool('list_sharing', { resource_id: id }, owner, ownerSid);
+    // list_access shows the grant
+    const { body: lb } = await callTool('knowledge_list_access', { entry_id: id }, owner, ownerSid);
     const sharing = parseToolSuccess(lb)['sharing'] as Array<Record<string, unknown>>;
     expect(sharing.some((s) => s['user_id'] === viewer)).toBe(true);
 
     // viewer can read
-    const { body: gb } = await callTool('get_resource', { resource_id: id }, viewer, viewerSid);
+    const { body: gb } = await callTool('knowledge_get_entry', { entry_id: id }, viewer, viewerSid);
     expect(parseToolSuccess(gb)['role']).toBe('viewer');
 
     // revoke
     await callTool(
-      'revoke_access',
-      { resource_id: id, target_user_id: viewer },
+      'knowledge_revoke_access',
+      { entry_id: id, target_user_id: viewer },
       owner,
       ownerSid,
     );
 
     // viewer access denied
-    const { body: gb2 } = await callTool('get_resource', { resource_id: id }, viewer, viewerSid);
+    const { body: gb2 } = await callTool('knowledge_get_entry', { entry_id: id }, viewer, viewerSid);
     expect(parseToolError(gb2)['code']).toBe(ErrorCode.PERMISSION_DENIED);
   });
 });

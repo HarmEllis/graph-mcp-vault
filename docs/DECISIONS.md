@@ -368,3 +368,53 @@ SKIP $skip LIMIT $limit
 - Removes the need to manually provision an external OIDC provider for local testing.
 - Keeps production architecture unchanged (proxy remains provider-agnostic and bearer-token-only).
 - Enables quick smoke tests for JWT validation and MCP calls directly after `docker compose up -d`.
+
+---
+
+## D-024 — Fuzzy search edit-distance policy
+
+**Date**: 2026-04-14
+**Status**: Accepted
+
+**Decision**: Per-token fuzzy suffix policy for the `fuzzy` search mode:
+
+| Token length (original) | Lucene suffix | Edit distance |
+|-------------------------|---------------|---------------|
+| < 3 chars               | none          | exact match   |
+| 3–5 chars               | `~1`          | 1 edit        |
+| > 5 chars               | `~2`          | 2 edits       |
+
+Boolean operators (`AND`, `OR`, `NOT`) are stripped before applying the policy. If all tokens are stripped, the query short-circuits and returns an empty result set without hitting the Lucene index.
+
+**Rationale**:
+- Very short tokens (1–2 chars) produce noisy results with fuzzy matching; exact match is better.
+- Medium tokens (3–5 chars) tolerate one typo (e.g., transposed characters).
+- Longer tokens tolerate two edits, covering common spelling mistakes.
+- Removing `AND`/`OR`/`NOT` prevents accidental Lucene boolean operators from narrowing/widening results unexpectedly.
+- Short-circuiting on an empty token set avoids a vacuous Lucene query that would return all indexed documents.
+
+**Rejected alternative**: uniform `~2` on all tokens — produces too many false positives for short tokens.
+
+---
+
+## D-025 — Version-gated schema migration policy
+
+**Date**: 2026-04-14
+**Status**: Accepted
+
+**Decision**: Track schema state with a single `SchemaInfo` node in Neo4j (`s.version`). On startup, `initSchema` reads the version, runs any pending migration steps sequentially, then bumps the version. Subsequent restarts skip already-applied migrations.
+
+Current schema version: **2**.
+
+Migration v2 changes:
+1. Rename the `type` property to `entry_type` on all `Resource` nodes.
+2. Drop the `resource_type` index (was on `r.type`) and recreate as `resource_entry_type` on `r.entry_type`.
+3. Drop the `resource_text` fulltext index and rebuild with `title`, `content`, `summary`, `topic`, `tags`.
+
+**Rationale**:
+- Keeps startup idempotent: calling `initSchema` multiple times is safe.
+- A single version counter is simpler than per-migration flags and covers the sequential nature of schema evolution.
+- `IF NOT EXISTS` / `IF EXISTS` guards on index statements prevent errors on partial runs or concurrent restarts.
+- Running migration on an empty database is a no-op (no `Resource` nodes to rename, no old indexes to drop) — safe for fresh installs.
+
+**Rejected alternative**: always drop and recreate all indexes on startup — too slow for production databases with large datasets.

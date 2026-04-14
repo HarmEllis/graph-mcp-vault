@@ -534,7 +534,7 @@ describe('tools/list', () => {
     expect(Array.isArray(body.result.tools)).toBe(true);
   });
 
-  it('includes list_namespaces in the tool list', async () => {
+  it('includes knowledge_list_namespaces in the tool list', async () => {
     stubJwks();
     const token = await makeToken();
 
@@ -558,7 +558,7 @@ describe('tools/list', () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     const toolNames = (body.result.tools as Array<{ name: string }>).map((t) => t.name);
-    expect(toolNames).toContain('list_namespaces');
+    expect(toolNames).toContain('knowledge_list_namespaces');
   });
 });
 

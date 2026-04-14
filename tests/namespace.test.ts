@@ -225,13 +225,13 @@ describe('namespace resolution', () => {
 // ── Namespace isolation ───────────────────────────────────────────────────────
 
 describe('namespace isolation', () => {
-  it('create_resource uses the session namespace when no arg namespace is given', async () => {
+  it('knowledge_create_entry uses the session namespace when no arg namespace is given', async () => {
     const sub = uid('create-ns-default');
     const sid = await openSession(sub, { metaNamespace: 'iso-ns-a' });
 
     const { body } = await callTool(
-      'create_resource',
-      { type: 'note', title: 'In A', content: '' },
+      'knowledge_create_entry',
+      { entry_type: 'note', title: 'In A', content: '' },
       sub,
       sid,
     );
@@ -240,35 +240,35 @@ describe('namespace isolation', () => {
     expect(resource?.namespace).toBe('iso-ns-a');
   });
 
-  it('list_resources defaults to session namespace — resources from another namespace are not returned', async () => {
+  it('knowledge_list_entries defaults to session namespace — resources from another namespace are not returned', async () => {
     const sub = uid('iso-list');
 
     // Create a resource in ns-a
     const sidA = await openSession(sub, { metaNamespace: 'iso-list-ns-a' });
     const { body: cb } = await callTool(
-      'create_resource',
-      { type: 'note', title: 'Only In A', content: '' },
+      'knowledge_create_entry',
+      { entry_type: 'note', title: 'Only In A', content: '' },
       sub,
       sidA,
     );
     const idInA = parseToolSuccess(cb)['id'] as string;
 
-    // Open a session in ns-b and list resources (no namespace arg → defaults to ns-b)
+    // Open a session in ns-b and list entries (no namespace arg → defaults to ns-b)
     const sidB = await openSession(sub, { metaNamespace: 'iso-list-ns-b' });
-    const { body: lb } = await callTool('list_resources', {}, sub, sidB);
+    const { body: lb } = await callTool('knowledge_list_entries', {}, sub, sidB);
     const resources = parseToolSuccess(lb)['resources'] as Array<Record<string, unknown>>;
 
     expect(resources.every((r) => r['namespace'] === 'iso-list-ns-b')).toBe(true);
     expect(resources.some((r) => r['id'] === idInA)).toBe(false);
   });
 
-  it('list_resources with explicit namespace arg can cross namespaces', async () => {
+  it('knowledge_list_entries with explicit namespace arg can cross namespaces', async () => {
     const sub = uid('iso-cross');
 
     const sidA = await openSession(sub, { metaNamespace: 'iso-cross-ns-a' });
     const { body: cb } = await callTool(
-      'create_resource',
-      { type: 'note', title: 'Cross NS', content: '' },
+      'knowledge_create_entry',
+      { entry_type: 'note', title: 'Cross NS', content: '' },
       sub,
       sidA,
     );
@@ -277,7 +277,7 @@ describe('namespace isolation', () => {
     // list from a ns-b session but explicitly request ns-a
     const sidB = await openSession(sub, { metaNamespace: 'iso-cross-ns-b' });
     const { body: lb } = await callTool(
-      'list_resources',
+      'knowledge_list_entries',
       { namespace: 'iso-cross-ns-a' },
       sub,
       sidB,
@@ -287,24 +287,24 @@ describe('namespace isolation', () => {
     expect(resources.some((r) => r['id'] === idInA)).toBe(true);
   });
 
-  it('URL-path namespace session scopes list_resources to that namespace', async () => {
+  it('URL-path namespace session scopes knowledge_list_entries to that namespace', async () => {
     const sub = uid('url-iso');
 
     const sid = await openSession(sub, { urlPath: '/mcp/url-iso-ns' });
-    await callTool('create_resource', { type: 'note', title: 'URL NS Resource', content: '' }, sub, sid);
+    await callTool('knowledge_create_entry', { entry_type: 'note', title: 'URL NS Resource', content: '' }, sub, sid);
 
     // List without namespace arg → should only return resources in url-iso-ns
-    const { body } = await callTool('list_resources', {}, sub, sid);
+    const { body } = await callTool('knowledge_list_entries', {}, sub, sid);
     const resources = parseToolSuccess(body)['resources'] as Array<Record<string, unknown>>;
     expect(resources.every((r) => r['namespace'] === 'url-iso-ns')).toBe(true);
   });
 
-  it('DEFAULT_NAMESPACE session scopes list_resources to the default namespace', async () => {
+  it('DEFAULT_NAMESPACE session scopes knowledge_list_entries to the default namespace', async () => {
     const sub = uid('default-iso');
     const sid = await openSession(sub); // no namespace → uses 'test-default'
-    await callTool('create_resource', { type: 'note', title: 'Default NS Resource', content: '' }, sub, sid);
+    await callTool('knowledge_create_entry', { entry_type: 'note', title: 'Default NS Resource', content: '' }, sub, sid);
 
-    const { body } = await callTool('list_resources', {}, sub, sid);
+    const { body } = await callTool('knowledge_list_entries', {}, sub, sid);
     const resources = parseToolSuccess(body)['resources'] as Array<Record<string, unknown>>;
     expect(resources.every((r) => r['namespace'] === BASE_CONFIG.defaultNamespace)).toBe(true);
   });
@@ -340,7 +340,7 @@ describe('SESSION_NAMESPACE_CONFLICT', () => {
     const sid = await openSession(sub, { urlPath: '/mcp/tool-ns-x' });
 
     const { status, body } = await callTool(
-      'list_resources',
+      'knowledge_list_entries',
       {},
       sub,
       sid,

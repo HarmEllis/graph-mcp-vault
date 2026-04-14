@@ -33,29 +33,33 @@ Before starting, confirm all of the following:
 List all available tools from the graph-mcp-vault MCP server.
 ```
 
-**Expected result**: the LLM lists all six tools:
-- `create_resource`
-- `get_resource`
-- `list_resources`
-- `search_resources`
-- `update_resource`
-- `delete_resource`
+**Expected result**: the LLM lists all ten knowledge tools:
+- `knowledge_create_entry`
+- `knowledge_get_entry`
+- `knowledge_list_entries`
+- `knowledge_search_entries`
+- `knowledge_update_entry`
+- `knowledge_delete_entry`
+- `knowledge_share_entry`
+- `knowledge_revoke_access`
+- `knowledge_list_access`
+- `knowledge_list_namespaces`
 
-**Pass criteria**: all six tool names appear in the response.
+**Pass criteria**: all ten tool names appear in the response.
 **Fail criteria**: fewer tools listed, error message, or no response.
 
 ---
 
 ## Step 2 — Create / Save
 
-**Goal**: confirm resource creation works and returns an ID.
+**Goal**: confirm knowledge entry creation works and returns an ID.
 
 **Prompt to LLM**:
 ```
-Create a resource with type "note", title "Smoke Test Note", and content "This is a smoke test created at <current date/time>".
+Save a new knowledge entry with entry_type "note", title "Smoke Test Note", and content "This is a smoke test created at <current date/time>".
 ```
 
-**Expected result**: the LLM calls `create_resource` and reports back an ID (UUID format) and `created_at` timestamp.
+**Expected result**: the LLM calls `knowledge_create_entry` and reports back an ID (UUID format) and `created_at` timestamp.
 
 **Pass criteria**: response contains a UUID `id` and an ISO-8601 `created_at` string.
 **Fail criteria**: error returned, no ID, or tool call not attempted.
@@ -66,14 +70,14 @@ Create a resource with type "note", title "Smoke Test Note", and content "This i
 
 ## Step 3 — Retrieve (Same Session)
 
-**Goal**: confirm the resource can be retrieved immediately within the same session.
+**Goal**: confirm the entry can be retrieved immediately within the same session.
 
 **Prompt to LLM** (replace `<id>` with the ID from Step 2):
 ```
-Retrieve the resource with id "<id>".
+Retrieve the knowledge entry with id "<id>".
 ```
 
-**Expected result**: the LLM calls `get_resource` and shows the resource with:
+**Expected result**: the LLM calls `knowledge_get_entry` and shows the entry with:
 - `title` = `"Smoke Test Note"`
 - `role` = `"owner"`
 
@@ -90,26 +94,26 @@ Retrieve the resource with id "<id>".
 
 **Prompt to LLM**:
 ```
-Retrieve the resource with id "<id>".
+Retrieve the knowledge entry with id "<id>".
 ```
 
 **Expected result**: same result as Step 3.
 
-**Pass criteria**: resource returned with correct title and `role: owner`.
+**Pass criteria**: entry returned with correct title and `role: owner`.
 **Fail criteria**: "not found" or session error.
 
 ---
 
 ## Step 4 — Full-Text Search
 
-**Goal**: confirm `search_resources` returns the created resource.
+**Goal**: confirm `knowledge_search_entries` returns the created entry.
 
 **Prompt to LLM**:
 ```
-Search for resources matching "smoke test".
+Search the knowledge memory bank for entries matching "smoke test".
 ```
 
-**Expected result**: the LLM calls `search_resources` and the result includes the note from Step 2.
+**Expected result**: the LLM calls `knowledge_search_entries` and the result includes the note from Step 2.
 
 **Pass criteria**: `"Smoke Test Note"` appears in the results.
 **Fail criteria**: empty results, error, or the note is absent.
@@ -122,14 +126,14 @@ Search for resources matching "smoke test".
 
 **Prompt to LLM**:
 ```
-Update the resource "<id>" — change the title to "Smoke Test Note v2".
+Update the knowledge entry "<id>" — change the title to "Smoke Test Note v2".
 ```
 
-**Expected result**: the LLM calls `update_resource` and confirms success.
+**Expected result**: the LLM calls `knowledge_update_entry` and confirms success.
 
 **Follow-up prompt**:
 ```
-Retrieve the resource "<id>" again.
+Retrieve the knowledge entry "<id>" again.
 ```
 
 **Expected result**: `title` is now `"Smoke Test Note v2"` and `updated_at` differs from `created_at`.
@@ -141,7 +145,7 @@ Retrieve the resource "<id>" again.
 
 ## Step 6 — Namespace Isolation
 
-**Goal**: confirm resources created in one namespace are not visible in another.
+**Goal**: confirm entries created in one namespace are not visible in another.
 
 **Setup**: configure two separate MCP tool entries pointing to different namespace URLs:
 - `https://graph-mcp-vault.your-domain.com/mcp/ns-a`
@@ -149,18 +153,18 @@ Retrieve the resource "<id>" again.
 
 **Step 6a** — in a session connected to `ns-a`:
 ```
-Create a resource with type "note", title "Namespace A Secret", content "only in A".
+Save a knowledge entry with entry_type "note", title "Namespace A Secret", content "only in A".
 ```
 Record the returned ID.
 
 **Step 6b** — in a session connected to `ns-b`:
 ```
-List all resources.
+List all knowledge entries.
 ```
 
-**Expected result**: the `"Namespace A Secret"` resource does **not** appear.
+**Expected result**: the `"Namespace A Secret"` entry does **not** appear.
 
-**Pass criteria**: response shows an empty list (or resources belonging to `ns-b` only), with no mention of `"Namespace A Secret"`.
+**Pass criteria**: response shows an empty list (or entries belonging to `ns-b` only), with no mention of `"Namespace A Secret"`.
 **Fail criteria**: `"Namespace A Secret"` appears in `ns-b` results.
 
 ---
@@ -171,21 +175,21 @@ List all resources.
 
 **Setup**: use two separate authenticated users (user A creates, user B tries to access).
 
-**Step**: as user A, create a resource and record its ID.
+**Step**: as user A, create an entry and record its ID.
 **Step**: as user B, prompt:
 ```
-Retrieve the resource with id "<id from user A>".
+Retrieve the knowledge entry with id "<id from user A>".
 ```
 
 **Expected result**: `PERMISSION_DENIED` error.
 **Pass criteria**: error message contains "Permission denied" or error code `-32002`.
-**Fail criteria**: resource data returned to user B.
+**Fail criteria**: entry data returned to user B.
 
-### 7b — Resource not found
+### 7b — Entry not found
 
 **Prompt to LLM**:
 ```
-Retrieve the resource with id "00000000-0000-0000-0000-000000000000".
+Retrieve the knowledge entry with id "00000000-0000-0000-0000-000000000000".
 ```
 
 **Expected result**: `RESOURCE_NOT_FOUND` error.
@@ -196,7 +200,7 @@ Retrieve the resource with id "00000000-0000-0000-0000-000000000000".
 
 **Prompt to LLM**:
 ```
-Search for resources but do not provide a query.
+Search the knowledge memory bank but do not provide a query.
 ```
 
 **Expected result**: `INVALID_PARAMS` error.
@@ -225,7 +229,7 @@ docker compose logs graph-mcp-vault --since 5m | head -50
 | All log lines | `timestamp` | ISO-8601 string |
 | All log lines | `level` | one of `trace`, `debug`, `info`, `warn`, `error` |
 
-**Confirm absent**: no `Authorization` header values, no JWT token strings, no resource `content` field in logs.
+**Confirm absent**: no `Authorization` header values, no JWT token strings, no entry `content` field in logs.
 
 **Pass criteria**: log lines are valid JSON; expected events appear; no secrets visible.
 **Fail criteria**: plain-text logs, missing events, or secrets in output.
@@ -234,11 +238,11 @@ docker compose logs graph-mcp-vault --since 5m | head -50
 
 ## Cleanup
 
-After passing all steps, delete the test resource:
+After passing all steps, delete the test entry:
 
 **Prompt to LLM**:
 ```
-Delete the resource with id "<id from Step 2>".
+Delete the knowledge entry with id "<id from Step 2>".
 ```
 
 **Expected result**: success, no error.
@@ -250,14 +254,14 @@ Delete the resource with id "<id from Step 2>".
 | Step | What it tests | Pass? |
 |------|--------------|-------|
 | 1 | Tool discovery | ☐ |
-| 2 | Create resource | ☐ |
+| 2 | Create entry | ☐ |
 | 3 | Retrieve same session | ☐ |
 | 3b | Retrieve new session | ☐ |
 | 4 | Full-text search | ☐ |
 | 5 | Update + re-read | ☐ |
 | 6 | Namespace isolation | ☐ |
 | 7a | Permission denied | ☐ |
-| 7b | Resource not found | ☐ |
+| 7b | Entry not found | ☐ |
 | 7c | Invalid params | ☐ |
 | 8 | Logging | ☐ |
-| Cleanup | Delete resource | ☐ |
+| Cleanup | Delete entry | ☐ |

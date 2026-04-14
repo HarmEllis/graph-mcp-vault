@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { Neo4jClient } from '../neo4j-client.js';
+import type { MatchMode, Neo4jClient } from '../neo4j-client.js';
 import { ErrorCode } from '../errors.js';
 import { ToolError, type RegisteredTool, type ToolContext } from './registry.js';
 
@@ -19,33 +19,45 @@ function hasPermission(
 }
 
 /**
- * Resolves the caller's effective role on a resource, throwing the appropriate
- * ToolError if the resource is absent or the permission is insufficient.
+ * Resolves the caller's effective role on an entry, throwing the appropriate
+ * ToolError if the entry is absent or the permission is insufficient.
  */
 async function requirePermission(
   neo4jClient: Neo4jClient,
   userId: string,
-  resourceId: string,
+  entryId: string,
   permission: Permission,
 ): Promise<'owner' | 'editor' | 'viewer'> {
-  const resource = await neo4jClient.getResource(resourceId);
+  const resource = await neo4jClient.getResource(entryId);
   if (!resource) throw new ToolError(ErrorCode.RESOURCE_NOT_FOUND, 'Resource not found');
 
-  const role = await neo4jClient.getEffectiveRole(userId, resourceId);
+  const role = await neo4jClient.getEffectiveRole(userId, entryId);
   if (role === null || !hasPermission(role, permission)) {
     throw new ToolError(ErrorCode.PERMISSION_DENIED, 'Permission denied');
   }
   return role;
 }
 
-// ── create_resource ───────────────────────────────────────────────────────────
+// ── Shared metadata schema ────────────────────────────────────────────────────
 
-const createSchema = z.object({
-  type: z.string().min(1),
-  title: z.string().min(1),
-  content: z.string(),
-  namespace: z.string().optional(),
+const metadataSchema = z.object({
+  topic: z.string().optional(),
+  tags: z.array(z.string().min(1).max(100)).max(50).optional(),
+  summary: z.string().optional(),
+  source: z.string().max(2048).optional(),
+  last_verified_at: z.string().datetime().optional(),
 });
+
+// ── knowledge_create_entry ────────────────────────────────────────────────────
+
+const createSchema = z
+  .object({
+    entry_type: z.string().min(1),
+    title: z.string().min(1),
+    content: z.string(),
+    namespace: z.string().optional(),
+  })
+  .merge(metadataSchema);
 
 async function handleCreate(
   args: Record<string, unknown>,
@@ -56,19 +68,25 @@ async function handleCreate(
   if (!parsed.success) {
     throw new ToolError(ErrorCode.INVALID_PARAMS, `Invalid params: ${parsed.error.message}`);
   }
-  const { type, title, content, namespace } = parsed.data;
+  const { entry_type, title, content, namespace, topic, tags, summary, source, last_verified_at } =
+    parsed.data;
   return neo4jClient.createResource({
     userId: ctx.userId,
     namespace: namespace ?? ctx.namespace,
-    type,
+    entry_type,
     title,
     content,
+    ...(topic !== undefined && { topic }),
+    ...(tags !== undefined && { tags }),
+    ...(summary !== undefined && { summary }),
+    ...(source !== undefined && { source }),
+    ...(last_verified_at !== undefined && { last_verified_at }),
   });
 }
 
-// ── get_resource ──────────────────────────────────────────────────────────────
+// ── knowledge_get_entry ───────────────────────────────────────────────────────
 
-const getSchema = z.object({ resource_id: z.string().min(1) });
+const getSchema = z.object({ entry_id: z.string().min(1) });
 
 async function handleGet(
   args: Record<string, unknown>,
@@ -79,22 +97,22 @@ async function handleGet(
   if (!parsed.success) {
     throw new ToolError(ErrorCode.INVALID_PARAMS, `Invalid params: ${parsed.error.message}`);
   }
-  const { resource_id } = parsed.data;
+  const { entry_id } = parsed.data;
 
-  const resource = await neo4jClient.getResource(resource_id);
+  const resource = await neo4jClient.getResource(entry_id);
   if (!resource) throw new ToolError(ErrorCode.RESOURCE_NOT_FOUND, 'Resource not found');
 
-  const role = await neo4jClient.getEffectiveRole(ctx.userId, resource_id);
+  const role = await neo4jClient.getEffectiveRole(ctx.userId, entry_id);
   if (role === null) throw new ToolError(ErrorCode.PERMISSION_DENIED, 'Permission denied');
 
   return { ...resource, role };
 }
 
-// ── list_resources ────────────────────────────────────────────────────────────
+// ── knowledge_list_entries ────────────────────────────────────────────────────
 
 const listSchema = z.object({
   namespace: z.string().optional(),
-  type: z.string().optional(),
+  entry_type: z.string().optional(),
   limit: z.number().int().positive().optional(),
   skip: z.number().int().min(0).optional(),
 });
@@ -111,20 +129,22 @@ async function handleList(
   const resources = await neo4jClient.listResources({
     userId: ctx.userId,
     namespace: parsed.data.namespace ?? ctx.namespace,
-    ...(parsed.data.type !== undefined && { type: parsed.data.type }),
+    ...(parsed.data.entry_type !== undefined && { entry_type: parsed.data.entry_type }),
     ...(parsed.data.limit !== undefined && { limit: parsed.data.limit }),
     ...(parsed.data.skip !== undefined && { skip: parsed.data.skip }),
   });
   return { resources };
 }
 
-// ── update_resource ───────────────────────────────────────────────────────────
+// ── knowledge_update_entry ────────────────────────────────────────────────────
 
-const updateSchema = z.object({
-  resource_id: z.string().min(1),
-  title: z.string().min(1).optional(),
-  content: z.string().optional(),
-});
+const updateSchema = z
+  .object({
+    entry_id: z.string().min(1),
+    title: z.string().min(1).optional(),
+    content: z.string().optional(),
+  })
+  .merge(metadataSchema);
 
 async function handleUpdate(
   args: Record<string, unknown>,
@@ -135,19 +155,24 @@ async function handleUpdate(
   if (!parsed.success) {
     throw new ToolError(ErrorCode.INVALID_PARAMS, `Invalid params: ${parsed.error.message}`);
   }
-  const { resource_id, title, content } = parsed.data;
+  const { entry_id, title, content, topic, tags, summary, source, last_verified_at } = parsed.data;
 
-  await requirePermission(neo4jClient, ctx.userId, resource_id, 'write');
-  await neo4jClient.updateResource(resource_id, {
+  await requirePermission(neo4jClient, ctx.userId, entry_id, 'write');
+  await neo4jClient.updateResource(entry_id, {
     ...(title !== undefined && { title }),
     ...(content !== undefined && { content }),
+    ...(topic !== undefined && { topic }),
+    ...(tags !== undefined && { tags }),
+    ...(summary !== undefined && { summary }),
+    ...(source !== undefined && { source }),
+    ...(last_verified_at !== undefined && { last_verified_at }),
   });
   return {};
 }
 
-// ── delete_resource ───────────────────────────────────────────────────────────
+// ── knowledge_delete_entry ────────────────────────────────────────────────────
 
-const deleteSchema = z.object({ resource_id: z.string().min(1) });
+const deleteSchema = z.object({ entry_id: z.string().min(1) });
 
 async function handleDelete(
   args: Record<string, unknown>,
@@ -158,21 +183,22 @@ async function handleDelete(
   if (!parsed.success) {
     throw new ToolError(ErrorCode.INVALID_PARAMS, `Invalid params: ${parsed.error.message}`);
   }
-  const { resource_id } = parsed.data;
+  const { entry_id } = parsed.data;
 
-  await requirePermission(neo4jClient, ctx.userId, resource_id, 'delete');
-  await neo4jClient.deleteResource(resource_id);
+  await requirePermission(neo4jClient, ctx.userId, entry_id, 'delete');
+  await neo4jClient.deleteResource(entry_id);
   return {};
 }
 
-// ── search_resources ──────────────────────────────────────────────────────────
+// ── knowledge_search_entries ──────────────────────────────────────────────────
 
 const searchSchema = z.object({
   query: z.string().min(1),
   namespace: z.string().optional(),
-  type: z.string().optional(),
+  entry_type: z.string().optional(),
   limit: z.number().int().positive().optional(),
   skip: z.number().int().min(0).optional(),
+  match_mode: z.enum(['exact', 'fulltext', 'fuzzy']).optional(),
 });
 
 async function handleSearch(
@@ -188,14 +214,17 @@ async function handleSearch(
     userId: ctx.userId,
     query: parsed.data.query,
     namespace: parsed.data.namespace ?? ctx.namespace,
-    ...(parsed.data.type !== undefined && { type: parsed.data.type }),
+    ...(parsed.data.entry_type !== undefined && { entry_type: parsed.data.entry_type }),
     ...(parsed.data.limit !== undefined && { limit: parsed.data.limit }),
     ...(parsed.data.skip !== undefined && { skip: parsed.data.skip }),
+    ...(parsed.data.match_mode !== undefined && {
+      match_mode: parsed.data.match_mode as MatchMode,
+    }),
   });
   return { resources };
 }
 
-// ── list_namespaces ───────────────────────────────────────────────────────────
+// ── knowledge_list_namespaces ─────────────────────────────────────────────────
 
 async function handleListNamespaces(
   _args: Record<string, unknown>,
@@ -216,50 +245,77 @@ async function handleListNamespaces(
 // ── Factory ───────────────────────────────────────────────────────────────────
 
 /**
- * Returns the seven resource tool registrations, each closing over `neo4jClient`.
+ * Returns the seven knowledge entry tool registrations, each closing over `neo4jClient`.
  */
 export function createResourceTools(neo4jClient: Neo4jClient): RegisteredTool[] {
   return [
     {
       descriptor: {
-        name: 'create_resource',
-        description: 'Create a new resource owned by the caller.',
+        name: 'knowledge_create_entry',
+        description:
+          'Save a new knowledge entry to the memory bank. Use this to store notes, decisions, facts, documentation snippets, or any information that should be remembered. Always retrieve before creating to avoid duplicates.',
         inputSchema: {
           type: 'object',
           properties: {
-            type: { type: 'string', description: 'Resource type (e.g. note, task)' },
-            title: { type: 'string', description: 'Resource title' },
-            content: { type: 'string', description: 'Resource content' },
+            entry_type: {
+              type: 'string',
+              description: 'Entry type (e.g. note, decision, fact, reference)',
+            },
+            title: { type: 'string', description: 'Short descriptive title' },
+            content: { type: 'string', description: 'Full text of the knowledge entry' },
             namespace: { type: 'string', description: 'Namespace override (optional)' },
+            topic: { type: 'string', description: 'Broad subject area (optional)' },
+            tags: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Keyword tags for filtering and search (optional, max 50)',
+            },
+            summary: {
+              type: 'string',
+              description: 'One-sentence summary for quick scanning (optional)',
+            },
+            source: {
+              type: 'string',
+              description: 'Origin URL or citation (optional, max 2048 chars)',
+            },
+            last_verified_at: {
+              type: 'string',
+              description: 'ISO 8601 datetime when this entry was last verified (optional)',
+            },
           },
-          required: ['type', 'title', 'content'],
+          required: ['entry_type', 'title', 'content'],
         },
       },
       handler: (args, ctx) => handleCreate(args, ctx, neo4jClient),
     },
     {
       descriptor: {
-        name: 'get_resource',
-        description: 'Retrieve a resource by id. Requires read access.',
+        name: 'knowledge_get_entry',
+        description:
+          'Retrieve a specific knowledge entry by its ID. Use this to read a known entry in full. Requires at least read access.',
         inputSchema: {
           type: 'object',
-          properties: { resource_id: { type: 'string' } },
-          required: ['resource_id'],
+          properties: { entry_id: { type: 'string', description: 'UUID of the entry' } },
+          required: ['entry_id'],
         },
       },
       handler: (args, ctx) => handleGet(args, ctx, neo4jClient),
     },
     {
       descriptor: {
-        name: 'list_resources',
-        description: 'List all resources the caller can read.',
+        name: 'knowledge_list_entries',
+        description:
+          'List all knowledge entries the caller can read (owned and shared) in a namespace. Use this to browse the memory bank or discover what has been stored.',
         inputSchema: {
           type: 'object',
           properties: {
-            namespace: { type: 'string' },
-            type: { type: 'string' },
-            limit: { type: 'number' },
-            skip: { type: 'number' },
+            namespace: {
+              type: 'string',
+              description: 'Namespace to list (defaults to session namespace)',
+            },
+            entry_type: { type: 'string', description: 'Filter by entry type' },
+            limit: { type: 'number', description: 'Max results (default 50)' },
+            skip: { type: 'number', description: 'Pagination offset (default 0)' },
           },
           required: [],
         },
@@ -268,44 +324,61 @@ export function createResourceTools(neo4jClient: Neo4jClient): RegisteredTool[] 
     },
     {
       descriptor: {
-        name: 'update_resource',
-        description: 'Update a resource title and/or content. Requires write access.',
+        name: 'knowledge_update_entry',
+        description:
+          'Update the title, content, or metadata of a knowledge entry. Requires editor or owner role. Retrieve the entry first to see its current state.',
         inputSchema: {
           type: 'object',
           properties: {
-            resource_id: { type: 'string' },
+            entry_id: { type: 'string', description: 'UUID of the entry to update' },
             title: { type: 'string' },
             content: { type: 'string' },
+            topic: { type: 'string' },
+            tags: { type: 'array', items: { type: 'string' } },
+            summary: { type: 'string' },
+            source: { type: 'string' },
+            last_verified_at: { type: 'string' },
           },
-          required: ['resource_id'],
+          required: ['entry_id'],
         },
       },
       handler: (args, ctx) => handleUpdate(args, ctx, neo4jClient),
     },
     {
       descriptor: {
-        name: 'delete_resource',
-        description: 'Delete a resource and all its relationships. Owner only.',
+        name: 'knowledge_delete_entry',
+        description:
+          'Permanently delete a knowledge entry and all its access grants. Owner only. This action is irreversible.',
         inputSchema: {
           type: 'object',
-          properties: { resource_id: { type: 'string' } },
-          required: ['resource_id'],
+          properties: { entry_id: { type: 'string' } },
+          required: ['entry_id'],
         },
       },
       handler: (args, ctx) => handleDelete(args, ctx, neo4jClient),
     },
     {
       descriptor: {
-        name: 'search_resources',
-        description: 'Full-text search over resource titles and content. Only returns resources the caller can read.',
+        name: 'knowledge_search_entries',
+        description:
+          'Search the knowledge memory bank by keyword. Always call this before creating new entries to avoid duplicates. Only returns entries the caller can read.',
         inputSchema: {
           type: 'object',
           properties: {
-            query: { type: 'string', description: 'Search keywords' },
-            namespace: { type: 'string', description: 'Namespace to search in (defaults to session namespace)' },
-            type: { type: 'string', description: 'Filter by resource type' },
+            query: { type: 'string', description: 'Search keywords or phrase' },
+            namespace: {
+              type: 'string',
+              description: 'Namespace to search in (defaults to session namespace)',
+            },
+            entry_type: { type: 'string', description: 'Filter by entry type' },
             limit: { type: 'number', description: 'Max results (default 20)' },
             skip: { type: 'number', description: 'Pagination offset (default 0)' },
+            match_mode: {
+              type: 'string',
+              enum: ['exact', 'fulltext', 'fuzzy'],
+              description:
+                'Search mode: "fuzzy" (default, tolerates typos), "fulltext" (exact keyword match), or "exact" (phrase match)',
+            },
           },
           required: ['query'],
         },
@@ -314,8 +387,9 @@ export function createResourceTools(neo4jClient: Neo4jClient): RegisteredTool[] 
     },
     {
       descriptor: {
-        name: 'list_namespaces',
-        description: 'List all namespaces the caller owns or has shared access to, with per-namespace resource counts.',
+        name: 'knowledge_list_namespaces',
+        description:
+          'List all namespaces the caller owns or has shared access to, with per-namespace entry counts.',
         inputSchema: {
           type: 'object',
           properties: {},
