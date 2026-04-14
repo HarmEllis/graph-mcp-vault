@@ -404,12 +404,15 @@ Boolean operators (`AND`, `OR`, `NOT`) are stripped before applying the policy. 
 
 **Decision**: Track schema state with a single `SchemaInfo` node in Neo4j (`s.version`). On startup, `initSchema` reads the version, runs any pending migration steps sequentially, then bumps the version. Subsequent restarts skip already-applied migrations.
 
-Current schema version: **2**.
+Current schema version: **3**.
 
 Migration v2 changes:
 1. Rename the `type` property to `entry_type` on all `Resource` nodes.
 2. Drop the `resource_type` index (was on `r.type`) and recreate as `resource_entry_type` on `r.entry_type`.
 3. Drop the `resource_text` fulltext index and rebuild with `title`, `content`, `summary`, `topic`, `tags`.
+
+Migration v3 changes:
+1. Create relationship index `entry_relation_type` on `ENTRY_RELATION.relation_type`.
 
 **Rationale**:
 - Keeps startup idempotent: calling `initSchema` multiple times is safe.
@@ -418,3 +421,27 @@ Migration v2 changes:
 - Running migration on an empty database is a no-op (no `Resource` nodes to rename, no old indexes to drop) — safe for fresh installs.
 
 **Rejected alternative**: always drop and recreate all indexes on startup — too slow for production databases with large datasets.
+
+---
+
+## D-026 — Entry relations: single relationship type with typed property
+
+**Date**: 2026-04-14
+**Status**: Accepted
+
+**Decision**: Model inter-entry relations as native Neo4j relationships with a single label `ENTRY_RELATION` and a `relation_type` string property (e.g. `"DEPENDS_ON"`, `"RUNS_ON"`, `"CONNECTS_TO"`). An optional `label` property stores a human-readable description. A `created_at` timestamp is set on `ON CREATE`.
+
+Relation type values are validated against `^[A-Z][A-Z0-9_]{1,63}$` (UPPER_SNAKE_CASE) at both the client and tool layer.
+
+**Permission rules**:
+- Create: caller must have at least read (viewer) access to both entries.
+- List: caller must have at least read access to the anchor entry; counterpart entries the caller cannot read are silently filtered from results.
+- Delete: caller must be the owner of the source (`from`) entry.
+- Additional constraints: both entries must be in the same namespace; self-relations (`from_id == to_id`) are rejected.
+
+**Rationale**:
+- A single relationship label with a typed property is more flexible than one Neo4j relationship type per semantic (which would require schema changes for each new relation type). The `relation_type` property index (`entry_relation_type`, added in schema v3) keeps typed lookups efficient.
+- MERGE semantics on create make the operation idempotent — calling it twice with the same `(from, to, relation_type)` tuple updates the label without duplicating the edge.
+- Filtering counterpart visibility in `listEntryRelations` ensures users never discover entries they have no access to through the relation graph.
+
+**Rejected alternative**: one Neo4j relationship type per semantic (e.g. `DEPENDS_ON`, `RUNS_ON` as labels). Rejected because it requires a schema migration for every new relation type a user wants to introduce.

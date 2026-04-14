@@ -36,6 +36,30 @@ export interface NamespaceSummary {
 }
 
 export type MatchMode = 'exact' | 'fulltext' | 'fuzzy';
+export type EntryRelationDirection = 'outbound' | 'inbound' | 'both';
+
+export interface EntryRelation {
+  direction: 'outbound' | 'inbound';
+  relation_type: string;
+  label?: string;
+  entry: {
+    id: string;
+    title: string;
+  };
+}
+
+export const ENTRY_RELATION_TYPE_REGEX = /^[A-Z][A-Z0-9_]{1,63}$/;
+export type Neo4jClientErrorCode = 'INVALID_PARAMS' | 'RESOURCE_NOT_FOUND' | 'PERMISSION_DENIED';
+
+export class Neo4jClientError extends Error {
+  constructor(
+    public readonly code: Neo4jClientErrorCode,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'Neo4jClientError';
+  }
+}
 
 // ── Lucene helpers ────────────────────────────────────────────────────────────
 
@@ -116,6 +140,10 @@ function buildLuceneQuery(query: string, mode: MatchMode): string | null {
  */
 export class Neo4jClient {
   constructor(private readonly driver: Driver) {}
+
+  private static hasReadPermission(role: 'owner' | 'editor' | 'viewer' | null): boolean {
+    return role === 'owner' || role === 'editor' || role === 'viewer';
+  }
 
   // ── Resources ───────────────────────────────────────────────────────────────
 
@@ -504,6 +532,206 @@ export class Neo4jClient {
         role: record.get('role') as 'viewer' | 'editor',
         granted_at: record.get('granted_at') as string,
       }));
+    } finally {
+      await session.close();
+    }
+  }
+
+  // ── Entry relations ─────────────────────────────────────────────────────────
+
+  async createEntryRelation(
+    userId: string,
+    fromId: string,
+    toId: string,
+    relationType: string,
+    label?: string,
+  ): Promise<void> {
+    if (fromId === toId) {
+      throw new Neo4jClientError('INVALID_PARAMS', 'from_id and to_id must be different');
+    }
+    if (!ENTRY_RELATION_TYPE_REGEX.test(relationType)) {
+      throw new Neo4jClientError('INVALID_PARAMS', 'relation_type must be UPPER_SNAKE_CASE');
+    }
+
+    const fromResource = await this.getResource(fromId);
+    const toResource = await this.getResource(toId);
+    if (!fromResource || !toResource) {
+      throw new Neo4jClientError('RESOURCE_NOT_FOUND', 'Resource not found');
+    }
+
+    if (fromResource.namespace !== toResource.namespace) {
+      throw new Neo4jClientError('INVALID_PARAMS', 'Entries must belong to the same namespace');
+    }
+
+    const fromRole = await this.getEffectiveRole(userId, fromId);
+    const toRole = await this.getEffectiveRole(userId, toId);
+    if (!Neo4jClient.hasReadPermission(fromRole) || !Neo4jClient.hasReadPermission(toRole)) {
+      throw new Neo4jClientError('PERMISSION_DENIED', 'Permission denied');
+    }
+
+    const now = new Date().toISOString();
+    const session = this.driver.session();
+    try {
+      await session.run(
+        `
+        MATCH (from:Resource {id: $fromId})
+        MATCH (to:Resource {id: $toId})
+        MERGE (from)-[r:ENTRY_RELATION {relation_type: $relationType}]->(to)
+        ON CREATE SET r.created_at = $now
+        SET r.label = $label
+        `,
+        {
+          fromId,
+          toId,
+          relationType,
+          now,
+          label: label ?? null,
+        },
+      );
+
+      if (label === undefined) {
+        await session.run(
+          `
+          MATCH (:Resource {id: $fromId})-[r:ENTRY_RELATION {relation_type: $relationType}]->(:Resource {id: $toId})
+          REMOVE r.label
+          `,
+          { fromId, toId, relationType },
+        );
+      }
+    } finally {
+      await session.close();
+    }
+  }
+
+  async deleteEntryRelation(
+    userId: string,
+    fromId: string,
+    toId: string,
+    relationType: string,
+  ): Promise<void> {
+    const fromResource = await this.getResource(fromId);
+    const toResource = await this.getResource(toId);
+    if (!fromResource || !toResource) {
+      throw new Neo4jClientError('RESOURCE_NOT_FOUND', 'Resource not found');
+    }
+    if (!ENTRY_RELATION_TYPE_REGEX.test(relationType)) {
+      throw new Neo4jClientError('INVALID_PARAMS', 'relation_type must be UPPER_SNAKE_CASE');
+    }
+
+    const fromRole = await this.getEffectiveRole(userId, fromId);
+    if (fromRole !== 'owner') {
+      throw new Neo4jClientError('PERMISSION_DENIED', 'Permission denied');
+    }
+
+    const session = this.driver.session();
+    try {
+      await session.run(
+        `
+        MATCH (:Resource {id: $fromId})-[r:ENTRY_RELATION {relation_type: $relationType}]->(:Resource {id: $toId})
+        DELETE r
+        `,
+        { fromId, toId, relationType },
+      );
+    } finally {
+      await session.close();
+    }
+  }
+
+  async listEntryRelations(
+    userId: string,
+    entryId: string,
+    direction: EntryRelationDirection,
+  ): Promise<EntryRelation[]> {
+    const entry = await this.getResource(entryId);
+    if (!entry) {
+      throw new Neo4jClientError('RESOURCE_NOT_FOUND', 'Resource not found');
+    }
+    const role = await this.getEffectiveRole(userId, entryId);
+    if (!Neo4jClient.hasReadPermission(role)) {
+      throw new Neo4jClientError('PERMISSION_DENIED', 'Permission denied');
+    }
+
+    const session = this.driver.session();
+    try {
+      let query: string;
+      if (direction === 'outbound') {
+        query = `
+          MATCH (base:Resource {id: $entryId})-[r:ENTRY_RELATION]->(other:Resource)
+          WHERE EXISTS { MATCH (:User {id: $userId})-[:OWNS|HAS_ACCESS]->(other) }
+          RETURN 'outbound' AS direction, r.relation_type AS relation_type, r.label AS label, other.id AS entry_id, other.title AS entry_title
+          ORDER BY relation_type, entry_title
+        `;
+      } else if (direction === 'inbound') {
+        query = `
+          MATCH (other:Resource)-[r:ENTRY_RELATION]->(base:Resource {id: $entryId})
+          WHERE EXISTS { MATCH (:User {id: $userId})-[:OWNS|HAS_ACCESS]->(other) }
+          RETURN 'inbound' AS direction, r.relation_type AS relation_type, r.label AS label, other.id AS entry_id, other.title AS entry_title
+          ORDER BY relation_type, entry_title
+        `;
+      } else {
+        query = `
+          MATCH (base:Resource {id: $entryId})-[r:ENTRY_RELATION]->(otherOut:Resource)
+          WHERE EXISTS { MATCH (:User {id: $userId})-[:OWNS|HAS_ACCESS]->(otherOut) }
+          RETURN 'outbound' AS direction, r.relation_type AS relation_type, r.label AS label, otherOut.id AS entry_id, otherOut.title AS entry_title
+          UNION ALL
+          MATCH (otherIn:Resource)-[r:ENTRY_RELATION]->(base:Resource {id: $entryId})
+          WHERE EXISTS { MATCH (:User {id: $userId})-[:OWNS|HAS_ACCESS]->(otherIn) }
+          RETURN 'inbound' AS direction, r.relation_type AS relation_type, r.label AS label, otherIn.id AS entry_id, otherIn.title AS entry_title
+        `;
+      }
+
+      const result = await session.run(query, { userId, entryId });
+      return result.records.map((record) => ({
+        direction: record.get('direction') as 'outbound' | 'inbound',
+        relation_type: record.get('relation_type') as string,
+        ...(record.get('label') !== null ? { label: record.get('label') as string } : {}),
+        entry: {
+          id: record.get('entry_id') as string,
+          title: record.get('entry_title') as string,
+        },
+      }));
+    } finally {
+      await session.close();
+    }
+  }
+
+  async getRelatedEntries(
+    userId: string,
+    entryId: string,
+    relationType?: string,
+    limit = 20,
+  ): Promise<Resource[]> {
+    const entry = await this.getResource(entryId);
+    if (!entry) {
+      throw new Neo4jClientError('RESOURCE_NOT_FOUND', 'Resource not found');
+    }
+    const role = await this.getEffectiveRole(userId, entryId);
+    if (!Neo4jClient.hasReadPermission(role)) {
+      throw new Neo4jClientError('PERMISSION_DENIED', 'Permission denied');
+    }
+    if (relationType !== undefined && !ENTRY_RELATION_TYPE_REGEX.test(relationType)) {
+      throw new Neo4jClientError('INVALID_PARAMS', 'relation_type must be UPPER_SNAKE_CASE');
+    }
+
+    const session = this.driver.session();
+    try {
+      const result = await session.run(
+        `
+        MATCH (base:Resource {id: $entryId})-[r:ENTRY_RELATION]-(other:Resource)
+        WHERE ($relationType IS NULL OR r.relation_type = $relationType)
+          AND EXISTS { MATCH (:User {id: $userId})-[:OWNS|HAS_ACCESS]->(other) }
+        RETURN DISTINCT other
+        ORDER BY other.updated_at DESC
+        LIMIT $limit
+        `,
+        {
+          userId,
+          entryId,
+          relationType: relationType ?? null,
+          limit: neo4j.int(limit),
+        },
+      );
+      return result.records.map((record) => record.get('other').properties as Resource);
     } finally {
       await session.close();
     }

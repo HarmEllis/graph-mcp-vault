@@ -46,13 +46,13 @@ describe('initSchema', () => {
     await expect(initSchema(driver)).resolves.toBeUndefined();
   });
 
-  it('sets schema_version to 2 after migration', async () => {
+  it('sets schema_version to 3 after migration', async () => {
     const session = driver.session();
     try {
       const result = await session.run('MATCH (s:SchemaInfo) RETURN s.version AS version');
       expect(result.records.length).toBe(1);
       const version = neo4j.integer.toNumber(result.records[0]!.get('version'));
-      expect(version).toBe(2);
+      expect(version).toBe(3);
     } finally {
       await session.close();
     }
@@ -69,6 +69,20 @@ describe('initSchema', () => {
       expect(props).toContain('summary');
       expect(props).toContain('topic');
       expect(props).toContain('tags');
+    } finally {
+      await session.close();
+    }
+  });
+
+  it('creates the entry_relation_type relationship index', async () => {
+    const session = driver.session();
+    try {
+      const result = await session.run(
+        "SHOW INDEXES YIELD name, type, entityType WHERE name = 'entry_relation_type'",
+      );
+      expect(result.records.length).toBe(1);
+      expect(result.records[0]!.get('type')).toBe('RANGE');
+      expect(result.records[0]!.get('entityType')).toBe('RELATIONSHIP');
     } finally {
       await session.close();
     }
@@ -719,5 +733,196 @@ describe('Neo4jClient.listSharing', () => {
 
     const sharing = await client.listSharing(created.id);
     expect(sharing).toHaveLength(0);
+  });
+});
+
+// ── entry relations ───────────────────────────────────────────────────────────
+
+describe('Neo4jClient entry relations', () => {
+  it('creates and lists outbound relation with direction metadata', async () => {
+    const userId = 'user-rel-create-list';
+    const from = await client.createResource({
+      userId,
+      namespace: 'rel-ns',
+      entry_type: 'note',
+      title: 'Source',
+      content: '',
+    });
+    const to = await client.createResource({
+      userId,
+      namespace: 'rel-ns',
+      entry_type: 'note',
+      title: 'Target',
+      content: '',
+    });
+
+    await client.createEntryRelation(userId, from.id, to.id, 'DEPENDS_ON', 'runtime dependency');
+    const relations = await client.listEntryRelations(userId, from.id, 'outbound');
+
+    expect(relations).toHaveLength(1);
+    expect(relations[0]?.direction).toBe('outbound');
+    expect(relations[0]?.relation_type).toBe('DEPENDS_ON');
+    expect(relations[0]?.label).toBe('runtime dependency');
+    expect(relations[0]?.entry.id).toBe(to.id);
+    expect(relations[0]?.entry.title).toBe('Target');
+  });
+
+  it('supports direction both by returning inbound and outbound rows', async () => {
+    const userId = 'user-rel-direction-both';
+    const a = await client.createResource({
+      userId,
+      namespace: 'rel-both',
+      entry_type: 'note',
+      title: 'A',
+      content: '',
+    });
+    const b = await client.createResource({
+      userId,
+      namespace: 'rel-both',
+      entry_type: 'note',
+      title: 'B',
+      content: '',
+    });
+    const c = await client.createResource({
+      userId,
+      namespace: 'rel-both',
+      entry_type: 'note',
+      title: 'C',
+      content: '',
+    });
+
+    await client.createEntryRelation(userId, b.id, a.id, 'CONNECTS_TO');
+    await client.createEntryRelation(userId, c.id, b.id, 'RUNS_ON');
+
+    const relations = await client.listEntryRelations(userId, b.id, 'both');
+    const directions = relations.map((r) => r.direction);
+    expect(directions).toContain('inbound');
+    expect(directions).toContain('outbound');
+  });
+
+  it('rejects self relations (fromId equals toId)', async () => {
+    const userId = 'user-rel-self';
+    const entry = await client.createResource({
+      userId,
+      namespace: 'rel-self',
+      entry_type: 'note',
+      title: 'Self',
+      content: '',
+    });
+
+    await expect(
+      client.createEntryRelation(userId, entry.id, entry.id, 'DEPENDS_ON'),
+    ).rejects.toThrow('from_id and to_id must be different');
+  });
+
+  it('rejects relation creation across namespaces', async () => {
+    const userId = 'user-rel-cross-ns';
+    const from = await client.createResource({
+      userId,
+      namespace: 'rel-ns-a',
+      entry_type: 'note',
+      title: 'A',
+      content: '',
+    });
+    const to = await client.createResource({
+      userId,
+      namespace: 'rel-ns-b',
+      entry_type: 'note',
+      title: 'B',
+      content: '',
+    });
+
+    await expect(client.createEntryRelation(userId, from.id, to.id, 'CONNECTS_TO')).rejects.toThrow(
+      'Entries must belong to the same namespace',
+    );
+  });
+
+  it('filters list relations to counterparts the caller can read', async () => {
+    const owner = 'user-rel-visibility-owner';
+    const viewer = 'user-rel-visibility-viewer';
+    const hiddenOwner = 'user-rel-visibility-hidden-owner';
+
+    const anchor = await client.createResource({
+      userId: owner,
+      namespace: 'rel-visibility',
+      entry_type: 'note',
+      title: 'Anchor',
+      content: '',
+    });
+    const visible = await client.createResource({
+      userId: owner,
+      namespace: 'rel-visibility',
+      entry_type: 'note',
+      title: 'Visible',
+      content: '',
+    });
+    const hidden = await client.createResource({
+      userId: hiddenOwner,
+      namespace: 'rel-visibility',
+      entry_type: 'note',
+      title: 'Hidden',
+      content: '',
+    });
+
+    await client.shareResource(anchor.id, viewer, 'viewer');
+    await client.shareResource(visible.id, viewer, 'viewer');
+    await client.shareResource(anchor.id, hiddenOwner, 'viewer');
+
+    await client.createEntryRelation(owner, anchor.id, visible.id, 'CONNECTS_TO');
+    await client.createEntryRelation(hiddenOwner, anchor.id, hidden.id, 'CONNECTS_TO');
+
+    const relations = await client.listEntryRelations(viewer, anchor.id, 'outbound');
+
+    expect(relations).toHaveLength(1);
+    expect(relations[0]?.entry.id).toBe(visible.id);
+  });
+
+  it('deletes an existing relation', async () => {
+    const userId = 'user-rel-delete';
+    const from = await client.createResource({
+      userId,
+      namespace: 'rel-delete',
+      entry_type: 'note',
+      title: 'Delete Source',
+      content: '',
+    });
+    const to = await client.createResource({
+      userId,
+      namespace: 'rel-delete',
+      entry_type: 'note',
+      title: 'Delete Target',
+      content: '',
+    });
+    await client.createEntryRelation(userId, from.id, to.id, 'DEPENDS_ON');
+
+    await client.deleteEntryRelation(userId, from.id, to.id, 'DEPENDS_ON');
+    const relations = await client.listEntryRelations(userId, from.id, 'outbound');
+
+    expect(relations).toHaveLength(0);
+  });
+
+  it('getRelatedEntries returns one-hop neighbors and respects default limit', async () => {
+    const userId = 'user-rel-related-limit';
+    const root = await client.createResource({
+      userId,
+      namespace: 'rel-related',
+      entry_type: 'note',
+      title: 'Root',
+      content: '',
+    });
+
+    for (let i = 0; i < 25; i++) {
+      const neighbor = await client.createResource({
+        userId,
+        namespace: 'rel-related',
+        entry_type: 'note',
+        title: `Neighbor ${i}`,
+        content: '',
+      });
+      await client.createEntryRelation(userId, root.id, neighbor.id, 'CONNECTS_TO');
+    }
+
+    const related = await client.getRelatedEntries(userId, root.id);
+    expect(related.length).toBe(20);
   });
 });

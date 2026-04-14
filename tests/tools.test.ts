@@ -171,6 +171,30 @@ function parseToolError(body: Record<string, unknown>): { code: number; message:
   return JSON.parse(content[0]!.text) as { code: number; message: string };
 }
 
+async function createEntry(
+  sub: string,
+  sid: string,
+  params?: {
+    title?: string;
+    content?: string;
+    namespace?: string;
+    entry_type?: string;
+  },
+): Promise<string> {
+  const { body } = await callTool(
+    'knowledge_create_entry',
+    {
+      entry_type: params?.entry_type ?? 'note',
+      title: params?.title ?? 'Entry',
+      content: params?.content ?? '',
+      ...(params?.namespace !== undefined ? { namespace: params.namespace } : {}),
+    },
+    sub,
+    sid,
+  );
+  return parseToolSuccess(body)['id'] as string;
+}
+
 // ── tools/call MCP content format ─────────────────────────────────────────────
 
 describe('tools/call MCP content format', () => {
@@ -775,6 +799,164 @@ describe('knowledge_search_entries', () => {
 
     const { body } = await callTool('knowledge_search_entries', { query: 'test', match_mode: 'invalid' }, sub, sid);
     expect(parseToolError(body)['code']).toBe(ErrorCode.INVALID_PARAMS);
+  });
+});
+
+// ── knowledge_*_relation ──────────────────────────────────────────────────────
+
+describe('knowledge_create_relation / knowledge_list_relations / knowledge_delete_relation', () => {
+  it('creates relation and returns it through knowledge_list_relations wrapper', async () => {
+    const sub = uniqueUser('rel-create-list');
+    const sid = await openSession(sub, 'rel-tools');
+    const fromId = await createEntry(sub, sid, { title: 'Source' });
+    const toId = await createEntry(sub, sid, { title: 'Target' });
+
+    const { status: createStatus } = await callTool(
+      'knowledge_create_relation',
+      {
+        from_id: fromId,
+        to_id: toId,
+        relation_type: 'DEPENDS_ON',
+        label: 'critical runtime dependency',
+      },
+      sub,
+      sid,
+    );
+    expect(createStatus).toBe(200);
+
+    const { status: listStatus, body: listBody } = await callTool(
+      'knowledge_list_relations',
+      { entry_id: fromId, direction: 'outbound' },
+      sub,
+      sid,
+    );
+    expect(listStatus).toBe(200);
+    const relations = parseToolSuccess(listBody)['relations'] as Array<Record<string, unknown>>;
+    expect(relations).toHaveLength(1);
+    expect(relations[0]?.['direction']).toBe('outbound');
+    expect(relations[0]?.['relation_type']).toBe('DEPENDS_ON');
+    expect(relations[0]?.['label']).toBe('critical runtime dependency');
+    const relatedEntry = relations[0]?.['entry'] as Record<string, unknown>;
+    expect(relatedEntry['id']).toBe(toId);
+    expect(relatedEntry['title']).toBe('Target');
+  });
+
+  it('returns INVALID_PARAMS for invalid relation_type format', async () => {
+    const sub = uniqueUser('rel-invalid-type');
+    const sid = await openSession(sub, 'rel-tools-invalid');
+    const fromId = await createEntry(sub, sid, { title: 'From' });
+    const toId = await createEntry(sub, sid, { title: 'To' });
+
+    const { body } = await callTool(
+      'knowledge_create_relation',
+      { from_id: fromId, to_id: toId, relation_type: 'depends-on' },
+      sub,
+      sid,
+    );
+    expect(parseToolError(body)['code']).toBe(ErrorCode.INVALID_PARAMS);
+  });
+
+  it('returns INVALID_PARAMS for self relation', async () => {
+    const sub = uniqueUser('rel-self');
+    const sid = await openSession(sub, 'rel-tools-self');
+    const entryId = await createEntry(sub, sid, { title: 'Self' });
+
+    const { body } = await callTool(
+      'knowledge_create_relation',
+      { from_id: entryId, to_id: entryId, relation_type: 'CONNECTS_TO' },
+      sub,
+      sid,
+    );
+    expect(parseToolError(body)['code']).toBe(ErrorCode.INVALID_PARAMS);
+  });
+
+  it('returns INVALID_PARAMS when entries are in different namespaces', async () => {
+    const sub = uniqueUser('rel-cross-ns');
+    const sidDefault = await openSession(sub, 'rel-default');
+    const sidOther = await openSession(sub, 'rel-other');
+    const fromId = await createEntry(sub, sidDefault, { title: 'From' });
+    const toId = await createEntry(sub, sidOther, { title: 'To' });
+
+    const { body } = await callTool(
+      'knowledge_create_relation',
+      { from_id: fromId, to_id: toId, relation_type: 'CONNECTS_TO' },
+      sub,
+      sidDefault,
+    );
+    const err = parseToolError(body);
+    expect(err['code']).toBe(ErrorCode.INVALID_PARAMS);
+    expect(err['message']).toBe('Entries must belong to the same namespace');
+  });
+
+  it('filters list results where caller cannot read counterpart entry', async () => {
+    const owner = uniqueUser('rel-filter-owner');
+    const viewer = uniqueUser('rel-filter-viewer');
+    const hiddenOwner = uniqueUser('rel-filter-hidden-owner');
+    const ownerSid = await openSession(owner, 'rel-filter');
+    const viewerSid = await openSession(viewer, 'rel-filter');
+    const hiddenSid = await openSession(hiddenOwner, 'rel-filter');
+
+    const anchorId = await createEntry(owner, ownerSid, { title: 'Anchor' });
+    const visibleId = await createEntry(owner, ownerSid, { title: 'Visible' });
+    const hiddenId = await createEntry(hiddenOwner, hiddenSid, { title: 'Hidden' });
+
+    await neo4jClient.shareResource(anchorId, viewer, 'viewer');
+    await neo4jClient.shareResource(visibleId, viewer, 'viewer');
+
+    await callTool(
+      'knowledge_create_relation',
+      { from_id: anchorId, to_id: visibleId, relation_type: 'CONNECTS_TO' },
+      owner,
+      ownerSid,
+    );
+    await callTool(
+      'knowledge_create_relation',
+      { from_id: anchorId, to_id: hiddenId, relation_type: 'CONNECTS_TO' },
+      owner,
+      ownerSid,
+    );
+
+    const { body } = await callTool(
+      'knowledge_list_relations',
+      { entry_id: anchorId, direction: 'outbound' },
+      viewer,
+      viewerSid,
+    );
+    const relations = parseToolSuccess(body)['relations'] as Array<Record<string, unknown>>;
+    expect(relations).toHaveLength(1);
+    const relatedEntry = relations[0]?.['entry'] as Record<string, unknown>;
+    expect(relatedEntry['id']).toBe(visibleId);
+  });
+
+  it('deletes relation and no longer shows it in list', async () => {
+    const sub = uniqueUser('rel-delete');
+    const sid = await openSession(sub, 'rel-delete');
+    const fromId = await createEntry(sub, sid, { title: 'Delete From' });
+    const toId = await createEntry(sub, sid, { title: 'Delete To' });
+
+    await callTool(
+      'knowledge_create_relation',
+      { from_id: fromId, to_id: toId, relation_type: 'RUNS_ON' },
+      sub,
+      sid,
+    );
+
+    const { status: deleteStatus } = await callTool(
+      'knowledge_delete_relation',
+      { from_id: fromId, to_id: toId, relation_type: 'RUNS_ON' },
+      sub,
+      sid,
+    );
+    expect(deleteStatus).toBe(200);
+
+    const { body: listBody } = await callTool(
+      'knowledge_list_relations',
+      { entry_id: fromId, direction: 'outbound' },
+      sub,
+      sid,
+    );
+    const relations = parseToolSuccess(listBody)['relations'] as unknown[];
+    expect(relations).toHaveLength(0);
   });
 });
 

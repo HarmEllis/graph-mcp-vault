@@ -2,7 +2,7 @@ import neo4j, { type Driver } from 'neo4j-driver';
 
 // ── Current schema version ────────────────────────────────────────────────────
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 // ── Base schema statements (idempotent, version-independent) ──────────────────
 
@@ -78,6 +78,22 @@ async function migrate_v2(driver: Driver): Promise<void> {
   }
 }
 
+// ── Migration v3 ──────────────────────────────────────────────────────────────
+//
+// Changes introduced in v3:
+//   1. Create an index on ENTRY_RELATION.relation_type for typed relation lookups.
+
+async function migrate_v3(driver: Driver): Promise<void> {
+  const session = driver.session();
+  try {
+    await session.run(
+      'CREATE INDEX entry_relation_type IF NOT EXISTS FOR ()-[r:ENTRY_RELATION]-() ON (r.relation_type)',
+    );
+  } finally {
+    await session.close();
+  }
+}
+
 // ── initSchema ────────────────────────────────────────────────────────────────
 
 /**
@@ -102,10 +118,16 @@ export async function initSchema(driver: Driver): Promise<void> {
   }
 
   // Run version-gated migrations
-  const version = await getSchemaVersion(driver);
+  let version = await getSchemaVersion(driver);
 
   if (version < 2) {
     await migrate_v2(driver);
-    await setSchemaVersion(driver, SCHEMA_VERSION);
+    await setSchemaVersion(driver, 2);
+    version = 2;
+  }
+
+  if (version < 3) {
+    await migrate_v3(driver);
+    await setSchemaVersion(driver, 3);
   }
 }

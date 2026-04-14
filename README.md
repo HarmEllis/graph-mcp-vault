@@ -137,7 +137,7 @@ passing `namespace: "other"` overrides it for that single call.
 
 ## MCP tools
 
-The server exposes ten knowledge tools. LLMs should **search before creating** to avoid
+The server exposes thirteen knowledge tools. LLMs should **search before creating** to avoid
 duplicate entries.
 
 ### Knowledge entry tools
@@ -253,6 +253,73 @@ Returns `{ "resources": [ ... ] }`.
 
 ---
 
+### Relation tools
+
+#### `knowledge_create_relation`
+
+Create a typed relation between two knowledge entries. Requires at least read (viewer) access
+to both entries. Both entries must belong to the same namespace.
+
+```json
+{
+  "from_id": "<uuid>",
+  "to_id": "<uuid>",
+  "relation_type": "DEPENDS_ON",
+  "label": "optional free-text description"
+}
+```
+
+`relation_type` must be `UPPER_SNAKE_CASE` (e.g. `DEPENDS_ON`, `RUNS_ON`, `CONNECTS_TO`).
+Returns `{}`. Creating the same typed relation twice is idempotent (MERGE semantics).
+
+---
+
+#### `knowledge_delete_relation`
+
+Delete a typed relation between two entries. Requires owner role on the source entry.
+
+```json
+{
+  "from_id": "<uuid>",
+  "to_id": "<uuid>",
+  "relation_type": "DEPENDS_ON"
+}
+```
+
+Returns `{}`. No-op if the relation does not exist.
+
+---
+
+#### `knowledge_list_relations`
+
+List the relations of a knowledge entry. Returns relations in the requested direction,
+filtered to counterpart entries the caller can read.
+
+```json
+{
+  "entry_id": "<uuid>",
+  "direction": "both"
+}
+```
+
+`direction` is `"outbound"` (entry → other), `"inbound"` (other → entry), or `"both"` (default).
+
+Returns:
+```json
+{
+  "relations": [
+    {
+      "direction": "outbound",
+      "relation_type": "DEPENDS_ON",
+      "label": "optional label",
+      "entry": { "id": "<uuid>", "title": "Other Entry" }
+    }
+  ]
+}
+```
+
+---
+
 ### Sharing tools
 
 #### `knowledge_share_entry`
@@ -316,6 +383,9 @@ Returns `{ "namespaces": [{ "namespace", "owned_count", "shared_count" }] }`.
 | Delete entry | owner |
 | Share entry | owner |
 | Revoke access | owner |
+| Create relation | viewer (on both entries) |
+| List relations | viewer (on anchor entry) |
+| Delete relation | owner (on source entry) |
 
 Roles are stored as `HAS_ACCESS` relationships in Neo4j. The entry creator
 automatically becomes the owner via an `OWNS` relationship.

@@ -1,5 +1,11 @@
 import { z } from 'zod';
-import type { MatchMode, Neo4jClient } from '../neo4j-client.js';
+import {
+  ENTRY_RELATION_TYPE_REGEX,
+  Neo4jClientError,
+  type EntryRelationDirection,
+  type MatchMode,
+  type Neo4jClient,
+} from '../neo4j-client.js';
 import { ErrorCode } from '../errors.js';
 import { ToolError, type RegisteredTool, type ToolContext } from './registry.js';
 
@@ -36,6 +42,21 @@ async function requirePermission(
     throw new ToolError(ErrorCode.PERMISSION_DENIED, 'Permission denied');
   }
   return role;
+}
+
+function throwMappedClientError(error: unknown): never {
+  if (error instanceof Neo4jClientError) {
+    if (error.code === 'INVALID_PARAMS') {
+      throw new ToolError(ErrorCode.INVALID_PARAMS, error.message);
+    }
+    if (error.code === 'RESOURCE_NOT_FOUND') {
+      throw new ToolError(ErrorCode.RESOURCE_NOT_FOUND, error.message);
+    }
+    if (error.code === 'PERMISSION_DENIED') {
+      throw new ToolError(ErrorCode.PERMISSION_DENIED, error.message);
+    }
+  }
+  throw error;
 }
 
 // ── Shared metadata schema ────────────────────────────────────────────────────
@@ -224,6 +245,95 @@ async function handleSearch(
   return { resources };
 }
 
+// ── knowledge_create_relation ─────────────────────────────────────────────────
+
+const relationTypeSchema = z
+  .string()
+  .regex(ENTRY_RELATION_TYPE_REGEX, 'relation_type must be UPPER_SNAKE_CASE');
+
+const createRelationSchema = z.object({
+  from_id: z.string().min(1),
+  to_id: z.string().min(1),
+  relation_type: relationTypeSchema,
+  label: z.string().optional(),
+});
+
+async function handleCreateRelation(
+  args: Record<string, unknown>,
+  ctx: ToolContext,
+  neo4jClient: Neo4jClient,
+): Promise<unknown> {
+  const parsed = createRelationSchema.safeParse(args);
+  if (!parsed.success) {
+    throw new ToolError(ErrorCode.INVALID_PARAMS, `Invalid params: ${parsed.error.message}`);
+  }
+  const { from_id, to_id, relation_type, label } = parsed.data;
+
+  try {
+    await neo4jClient.createEntryRelation(ctx.userId, from_id, to_id, relation_type, label);
+    return {};
+  } catch (error) {
+    throwMappedClientError(error);
+  }
+}
+
+// ── knowledge_delete_relation ─────────────────────────────────────────────────
+
+const deleteRelationSchema = z.object({
+  from_id: z.string().min(1),
+  to_id: z.string().min(1),
+  relation_type: relationTypeSchema,
+});
+
+async function handleDeleteRelation(
+  args: Record<string, unknown>,
+  ctx: ToolContext,
+  neo4jClient: Neo4jClient,
+): Promise<unknown> {
+  const parsed = deleteRelationSchema.safeParse(args);
+  if (!parsed.success) {
+    throw new ToolError(ErrorCode.INVALID_PARAMS, `Invalid params: ${parsed.error.message}`);
+  }
+  const { from_id, to_id, relation_type } = parsed.data;
+
+  try {
+    await neo4jClient.deleteEntryRelation(ctx.userId, from_id, to_id, relation_type);
+    return {};
+  } catch (error) {
+    throwMappedClientError(error);
+  }
+}
+
+// ── knowledge_list_relations ──────────────────────────────────────────────────
+
+const listRelationsSchema = z.object({
+  entry_id: z.string().min(1),
+  direction: z.enum(['outbound', 'inbound', 'both']).optional(),
+});
+
+async function handleListRelations(
+  args: Record<string, unknown>,
+  ctx: ToolContext,
+  neo4jClient: Neo4jClient,
+): Promise<unknown> {
+  const parsed = listRelationsSchema.safeParse(args);
+  if (!parsed.success) {
+    throw new ToolError(ErrorCode.INVALID_PARAMS, `Invalid params: ${parsed.error.message}`);
+  }
+  const { entry_id, direction } = parsed.data;
+
+  try {
+    const relations = await neo4jClient.listEntryRelations(
+      ctx.userId,
+      entry_id,
+      (direction ?? 'both') as EntryRelationDirection,
+    );
+    return { relations };
+  } catch (error) {
+    throwMappedClientError(error);
+  }
+}
+
 // ── knowledge_list_namespaces ─────────────────────────────────────────────────
 
 async function handleListNamespaces(
@@ -245,7 +355,7 @@ async function handleListNamespaces(
 // ── Factory ───────────────────────────────────────────────────────────────────
 
 /**
- * Returns the seven knowledge entry tool registrations, each closing over `neo4jClient`.
+ * Returns the knowledge entry tool registrations, each closing over `neo4jClient`.
  */
 export function createResourceTools(neo4jClient: Neo4jClient): RegisteredTool[] {
   return [
@@ -356,6 +466,64 @@ export function createResourceTools(neo4jClient: Neo4jClient): RegisteredTool[] 
         },
       },
       handler: (args, ctx) => handleDelete(args, ctx, neo4jClient),
+    },
+    {
+      descriptor: {
+        name: 'knowledge_create_relation',
+        description:
+          'Create a typed relation between two knowledge entries. Requires read access to both entries.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            from_id: { type: 'string', description: 'UUID of the source entry' },
+            to_id: { type: 'string', description: 'UUID of the target entry' },
+            relation_type: {
+              type: 'string',
+              description: 'Relation type in UPPER_SNAKE_CASE (e.g. DEPENDS_ON)',
+            },
+            label: { type: 'string', description: 'Optional free-text relation label' },
+          },
+          required: ['from_id', 'to_id', 'relation_type'],
+        },
+      },
+      handler: (args, ctx) => handleCreateRelation(args, ctx, neo4jClient),
+    },
+    {
+      descriptor: {
+        name: 'knowledge_delete_relation',
+        description:
+          'Delete a typed relation between two entries. Requires owner role on the source entry.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            from_id: { type: 'string', description: 'UUID of the source entry' },
+            to_id: { type: 'string', description: 'UUID of the target entry' },
+            relation_type: { type: 'string', description: 'Relation type in UPPER_SNAKE_CASE' },
+          },
+          required: ['from_id', 'to_id', 'relation_type'],
+        },
+      },
+      handler: (args, ctx) => handleDeleteRelation(args, ctx, neo4jClient),
+    },
+    {
+      descriptor: {
+        name: 'knowledge_list_relations',
+        description:
+          'List entry relations for one entry. Returns outbound, inbound, or both directions.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            entry_id: { type: 'string', description: 'UUID of the entry' },
+            direction: {
+              type: 'string',
+              enum: ['outbound', 'inbound', 'both'],
+              description: 'Direction filter (default both)',
+            },
+          },
+          required: ['entry_id'],
+        },
+      },
+      handler: (args, ctx) => handleListRelations(args, ctx, neo4jClient),
     },
     {
       descriptor: {
