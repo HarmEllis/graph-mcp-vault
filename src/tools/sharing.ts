@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { Neo4jClient } from '../neo4j-client.js';
 import { ErrorCode } from '../errors.js';
 import { ToolError, type RegisteredTool, type ToolContext } from './registry.js';
+import { DEFAULT_LIST_ACCESS_LIMIT, MAX_LIST_ACCESS_LIMIT } from './graph-constants.js';
 
 // ── Permission helpers ────────────────────────────────────────────────────────
 
@@ -103,7 +104,10 @@ async function handleRevoke(
 
 // ── knowledge_list_access ─────────────────────────────────────────────────────
 
-const listAccessSchema = z.object({ entry_id: z.string().min(1) });
+const listAccessSchema = z.object({
+  entry_id: z.string().min(1),
+  limit: z.number().int().positive().max(MAX_LIST_ACCESS_LIMIT).optional(),
+});
 
 async function handleListAccess(
   args: Record<string, unknown>,
@@ -114,10 +118,11 @@ async function handleListAccess(
   if (!parsed.success) {
     throw new ToolError(ErrorCode.INVALID_PARAMS, `Invalid params: ${parsed.error.message}`);
   }
-  const { entry_id } = parsed.data;
+  const { entry_id, limit: rawLimit } = parsed.data;
+  const limit = rawLimit ?? DEFAULT_LIST_ACCESS_LIMIT;
 
   await requireRead(neo4jClient, ctx.userId, entry_id);
-  const sharing = await neo4jClient.listSharing(entry_id);
+  const sharing = await neo4jClient.listSharing(entry_id, limit);
   return { sharing };
 }
 
@@ -163,10 +168,16 @@ export function createSharingTools(neo4jClient: Neo4jClient): RegisteredTool[] {
       descriptor: {
         name: 'knowledge_list_access',
         description:
-          'List all users with access to a knowledge entry. Requires at least read access.',
+          'List all users with access to a knowledge entry. Requires at least read access. Results are ordered by grant date (most recent first).',
         inputSchema: {
           type: 'object',
-          properties: { entry_id: { type: 'string' } },
+          properties: {
+            entry_id: { type: 'string' },
+            limit: {
+              type: 'number',
+              description: `Max access grants to return (default ${DEFAULT_LIST_ACCESS_LIMIT}, max ${MAX_LIST_ACCESS_LIMIT})`,
+            },
+          },
           required: ['entry_id'],
         },
       },

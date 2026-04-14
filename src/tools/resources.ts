@@ -8,6 +8,20 @@ import {
 } from '../neo4j-client.js';
 import { ErrorCode } from '../errors.js';
 import { ToolError, type RegisteredTool, type ToolContext } from './registry.js';
+import {
+  DEFAULT_EXPAND_CONTEXT_LIMIT,
+  DEFAULT_IMPACT_LIMIT,
+  DEFAULT_LIST_RELATIONS_LIMIT,
+  DEFAULT_MAX_DEPTH,
+  DEFAULT_MAX_HOPS,
+  DEFAULT_MAX_PATHS,
+  MAX_EXPAND_CONTEXT_LIMIT,
+  MAX_DEPTH_CAP,
+  MAX_HOPS_CAP,
+  MAX_IMPACT_LIMIT,
+  MAX_LIST_RELATIONS_LIMIT,
+  MAX_PATHS_CAP,
+} from './graph-constants.js';
 
 // ── Permission helpers ────────────────────────────────────────────────────────
 
@@ -309,6 +323,7 @@ async function handleDeleteRelation(
 const listRelationsSchema = z.object({
   entry_id: z.string().min(1),
   direction: z.enum(['outbound', 'inbound', 'both']).optional(),
+  limit: z.number().int().positive().max(MAX_LIST_RELATIONS_LIMIT).optional(),
 });
 
 async function handleListRelations(
@@ -320,15 +335,133 @@ async function handleListRelations(
   if (!parsed.success) {
     throw new ToolError(ErrorCode.INVALID_PARAMS, `Invalid params: ${parsed.error.message}`);
   }
-  const { entry_id, direction } = parsed.data;
+  const { entry_id, direction, limit: rawLimit } = parsed.data;
+  const limit = rawLimit ?? DEFAULT_LIST_RELATIONS_LIMIT;
 
   try {
     const relations = await neo4jClient.listEntryRelations(
       ctx.userId,
       entry_id,
       (direction ?? 'both') as EntryRelationDirection,
+      limit,
     );
     return { relations };
+  } catch (error) {
+    throwMappedClientError(error);
+  }
+}
+
+// ── knowledge_expand_context ──────────────────────────────────────────────────
+
+const relationTypesItemSchema = z
+  .string()
+  .regex(ENTRY_RELATION_TYPE_REGEX, 'relation_type must be UPPER_SNAKE_CASE');
+
+const expandContextSchema = z.object({
+  entry_id: z.string().min(1),
+  direction: z.enum(['outbound', 'inbound', 'both']).optional(),
+  max_hops: z.number().int().positive().max(MAX_HOPS_CAP).optional(),
+  relation_types: z.array(relationTypesItemSchema).optional(),
+  limit: z.number().int().positive().max(MAX_EXPAND_CONTEXT_LIMIT).optional(),
+});
+
+async function handleExpandContext(
+  args: Record<string, unknown>,
+  ctx: ToolContext,
+  neo4jClient: Neo4jClient,
+): Promise<unknown> {
+  const parsed = expandContextSchema.safeParse(args);
+  if (!parsed.success) {
+    throw new ToolError(ErrorCode.INVALID_PARAMS, `Invalid params: ${parsed.error.message}`);
+  }
+  const { entry_id, direction, max_hops: rawHops, relation_types, limit: rawLimit } = parsed.data;
+  const maxHops = rawHops ?? DEFAULT_MAX_HOPS;
+  const limit = rawLimit ?? DEFAULT_EXPAND_CONTEXT_LIMIT;
+
+  try {
+    const layers = await neo4jClient.expandContext({
+      userId: ctx.userId,
+      entryId: entry_id,
+      direction: (direction ?? 'both') as EntryRelationDirection,
+      maxHops,
+      relationTypes: relation_types ?? null,
+      limit,
+    });
+    return { layers };
+  } catch (error) {
+    throwMappedClientError(error);
+  }
+}
+
+// ── knowledge_find_paths ──────────────────────────────────────────────────────
+
+const findPathsSchema = z.object({
+  from_id: z.string().min(1),
+  to_id: z.string().min(1),
+  max_depth: z.number().int().positive().max(MAX_DEPTH_CAP).optional(),
+  max_paths: z.number().int().positive().max(MAX_PATHS_CAP).optional(),
+  relation_types: z.array(relationTypesItemSchema).optional(),
+});
+
+async function handleFindPaths(
+  args: Record<string, unknown>,
+  ctx: ToolContext,
+  neo4jClient: Neo4jClient,
+): Promise<unknown> {
+  const parsed = findPathsSchema.safeParse(args);
+  if (!parsed.success) {
+    throw new ToolError(ErrorCode.INVALID_PARAMS, `Invalid params: ${parsed.error.message}`);
+  }
+  const { from_id, to_id, max_depth: rawDepth, max_paths: rawPaths, relation_types } = parsed.data;
+  const maxDepth = rawDepth ?? DEFAULT_MAX_DEPTH;
+  const maxPaths = rawPaths ?? DEFAULT_MAX_PATHS;
+
+  try {
+    const paths = await neo4jClient.findPaths({
+      userId: ctx.userId,
+      fromId: from_id,
+      toId: to_id,
+      maxDepth,
+      maxPaths,
+      relationTypes: relation_types ?? null,
+    });
+    return { paths };
+  } catch (error) {
+    throwMappedClientError(error);
+  }
+}
+
+// ── knowledge_impact_analysis ─────────────────────────────────────────────────
+
+const impactAnalysisSchema = z.object({
+  entry_id: z.string().min(1),
+  max_depth: z.number().int().positive().max(MAX_DEPTH_CAP).optional(),
+  relation_types: z.array(relationTypesItemSchema).optional(),
+  limit: z.number().int().positive().max(MAX_IMPACT_LIMIT).optional(),
+});
+
+async function handleImpactAnalysis(
+  args: Record<string, unknown>,
+  ctx: ToolContext,
+  neo4jClient: Neo4jClient,
+): Promise<unknown> {
+  const parsed = impactAnalysisSchema.safeParse(args);
+  if (!parsed.success) {
+    throw new ToolError(ErrorCode.INVALID_PARAMS, `Invalid params: ${parsed.error.message}`);
+  }
+  const { entry_id, max_depth: rawDepth, relation_types, limit: rawLimit } = parsed.data;
+  const maxDepth = rawDepth ?? DEFAULT_MAX_DEPTH;
+  const limit = rawLimit ?? DEFAULT_IMPACT_LIMIT;
+
+  try {
+    const result = await neo4jClient.impactAnalysis({
+      userId: ctx.userId,
+      entryId: entry_id,
+      maxDepth,
+      relationTypes: relation_types ?? null,
+      limit,
+    });
+    return result;
   } catch (error) {
     throwMappedClientError(error);
   }
@@ -519,6 +652,10 @@ export function createResourceTools(neo4jClient: Neo4jClient): RegisteredTool[] 
               enum: ['outbound', 'inbound', 'both'],
               description: 'Direction filter (default both)',
             },
+            limit: {
+              type: 'number',
+              description: `Max relations to return (default ${DEFAULT_LIST_RELATIONS_LIMIT}, max ${MAX_LIST_RELATIONS_LIMIT})`,
+            },
           },
           required: ['entry_id'],
         },
@@ -565,6 +702,96 @@ export function createResourceTools(neo4jClient: Neo4jClient): RegisteredTool[] 
         },
       },
       handler: (args, ctx) => handleListNamespaces(args, ctx, neo4jClient),
+    },
+    {
+      descriptor: {
+        name: 'knowledge_expand_context',
+        description:
+          'Expand the neighborhood of an entry by traversing entry relations up to max_hops away. Returns entries grouped by hop distance. Only includes entries the caller can read. Use this to explore related knowledge around a central entry.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            entry_id: { type: 'string', description: 'UUID of the anchor entry' },
+            direction: {
+              type: 'string',
+              enum: ['outbound', 'inbound', 'both'],
+              description: `Traversal direction (default both)`,
+            },
+            max_hops: {
+              type: 'number',
+              description: `Maximum hops to traverse (default ${DEFAULT_MAX_HOPS}, max ${MAX_HOPS_CAP})`,
+            },
+            relation_types: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Filter to specific relation types in UPPER_SNAKE_CASE (optional)',
+            },
+            limit: {
+              type: 'number',
+              description: `Max total nodes returned across all hops (default ${DEFAULT_EXPAND_CONTEXT_LIMIT}, max ${MAX_EXPAND_CONTEXT_LIMIT})`,
+            },
+          },
+          required: ['entry_id'],
+        },
+      },
+      handler: (args, ctx) => handleExpandContext(args, ctx, neo4jClient),
+    },
+    {
+      descriptor: {
+        name: 'knowledge_find_paths',
+        description:
+          'Find directed paths between two entries via entry relations. Only returns paths where every intermediate node is accessible to the caller. Both entries must be in the same namespace.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            from_id: { type: 'string', description: 'UUID of the source entry' },
+            to_id: { type: 'string', description: 'UUID of the destination entry' },
+            max_depth: {
+              type: 'number',
+              description: `Maximum path depth (default ${DEFAULT_MAX_DEPTH}, max ${MAX_DEPTH_CAP})`,
+            },
+            max_paths: {
+              type: 'number',
+              description: `Maximum number of paths to return (default ${DEFAULT_MAX_PATHS}, max ${MAX_PATHS_CAP})`,
+            },
+            relation_types: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Filter to specific relation types in UPPER_SNAKE_CASE (optional)',
+            },
+          },
+          required: ['from_id', 'to_id'],
+        },
+      },
+      handler: (args, ctx) => handleFindPaths(args, ctx, neo4jClient),
+    },
+    {
+      descriptor: {
+        name: 'knowledge_impact_analysis',
+        description:
+          'Find all entries that depend on or reference a given entry, grouped by hop distance (impact layers). Identifies what would be affected if the anchor entry changes. Only readable entries are included.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            entry_id: { type: 'string', description: 'UUID of the anchor entry to analyse' },
+            max_depth: {
+              type: 'number',
+              description: `Maximum traversal depth (default ${DEFAULT_MAX_DEPTH}, max ${MAX_DEPTH_CAP})`,
+            },
+            relation_types: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Filter to specific relation types in UPPER_SNAKE_CASE (optional)',
+            },
+            limit: {
+              type: 'number',
+              description: `Max total impacted entries returned across all layers (default ${DEFAULT_IMPACT_LIMIT}, max ${MAX_IMPACT_LIMIT})`,
+            },
+          },
+          required: ['entry_id'],
+        },
+      },
+      handler: (args, ctx) => handleImpactAnalysis(args, ctx, neo4jClient),
     },
   ];
 }

@@ -714,7 +714,7 @@ describe('Neo4jClient.listSharing', () => {
     await client.shareResource(created.id, viewer1, 'viewer');
     await client.shareResource(created.id, editor1, 'editor');
 
-    const sharing = await client.listSharing(created.id);
+    const sharing = await client.listSharing(created.id, 100);
 
     expect(sharing).toHaveLength(2);
     expect(sharing.some((s) => s.user_id === viewer1 && s.role === 'viewer')).toBe(true);
@@ -731,7 +731,7 @@ describe('Neo4jClient.listSharing', () => {
       content: '',
     });
 
-    const sharing = await client.listSharing(created.id);
+    const sharing = await client.listSharing(created.id, 100);
     expect(sharing).toHaveLength(0);
   });
 });
@@ -757,7 +757,7 @@ describe('Neo4jClient entry relations', () => {
     });
 
     await client.createEntryRelation(userId, from.id, to.id, 'DEPENDS_ON', 'runtime dependency');
-    const relations = await client.listEntryRelations(userId, from.id, 'outbound');
+    const relations = await client.listEntryRelations(userId, from.id, 'outbound', 100);
 
     expect(relations).toHaveLength(1);
     expect(relations[0]?.direction).toBe('outbound');
@@ -794,7 +794,7 @@ describe('Neo4jClient entry relations', () => {
     await client.createEntryRelation(userId, b.id, a.id, 'CONNECTS_TO');
     await client.createEntryRelation(userId, c.id, b.id, 'RUNS_ON');
 
-    const relations = await client.listEntryRelations(userId, b.id, 'both');
+    const relations = await client.listEntryRelations(userId, b.id, 'both', 100);
     const directions = relations.map((r) => r.direction);
     expect(directions).toContain('inbound');
     expect(directions).toContain('outbound');
@@ -871,7 +871,7 @@ describe('Neo4jClient entry relations', () => {
     await client.createEntryRelation(owner, anchor.id, visible.id, 'CONNECTS_TO');
     await client.createEntryRelation(hiddenOwner, anchor.id, hidden.id, 'CONNECTS_TO');
 
-    const relations = await client.listEntryRelations(viewer, anchor.id, 'outbound');
+    const relations = await client.listEntryRelations(viewer, anchor.id, 'outbound', 100);
 
     expect(relations).toHaveLength(1);
     expect(relations[0]?.entry.id).toBe(visible.id);
@@ -896,7 +896,7 @@ describe('Neo4jClient entry relations', () => {
     await client.createEntryRelation(userId, from.id, to.id, 'DEPENDS_ON');
 
     await client.deleteEntryRelation(userId, from.id, to.id, 'DEPENDS_ON');
-    const relations = await client.listEntryRelations(userId, from.id, 'outbound');
+    const relations = await client.listEntryRelations(userId, from.id, 'outbound', 100);
 
     expect(relations).toHaveLength(0);
   });
@@ -924,5 +924,492 @@ describe('Neo4jClient entry relations', () => {
 
     const related = await client.getRelatedEntries(userId, root.id);
     expect(related.length).toBe(20);
+  });
+});
+
+// ── listSharing with limit ────────────────────────────────────────────────────
+
+describe('Neo4jClient.listSharing limit and ordering', () => {
+  it('respects limit and orders by granted_at DESC', async () => {
+    const ownerId = 'user-sharing-limit-owner';
+    const created = await client.createResource({
+      userId: ownerId,
+      namespace: 'default',
+      entry_type: 'note',
+      title: 'Limit Sharing Test',
+      content: '',
+    });
+
+    // Share with multiple users in sequence so granted_at differs
+    for (let i = 0; i < 3; i++) {
+      await client.shareResource(created.id, `user-sharing-limit-viewer-${i}`, 'viewer');
+      await new Promise((r) => setTimeout(r, 5));
+    }
+
+    const allSharing = await client.listSharing(created.id, 100);
+    expect(allSharing.length).toBe(3);
+    // Ordered DESC: newest first
+    const dates = allSharing.map((s) => s.granted_at);
+    expect(dates[0]! >= dates[1]!).toBe(true);
+    expect(dates[1]! >= dates[2]!).toBe(true);
+
+    const limited = await client.listSharing(created.id, 2);
+    expect(limited.length).toBe(2);
+    // Should be the two most recently granted
+    expect(limited[0]!.granted_at >= limited[1]!.granted_at).toBe(true);
+  });
+});
+
+// ── listEntryRelations with limit ─────────────────────────────────────────────
+
+describe('Neo4jClient.listEntryRelations limit', () => {
+  it('respects limit parameter', async () => {
+    const userId = 'user-rel-limit-test';
+    const root = await client.createResource({
+      userId,
+      namespace: 'rel-limit-ns',
+      entry_type: 'note',
+      title: 'Root',
+      content: '',
+    });
+    for (let i = 0; i < 5; i++) {
+      const n = await client.createResource({
+        userId,
+        namespace: 'rel-limit-ns',
+        entry_type: 'note',
+        title: `N${i}`,
+        content: '',
+      });
+      await client.createEntryRelation(userId, root.id, n.id, 'CONNECTS_TO');
+    }
+
+    const limited = await client.listEntryRelations(userId, root.id, 'outbound', 3);
+    expect(limited.length).toBe(3);
+  });
+});
+
+// ── expandContext ─────────────────────────────────────────────────────────────
+
+describe('Neo4jClient.expandContext', () => {
+  it('returns one-hop outbound neighbors grouped in a single layer', async () => {
+    const userId = 'user-expand-outbound';
+    const anchor = await client.createResource({
+      userId,
+      namespace: 'expand-ns',
+      entry_type: 'note',
+      title: 'Anchor',
+      content: '',
+    });
+    const child1 = await client.createResource({
+      userId,
+      namespace: 'expand-ns',
+      entry_type: 'note',
+      title: 'Child1',
+      content: '',
+    });
+    const child2 = await client.createResource({
+      userId,
+      namespace: 'expand-ns',
+      entry_type: 'note',
+      title: 'Child2',
+      content: '',
+    });
+    await client.createEntryRelation(userId, anchor.id, child1.id, 'DEPENDS_ON');
+    await client.createEntryRelation(userId, anchor.id, child2.id, 'DEPENDS_ON');
+
+    const layers = await client.expandContext({
+      userId,
+      entryId: anchor.id,
+      direction: 'outbound',
+      maxHops: 2,
+      relationTypes: null,
+      limit: 50,
+    });
+
+    expect(layers.length).toBe(1);
+    expect(layers[0]!.distance).toBe(1);
+    const ids = layers[0]!.entries.map((e) => e.id);
+    expect(ids).toContain(child1.id);
+    expect(ids).toContain(child2.id);
+  });
+
+  it('groups multi-hop results by distance', async () => {
+    const userId = 'user-expand-multihop';
+    const ns = 'expand-multi-ns';
+    const a = await client.createResource({ userId, namespace: ns, entry_type: 'note', title: 'A', content: '' });
+    const b = await client.createResource({ userId, namespace: ns, entry_type: 'note', title: 'B', content: '' });
+    const c = await client.createResource({ userId, namespace: ns, entry_type: 'note', title: 'C', content: '' });
+
+    await client.createEntryRelation(userId, a.id, b.id, 'CONNECTS_TO');
+    await client.createEntryRelation(userId, b.id, c.id, 'CONNECTS_TO');
+
+    const layers = await client.expandContext({
+      userId,
+      entryId: a.id,
+      direction: 'outbound',
+      maxHops: 3,
+      relationTypes: null,
+      limit: 50,
+    });
+
+    const distances = layers.map((l) => l.distance);
+    expect(distances).toContain(1);
+    expect(distances).toContain(2);
+
+    const layer1 = layers.find((l) => l.distance === 1)!;
+    const layer2 = layers.find((l) => l.distance === 2)!;
+    expect(layer1.entries.map((e) => e.id)).toContain(b.id);
+    expect(layer2.entries.map((e) => e.id)).toContain(c.id);
+  });
+
+  it('filters to specified relation_types', async () => {
+    const userId = 'user-expand-reltype';
+    const ns = 'expand-reltype-ns';
+    const anchor = await client.createResource({ userId, namespace: ns, entry_type: 'note', title: 'Anchor', content: '' });
+    const depNode = await client.createResource({ userId, namespace: ns, entry_type: 'note', title: 'Dep', content: '' });
+    const refNode = await client.createResource({ userId, namespace: ns, entry_type: 'note', title: 'Ref', content: '' });
+
+    await client.createEntryRelation(userId, anchor.id, depNode.id, 'DEPENDS_ON');
+    await client.createEntryRelation(userId, anchor.id, refNode.id, 'REFERENCES');
+
+    const layers = await client.expandContext({
+      userId,
+      entryId: anchor.id,
+      direction: 'outbound',
+      maxHops: 2,
+      relationTypes: ['DEPENDS_ON'],
+      limit: 50,
+    });
+
+    const allIds = layers.flatMap((l) => l.entries.map((e) => e.id));
+    expect(allIds).toContain(depNode.id);
+    expect(allIds).not.toContain(refNode.id);
+  });
+
+  it('excludes inaccessible intermediate nodes from paths', async () => {
+    const ownerA = 'user-expand-access-owner-a';
+    const ownerB = 'user-expand-access-owner-b';
+    const ns = 'expand-access-ns';
+
+    const anchor = await client.createResource({ userId: ownerA, namespace: ns, entry_type: 'note', title: 'Anchor', content: '' });
+    const middle = await client.createResource({ userId: ownerB, namespace: ns, entry_type: 'note', title: 'Middle', content: '' });
+    const leaf = await client.createResource({ userId: ownerA, namespace: ns, entry_type: 'note', title: 'Leaf', content: '' });
+
+    // ownerB gets read access to anchor and leaf so it can create relations
+    await client.shareResource(anchor.id, ownerB, 'viewer');
+    await client.shareResource(leaf.id, ownerB, 'viewer');
+
+    // ownerB creates relations (has read access to all three in this namespace)
+    await client.createEntryRelation(ownerB, anchor.id, middle.id, 'CONNECTS_TO');
+    await client.createEntryRelation(ownerB, middle.id, leaf.id, 'CONNECTS_TO');
+
+    // ownerA cannot read middle (not shared), so path anchor→middle→leaf should be excluded
+    const layers = await client.expandContext({
+      userId: ownerA,
+      entryId: anchor.id,
+      direction: 'outbound',
+      maxHops: 3,
+      relationTypes: null,
+      limit: 50,
+    });
+
+    const allIds = layers.flatMap((l) => l.entries.map((e) => e.id));
+    expect(allIds).not.toContain(middle.id);
+    expect(allIds).not.toContain(leaf.id);
+  });
+
+  it('respects limit across all hops', async () => {
+    const userId = 'user-expand-limit';
+    const ns = 'expand-limit-ns';
+    const anchor = await client.createResource({ userId, namespace: ns, entry_type: 'note', title: 'Root', content: '' });
+    // Create 5 direct children
+    for (let i = 0; i < 5; i++) {
+      const child = await client.createResource({ userId, namespace: ns, entry_type: 'note', title: `Child${i}`, content: '' });
+      await client.createEntryRelation(userId, anchor.id, child.id, 'CONNECTS_TO');
+    }
+
+    const layers = await client.expandContext({
+      userId,
+      entryId: anchor.id,
+      direction: 'outbound',
+      maxHops: 2,
+      relationTypes: null,
+      limit: 3,
+    });
+
+    const totalNodes = layers.reduce((sum, l) => sum + l.entries.length, 0);
+    expect(totalNodes).toBe(3);
+  });
+
+  it('throws RESOURCE_NOT_FOUND for a non-existent entry', async () => {
+    await expect(
+      client.expandContext({
+        userId: 'user-expand-notfound',
+        entryId: '00000000-0000-0000-0000-000000000000',
+        direction: 'outbound',
+        maxHops: 2,
+        relationTypes: null,
+        limit: 50,
+      }),
+    ).rejects.toThrow('Resource not found');
+  });
+
+  it('throws INVALID_PARAMS for invalid relation_type', async () => {
+    const userId = 'user-expand-bad-reltype';
+    const entry = await client.createResource({ userId, namespace: 'default', entry_type: 'note', title: 'X', content: '' });
+
+    await expect(
+      client.expandContext({
+        userId,
+        entryId: entry.id,
+        direction: 'outbound',
+        maxHops: 2,
+        relationTypes: ['invalid-type'],
+        limit: 50,
+      }),
+    ).rejects.toThrow('UPPER_SNAKE_CASE');
+  });
+});
+
+// ── findPaths ─────────────────────────────────────────────────────────────────
+
+describe('Neo4jClient.findPaths', () => {
+  it('finds a direct one-hop path between two connected entries', async () => {
+    const userId = 'user-paths-direct';
+    const ns = 'paths-direct-ns';
+    const from = await client.createResource({ userId, namespace: ns, entry_type: 'note', title: 'From', content: '' });
+    const to = await client.createResource({ userId, namespace: ns, entry_type: 'note', title: 'To', content: '' });
+    await client.createEntryRelation(userId, from.id, to.id, 'CONNECTS_TO');
+
+    const paths = await client.findPaths({
+      userId,
+      fromId: from.id,
+      toId: to.id,
+      maxDepth: 4,
+      maxPaths: 5,
+      relationTypes: null,
+    });
+
+    expect(paths.length).toBe(1);
+    const path = paths[0]!;
+    expect(path.nodes[0]!.id).toBe(from.id);
+    expect(path.nodes[path.nodes.length - 1]!.id).toBe(to.id);
+    expect(path.relations[0]!.relation_type).toBe('CONNECTS_TO');
+  });
+
+  it('returns empty array when no path exists', async () => {
+    const userId = 'user-paths-none';
+    const ns = 'paths-none-ns';
+    const a = await client.createResource({ userId, namespace: ns, entry_type: 'note', title: 'A', content: '' });
+    const b = await client.createResource({ userId, namespace: ns, entry_type: 'note', title: 'B', content: '' });
+
+    const paths = await client.findPaths({
+      userId,
+      fromId: a.id,
+      toId: b.id,
+      maxDepth: 4,
+      maxPaths: 5,
+      relationTypes: null,
+    });
+
+    expect(paths).toHaveLength(0);
+  });
+
+  it('omits paths containing inaccessible intermediate nodes', async () => {
+    const ownerA = 'user-paths-access-a';
+    const ownerB = 'user-paths-access-b';
+    const ns = 'paths-access-ns';
+
+    const start = await client.createResource({ userId: ownerA, namespace: ns, entry_type: 'note', title: 'Start', content: '' });
+    const middle = await client.createResource({ userId: ownerB, namespace: ns, entry_type: 'note', title: 'Middle', content: '' });
+    const end = await client.createResource({ userId: ownerA, namespace: ns, entry_type: 'note', title: 'End', content: '' });
+
+    // Give ownerB read access to start and end so it can create relations through all nodes
+    await client.shareResource(start.id, ownerB, 'viewer');
+    await client.shareResource(end.id, ownerB, 'viewer');
+
+    // ownerB creates the relations (has access to all three nodes)
+    await client.createEntryRelation(ownerB, start.id, middle.id, 'CONNECTS_TO');
+    await client.createEntryRelation(ownerB, middle.id, end.id, 'CONNECTS_TO');
+
+    // ownerA cannot read middle — path start→middle→end should be excluded
+    const paths = await client.findPaths({
+      userId: ownerA,
+      fromId: start.id,
+      toId: end.id,
+      maxDepth: 4,
+      maxPaths: 5,
+      relationTypes: null,
+    });
+
+    expect(paths).toHaveLength(0);
+  });
+
+  it('throws INVALID_PARAMS when from_id equals to_id', async () => {
+    const userId = 'user-paths-self';
+    const entry = await client.createResource({ userId, namespace: 'default', entry_type: 'note', title: 'S', content: '' });
+
+    await expect(
+      client.findPaths({ userId, fromId: entry.id, toId: entry.id, maxDepth: 4, maxPaths: 5, relationTypes: null }),
+    ).rejects.toThrow('from_id and to_id must be different');
+  });
+
+  it('throws INVALID_PARAMS for cross-namespace entries', async () => {
+    const userId = 'user-paths-cross-ns';
+    const a = await client.createResource({ userId, namespace: 'paths-ns-x', entry_type: 'note', title: 'A', content: '' });
+    const b = await client.createResource({ userId, namespace: 'paths-ns-y', entry_type: 'note', title: 'B', content: '' });
+
+    await expect(
+      client.findPaths({ userId, fromId: a.id, toId: b.id, maxDepth: 4, maxPaths: 5, relationTypes: null }),
+    ).rejects.toThrow('same namespace');
+  });
+
+  it('respects max_paths limit', async () => {
+    const userId = 'user-paths-maxpaths';
+    const ns = 'paths-max-ns';
+    const start = await client.createResource({ userId, namespace: ns, entry_type: 'note', title: 'Start', content: '' });
+    const mid1 = await client.createResource({ userId, namespace: ns, entry_type: 'note', title: 'Mid1', content: '' });
+    const mid2 = await client.createResource({ userId, namespace: ns, entry_type: 'note', title: 'Mid2', content: '' });
+    const end = await client.createResource({ userId, namespace: ns, entry_type: 'note', title: 'End', content: '' });
+
+    await client.createEntryRelation(userId, start.id, mid1.id, 'CONNECTS_TO');
+    await client.createEntryRelation(userId, start.id, mid2.id, 'CONNECTS_TO');
+    await client.createEntryRelation(userId, mid1.id, end.id, 'CONNECTS_TO');
+    await client.createEntryRelation(userId, mid2.id, end.id, 'CONNECTS_TO');
+
+    const paths = await client.findPaths({
+      userId,
+      fromId: start.id,
+      toId: end.id,
+      maxDepth: 4,
+      maxPaths: 1,
+      relationTypes: null,
+    });
+
+    expect(paths.length).toBe(1);
+  });
+});
+
+// ── impactAnalysis ────────────────────────────────────────────────────────────
+
+describe('Neo4jClient.impactAnalysis', () => {
+  it('finds entries that directly reference the anchor (distance 1)', async () => {
+    const userId = 'user-impact-direct';
+    const ns = 'impact-direct-ns';
+    const anchor = await client.createResource({ userId, namespace: ns, entry_type: 'note', title: 'Anchor', content: '' });
+    const dependent = await client.createResource({ userId, namespace: ns, entry_type: 'note', title: 'Dependent', content: '' });
+    await client.createEntryRelation(userId, dependent.id, anchor.id, 'DEPENDS_ON');
+
+    const result = await client.impactAnalysis({
+      userId,
+      entryId: anchor.id,
+      maxDepth: 4,
+      relationTypes: null,
+      limit: 50,
+    });
+
+    expect(result.layers.length).toBeGreaterThanOrEqual(1);
+    const layer1 = result.layers.find((l) => l.distance === 1)!;
+    expect(layer1).toBeDefined();
+    expect(layer1.entries.map((e) => e.id)).toContain(dependent.id);
+    expect(result.total_impacted).toBeGreaterThanOrEqual(1);
+  });
+
+  it('groups impacted entries by distance', async () => {
+    const userId = 'user-impact-layers';
+    const ns = 'impact-layers-ns';
+    const anchor = await client.createResource({ userId, namespace: ns, entry_type: 'note', title: 'Anchor', content: '' });
+    const direct = await client.createResource({ userId, namespace: ns, entry_type: 'note', title: 'Direct', content: '' });
+    const indirect = await client.createResource({ userId, namespace: ns, entry_type: 'note', title: 'Indirect', content: '' });
+
+    await client.createEntryRelation(userId, direct.id, anchor.id, 'DEPENDS_ON');
+    await client.createEntryRelation(userId, indirect.id, direct.id, 'DEPENDS_ON');
+
+    const result = await client.impactAnalysis({
+      userId,
+      entryId: anchor.id,
+      maxDepth: 4,
+      relationTypes: null,
+      limit: 50,
+    });
+
+    const distances = result.layers.map((l) => l.distance);
+    expect(distances).toContain(1);
+    expect(distances).toContain(2);
+
+    const layer2 = result.layers.find((l) => l.distance === 2)!;
+    expect(layer2.entries.map((e) => e.id)).toContain(indirect.id);
+
+    expect(result.total_impacted).toBe(
+      result.layers.reduce((sum, l) => sum + l.entries.length, 0),
+    );
+  });
+
+  it('total_impacted matches the count of unique returned entries (may be truncated by limit)', async () => {
+    const userId = 'user-impact-total';
+    const ns = 'impact-total-ns';
+    const anchor = await client.createResource({ userId, namespace: ns, entry_type: 'note', title: 'Anchor', content: '' });
+    for (let i = 0; i < 5; i++) {
+      const dep = await client.createResource({ userId, namespace: ns, entry_type: 'note', title: `Dep${i}`, content: '' });
+      await client.createEntryRelation(userId, dep.id, anchor.id, 'DEPENDS_ON');
+    }
+
+    const result = await client.impactAnalysis({
+      userId,
+      entryId: anchor.id,
+      maxDepth: 2,
+      relationTypes: null,
+      limit: 3,
+    });
+
+    expect(result.total_impacted).toBe(
+      result.layers.reduce((sum, l) => sum + l.entries.length, 0),
+    );
+    expect(result.total_impacted).toBe(3);
+  });
+
+  it('throws RESOURCE_NOT_FOUND for a non-existent entry', async () => {
+    await expect(
+      client.impactAnalysis({
+        userId: 'user-impact-notfound',
+        entryId: '00000000-0000-0000-0000-000000000000',
+        maxDepth: 4,
+        relationTypes: null,
+        limit: 50,
+      }),
+    ).rejects.toThrow('Resource not found');
+  });
+
+  it('excludes inaccessible nodes from impact paths', async () => {
+    const ownerA = 'user-impact-access-a';
+    const ownerB = 'user-impact-access-b';
+    const ns = 'impact-access-ns';
+
+    const anchor = await client.createResource({ userId: ownerA, namespace: ns, entry_type: 'note', title: 'Anchor', content: '' });
+    // middle and top are owned by ownerB and not shared with ownerA
+    const middle = await client.createResource({ userId: ownerB, namespace: ns, entry_type: 'note', title: 'Middle', content: '' });
+    const top = await client.createResource({ userId: ownerB, namespace: ns, entry_type: 'note', title: 'Top', content: '' });
+
+    // ownerB gets read access to anchor to create relations
+    await client.shareResource(anchor.id, ownerB, 'viewer');
+
+    // ownerB creates relations: top→middle→anchor (all owned/accessible by ownerB)
+    await client.createEntryRelation(ownerB, middle.id, anchor.id, 'DEPENDS_ON');
+    await client.createEntryRelation(ownerB, top.id, middle.id, 'DEPENDS_ON');
+
+    // ownerA can see anchor (owns it) but cannot see middle or top (not shared)
+    // So the path top→middle→anchor has inaccessible nodes for ownerA → excluded
+    const result = await client.impactAnalysis({
+      userId: ownerA,
+      entryId: anchor.id,
+      maxDepth: 4,
+      relationTypes: null,
+      limit: 50,
+    });
+
+    const allIds = result.layers.flatMap((l) => l.entries.map((e) => e.id));
+    expect(allIds).not.toContain(middle.id);
+    expect(allIds).not.toContain(top.id);
+    expect(result.total_impacted).toBe(0);
   });
 });

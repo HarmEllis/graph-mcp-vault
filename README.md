@@ -298,11 +298,13 @@ filtered to counterpart entries the caller can read.
 ```json
 {
   "entry_id": "<uuid>",
-  "direction": "both"
+  "direction": "both",
+  "limit": 100
 }
 ```
 
 `direction` is `"outbound"` (entry → other), `"inbound"` (other → entry), or `"both"` (default).
+`limit` defaults to 100; max 500. Values above the cap are rejected with `INVALID_PARAMS`.
 
 Returns:
 ```json
@@ -317,6 +319,111 @@ Returns:
   ]
 }
 ```
+
+---
+
+#### `knowledge_expand_context`
+
+Traverse the entry-relation graph outward from an anchor entry and return all reachable
+entries grouped by hop distance. Only entries the caller can read are included; paths
+through inaccessible nodes are excluded.
+
+```json
+{
+  "entry_id": "<uuid>",
+  "direction": "both",
+  "max_hops": 3,
+  "relation_types": ["DEPENDS_ON"],
+  "limit": 50
+}
+```
+
+| Parameter | Default | Max | Notes |
+|-----------|---------|-----|-------|
+| `direction` | `"both"` | — | `"outbound"`, `"inbound"`, or `"both"` |
+| `max_hops` | 3 | **4** | Rejected above cap |
+| `limit` | 50 | **200** | Total nodes across all hops; rejected above cap |
+| `relation_types` | all | — | Array of `UPPER_SNAKE_CASE` strings |
+
+Returns:
+```json
+{
+  "layers": [
+    { "distance": 1, "entries": [{ "id": "<uuid>", "title": "..." }] },
+    { "distance": 2, "entries": [{ "id": "<uuid>", "title": "..." }] }
+  ]
+}
+```
+
+---
+
+#### `knowledge_find_paths`
+
+Find all directed paths between two entries via entry-relation edges. Only paths where
+every node is readable by the caller are returned. Both entries must be in the same namespace.
+
+```json
+{
+  "from_id": "<uuid>",
+  "to_id": "<uuid>",
+  "max_depth": 4,
+  "max_paths": 5,
+  "relation_types": ["DEPENDS_ON"]
+}
+```
+
+| Parameter | Default | Max | Notes |
+|-----------|---------|-----|-------|
+| `max_depth` | 4 | **6** | Rejected above cap |
+| `max_paths` | 5 | **10** | Rejected above cap |
+| `relation_types` | all | — | Array of `UPPER_SNAKE_CASE` strings |
+
+Returns:
+```json
+{
+  "paths": [
+    {
+      "nodes": [{ "id": "<uuid>", "title": "..." }, ...],
+      "relations": [{ "relation_type": "DEPENDS_ON", "label": "..." }, ...]
+    }
+  ]
+}
+```
+
+---
+
+#### `knowledge_impact_analysis`
+
+Find all entries that transitively depend on (point to) the anchor entry, grouped by
+hop distance. Answers "what would be affected if this entry changes?". Only readable
+entries are included; paths through inaccessible nodes are excluded.
+
+```json
+{
+  "entry_id": "<uuid>",
+  "max_depth": 4,
+  "relation_types": ["DEPENDS_ON"],
+  "limit": 50
+}
+```
+
+| Parameter | Default | Max | Notes |
+|-----------|---------|-----|-------|
+| `max_depth` | 4 | **6** | Rejected above cap |
+| `limit` | 50 | **200** | Total entries across all layers; rejected above cap |
+| `relation_types` | all | — | Array of `UPPER_SNAKE_CASE` strings |
+
+Returns:
+```json
+{
+  "layers": [
+    { "distance": 1, "entries": [{ "id": "<uuid>", "title": "..." }] }
+  ],
+  "total_impacted": 3
+}
+```
+
+`total_impacted` is the count of unique entries in the returned set (may be truncated by `limit`).
 
 ---
 
@@ -356,11 +463,14 @@ Returns `{}`.
 
 #### `knowledge_list_access`
 
-List all users with access to a knowledge entry. Requires read access.
+List all users with access to a knowledge entry. Requires read access. Results are
+ordered by grant date (most recent first).
 
 ```json
-{ "entry_id": "<uuid>" }
+{ "entry_id": "<uuid>", "limit": 100 }
 ```
+
+`limit` defaults to 100; max 500. Values above the cap are rejected with `INVALID_PARAMS`.
 
 Returns `{ "sharing": [{ "user_id", "role", "granted_at" }] }`.
 

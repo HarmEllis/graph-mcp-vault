@@ -1110,3 +1110,417 @@ describe('full lifecycle', () => {
     expect(parseToolError(gb3)['code']).toBe(ErrorCode.RESOURCE_NOT_FOUND);
   });
 });
+
+// ── above-cap parameter rejection ────────────────────────────────────────────
+
+describe('above-cap parameter rejection', () => {
+  it('knowledge_expand_context: max_hops above cap returns INVALID_PARAMS', async () => {
+    const sub = uniqueUser('cap-hops');
+    const sid = await openSession(sub, 'cap-ns');
+    const entryId = await createEntry(sub, sid, { title: 'Anchor' });
+
+    const { body } = await callTool(
+      'knowledge_expand_context',
+      { entry_id: entryId, max_hops: 5 }, // cap is 4
+      sub,
+      sid,
+    );
+    expect(parseToolError(body)['code']).toBe(ErrorCode.INVALID_PARAMS);
+  });
+
+  it('knowledge_expand_context: limit above cap returns INVALID_PARAMS', async () => {
+    const sub = uniqueUser('cap-expand-limit');
+    const sid = await openSession(sub, 'cap-ns');
+    const entryId = await createEntry(sub, sid, { title: 'Anchor' });
+
+    const { body } = await callTool(
+      'knowledge_expand_context',
+      { entry_id: entryId, limit: 201 }, // cap is 200
+      sub,
+      sid,
+    );
+    expect(parseToolError(body)['code']).toBe(ErrorCode.INVALID_PARAMS);
+  });
+
+  it('knowledge_find_paths: max_depth above cap returns INVALID_PARAMS', async () => {
+    const sub = uniqueUser('cap-depth');
+    const sid = await openSession(sub, 'cap-ns');
+    const fromId = await createEntry(sub, sid, { title: 'From' });
+    const toId = await createEntry(sub, sid, { title: 'To' });
+
+    const { body } = await callTool(
+      'knowledge_find_paths',
+      { from_id: fromId, to_id: toId, max_depth: 7 }, // cap is 6
+      sub,
+      sid,
+    );
+    expect(parseToolError(body)['code']).toBe(ErrorCode.INVALID_PARAMS);
+  });
+
+  it('knowledge_find_paths: max_paths above cap returns INVALID_PARAMS', async () => {
+    const sub = uniqueUser('cap-paths');
+    const sid = await openSession(sub, 'cap-ns');
+    const fromId = await createEntry(sub, sid, { title: 'From' });
+    const toId = await createEntry(sub, sid, { title: 'To' });
+
+    const { body } = await callTool(
+      'knowledge_find_paths',
+      { from_id: fromId, to_id: toId, max_paths: 11 }, // cap is 10
+      sub,
+      sid,
+    );
+    expect(parseToolError(body)['code']).toBe(ErrorCode.INVALID_PARAMS);
+  });
+
+  it('knowledge_impact_analysis: max_depth above cap returns INVALID_PARAMS', async () => {
+    const sub = uniqueUser('cap-impact-depth');
+    const sid = await openSession(sub, 'cap-ns');
+    const entryId = await createEntry(sub, sid, { title: 'Anchor' });
+
+    const { body } = await callTool(
+      'knowledge_impact_analysis',
+      { entry_id: entryId, max_depth: 7 }, // cap is 6
+      sub,
+      sid,
+    );
+    expect(parseToolError(body)['code']).toBe(ErrorCode.INVALID_PARAMS);
+  });
+
+  it('knowledge_impact_analysis: limit above cap returns INVALID_PARAMS', async () => {
+    const sub = uniqueUser('cap-impact-limit');
+    const sid = await openSession(sub, 'cap-ns');
+    const entryId = await createEntry(sub, sid, { title: 'Anchor' });
+
+    const { body } = await callTool(
+      'knowledge_impact_analysis',
+      { entry_id: entryId, limit: 201 }, // cap is 200
+      sub,
+      sid,
+    );
+    expect(parseToolError(body)['code']).toBe(ErrorCode.INVALID_PARAMS);
+  });
+
+  it('knowledge_list_relations: limit above cap returns INVALID_PARAMS', async () => {
+    const sub = uniqueUser('cap-rel-limit');
+    const sid = await openSession(sub, 'cap-ns');
+    const entryId = await createEntry(sub, sid, { title: 'Anchor' });
+
+    const { body } = await callTool(
+      'knowledge_list_relations',
+      { entry_id: entryId, limit: 501 }, // cap is 500
+      sub,
+      sid,
+    );
+    expect(parseToolError(body)['code']).toBe(ErrorCode.INVALID_PARAMS);
+  });
+});
+
+// ── knowledge_list_relations limit ───────────────────────────────────────────
+
+describe('knowledge_list_relations with limit', () => {
+  it('respects limit parameter', async () => {
+    const sub = uniqueUser('list-rel-limit');
+    const sid = await openSession(sub, 'list-rel-limit-ns');
+    const anchorId = await createEntry(sub, sid, { title: 'Anchor' });
+
+    for (let i = 0; i < 4; i++) {
+      const nId = await createEntry(sub, sid, { title: `Node${i}` });
+      await callTool(
+        'knowledge_create_relation',
+        { from_id: anchorId, to_id: nId, relation_type: 'CONNECTS_TO' },
+        sub,
+        sid,
+      );
+    }
+
+    const { body } = await callTool(
+      'knowledge_list_relations',
+      { entry_id: anchorId, direction: 'outbound', limit: 2 },
+      sub,
+      sid,
+    );
+    const relations = parseToolSuccess(body)['relations'] as unknown[];
+    expect(relations).toHaveLength(2);
+  });
+});
+
+
+// ── knowledge_expand_context ──────────────────────────────────────────────────
+
+describe('knowledge_expand_context', () => {
+  it('returns RESOURCE_NOT_FOUND for a non-existent entry', async () => {
+    const sub = uniqueUser('expand-notfound');
+    const sid = await openSession(sub);
+
+    const { body } = await callTool(
+      'knowledge_expand_context',
+      { entry_id: '00000000-0000-0000-0000-000000000000' },
+      sub,
+      sid,
+    );
+    expect(parseToolError(body)['code']).toBe(ErrorCode.RESOURCE_NOT_FOUND);
+  });
+
+  it('returns INVALID_PARAMS for invalid relation_type in relation_types', async () => {
+    const sub = uniqueUser('expand-bad-reltype');
+    const sid = await openSession(sub, 'expand-bad-ns');
+    const entryId = await createEntry(sub, sid, { title: 'Anchor' });
+
+    const { body } = await callTool(
+      'knowledge_expand_context',
+      { entry_id: entryId, relation_types: ['invalid-type'] },
+      sub,
+      sid,
+    );
+    expect(parseToolError(body)['code']).toBe(ErrorCode.INVALID_PARAMS);
+  });
+
+  it('returns layers with distance and entries for connected nodes', async () => {
+    const sub = uniqueUser('expand-layers');
+    const sid = await openSession(sub, 'expand-layers-ns');
+    const anchorId = await createEntry(sub, sid, { title: 'Anchor' });
+    const childId = await createEntry(sub, sid, { title: 'Child' });
+
+    await callTool(
+      'knowledge_create_relation',
+      { from_id: anchorId, to_id: childId, relation_type: 'DEPENDS_ON' },
+      sub,
+      sid,
+    );
+
+    const { status, body } = await callTool(
+      'knowledge_expand_context',
+      { entry_id: anchorId, direction: 'outbound' },
+      sub,
+      sid,
+    );
+    expect(status).toBe(200);
+    const data = parseToolSuccess(body);
+    const layers = data['layers'] as Array<{ distance: number; entries: Array<{ id: string; title: string }> }>;
+    expect(layers.length).toBeGreaterThanOrEqual(1);
+    const layer1 = layers.find((l) => l.distance === 1);
+    expect(layer1).toBeDefined();
+    expect(layer1!.entries.some((e) => e.id === childId)).toBe(true);
+  });
+
+  it('filters by relation_types', async () => {
+    const sub = uniqueUser('expand-rel-filter');
+    const sid = await openSession(sub, 'expand-relfilter-ns');
+    const anchorId = await createEntry(sub, sid, { title: 'Anchor' });
+    const depId = await createEntry(sub, sid, { title: 'Dep' });
+    const refId = await createEntry(sub, sid, { title: 'Ref' });
+
+    await callTool(
+      'knowledge_create_relation',
+      { from_id: anchorId, to_id: depId, relation_type: 'DEPENDS_ON' },
+      sub,
+      sid,
+    );
+    await callTool(
+      'knowledge_create_relation',
+      { from_id: anchorId, to_id: refId, relation_type: 'REFERENCES' },
+      sub,
+      sid,
+    );
+
+    const { body } = await callTool(
+      'knowledge_expand_context',
+      { entry_id: anchorId, direction: 'outbound', relation_types: ['DEPENDS_ON'] },
+      sub,
+      sid,
+    );
+    const layers = parseToolSuccess(body)['layers'] as Array<{ distance: number; entries: Array<{ id: string }> }>;
+    const allIds = layers.flatMap((l) => l.entries.map((e) => e.id));
+    expect(allIds).toContain(depId);
+    expect(allIds).not.toContain(refId);
+  });
+
+  it('returns empty layers for isolated entry', async () => {
+    const sub = uniqueUser('expand-isolated');
+    const sid = await openSession(sub, 'expand-isolated-ns');
+    const entryId = await createEntry(sub, sid, { title: 'Isolated' });
+
+    const { body } = await callTool(
+      'knowledge_expand_context',
+      { entry_id: entryId },
+      sub,
+      sid,
+    );
+    const layers = parseToolSuccess(body)['layers'] as unknown[];
+    expect(layers).toHaveLength(0);
+  });
+});
+
+// ── knowledge_find_paths ──────────────────────────────────────────────────────
+
+describe('knowledge_find_paths', () => {
+  it('returns INVALID_PARAMS when from_id equals to_id', async () => {
+    const sub = uniqueUser('paths-self');
+    const sid = await openSession(sub, 'paths-self-ns');
+    const entryId = await createEntry(sub, sid, { title: 'Self' });
+
+    const { body } = await callTool(
+      'knowledge_find_paths',
+      { from_id: entryId, to_id: entryId },
+      sub,
+      sid,
+    );
+    expect(parseToolError(body)['code']).toBe(ErrorCode.INVALID_PARAMS);
+  });
+
+  it('returns RESOURCE_NOT_FOUND when an entry does not exist', async () => {
+    const sub = uniqueUser('paths-notfound');
+    const sid = await openSession(sub, 'paths-notfound-ns');
+    const entryId = await createEntry(sub, sid, { title: 'Exists' });
+
+    const { body } = await callTool(
+      'knowledge_find_paths',
+      { from_id: entryId, to_id: '00000000-0000-0000-0000-000000000000' },
+      sub,
+      sid,
+    );
+    expect(parseToolError(body)['code']).toBe(ErrorCode.RESOURCE_NOT_FOUND);
+  });
+
+  it('returns paths with nodes and relations for a connected pair', async () => {
+    const sub = uniqueUser('paths-found');
+    const sid = await openSession(sub, 'paths-found-ns');
+    const fromId = await createEntry(sub, sid, { title: 'From' });
+    const toId = await createEntry(sub, sid, { title: 'To' });
+
+    await callTool(
+      'knowledge_create_relation',
+      { from_id: fromId, to_id: toId, relation_type: 'DEPENDS_ON', label: 'hard dep' },
+      sub,
+      sid,
+    );
+
+    const { status, body } = await callTool(
+      'knowledge_find_paths',
+      { from_id: fromId, to_id: toId },
+      sub,
+      sid,
+    );
+    expect(status).toBe(200);
+    const data = parseToolSuccess(body);
+    const paths = data['paths'] as Array<{
+      nodes: Array<{ id: string; title: string }>;
+      relations: Array<{ relation_type: string; label?: string }>;
+    }>;
+    expect(paths.length).toBeGreaterThanOrEqual(1);
+    const path = paths[0]!;
+    expect(path.nodes[0]!.id).toBe(fromId);
+    expect(path.nodes[path.nodes.length - 1]!.id).toBe(toId);
+    expect(path.relations[0]!.relation_type).toBe('DEPENDS_ON');
+    expect(path.relations[0]!.label).toBe('hard dep');
+  });
+
+  it('returns empty paths array when no directed path exists', async () => {
+    const sub = uniqueUser('paths-none-tool');
+    const sid = await openSession(sub, 'paths-none-ns');
+    const fromId = await createEntry(sub, sid, { title: 'A' });
+    const toId = await createEntry(sub, sid, { title: 'B' });
+
+    const { body } = await callTool(
+      'knowledge_find_paths',
+      { from_id: fromId, to_id: toId },
+      sub,
+      sid,
+    );
+    const paths = parseToolSuccess(body)['paths'] as unknown[];
+    expect(paths).toHaveLength(0);
+  });
+
+  it('returns INVALID_PARAMS for invalid relation_type in relation_types', async () => {
+    const sub = uniqueUser('paths-bad-reltype');
+    const sid = await openSession(sub, 'paths-bad-ns');
+    const fromId = await createEntry(sub, sid, { title: 'From' });
+    const toId = await createEntry(sub, sid, { title: 'To' });
+
+    const { body } = await callTool(
+      'knowledge_find_paths',
+      { from_id: fromId, to_id: toId, relation_types: ['bad-type'] },
+      sub,
+      sid,
+    );
+    expect(parseToolError(body)['code']).toBe(ErrorCode.INVALID_PARAMS);
+  });
+});
+
+// ── knowledge_impact_analysis ─────────────────────────────────────────────────
+
+describe('knowledge_impact_analysis', () => {
+  it('returns RESOURCE_NOT_FOUND for a non-existent entry', async () => {
+    const sub = uniqueUser('impact-notfound');
+    const sid = await openSession(sub);
+
+    const { body } = await callTool(
+      'knowledge_impact_analysis',
+      { entry_id: '00000000-0000-0000-0000-000000000000' },
+      sub,
+      sid,
+    );
+    expect(parseToolError(body)['code']).toBe(ErrorCode.RESOURCE_NOT_FOUND);
+  });
+
+  it('returns layers and total_impacted for dependent entries', async () => {
+    const sub = uniqueUser('impact-basic');
+    const sid = await openSession(sub, 'impact-basic-ns');
+    const anchorId = await createEntry(sub, sid, { title: 'Anchor' });
+    const depId = await createEntry(sub, sid, { title: 'Dependent' });
+
+    await callTool(
+      'knowledge_create_relation',
+      { from_id: depId, to_id: anchorId, relation_type: 'DEPENDS_ON' },
+      sub,
+      sid,
+    );
+
+    const { status, body } = await callTool(
+      'knowledge_impact_analysis',
+      { entry_id: anchorId },
+      sub,
+      sid,
+    );
+    expect(status).toBe(200);
+    const data = parseToolSuccess(body);
+    const layers = data['layers'] as Array<{ distance: number; entries: Array<{ id: string }> }>;
+    const totalImpacted = data['total_impacted'] as number;
+
+    expect(layers.length).toBeGreaterThanOrEqual(1);
+    const layer1 = layers.find((l) => l.distance === 1)!;
+    expect(layer1.entries.some((e) => e.id === depId)).toBe(true);
+    expect(totalImpacted).toBeGreaterThanOrEqual(1);
+    expect(totalImpacted).toBe(layers.reduce((sum, l) => sum + l.entries.length, 0));
+  });
+
+  it('returns empty layers and total_impacted 0 for an isolated entry', async () => {
+    const sub = uniqueUser('impact-isolated');
+    const sid = await openSession(sub, 'impact-isolated-ns');
+    const entryId = await createEntry(sub, sid, { title: 'Isolated' });
+
+    const { body } = await callTool(
+      'knowledge_impact_analysis',
+      { entry_id: entryId },
+      sub,
+      sid,
+    );
+    const data = parseToolSuccess(body);
+    expect(data['layers']).toHaveLength(0);
+    expect(data['total_impacted']).toBe(0);
+  });
+
+  it('returns INVALID_PARAMS for invalid relation_type in relation_types', async () => {
+    const sub = uniqueUser('impact-bad-reltype');
+    const sid = await openSession(sub, 'impact-bad-ns');
+    const entryId = await createEntry(sub, sid, { title: 'Entry' });
+
+    const { body } = await callTool(
+      'knowledge_impact_analysis',
+      { entry_id: entryId, relation_types: ['bad-type'] },
+      sub,
+      sid,
+    );
+    expect(parseToolError(body)['code']).toBe(ErrorCode.INVALID_PARAMS);
+  });
+});

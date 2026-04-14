@@ -51,6 +51,16 @@ export interface EntryRelation {
 export const ENTRY_RELATION_TYPE_REGEX = /^[A-Z][A-Z0-9_]{1,63}$/;
 export type Neo4jClientErrorCode = 'INVALID_PARAMS' | 'RESOURCE_NOT_FOUND' | 'PERMISSION_DENIED';
 
+export interface ExpandContextLayer {
+  distance: number;
+  entries: Array<{ id: string; title: string }>;
+}
+
+export interface PathResult {
+  nodes: Array<{ id: string; title: string }>;
+  relations: Array<{ relation_type: string; label?: string }>;
+}
+
 export class Neo4jClientError extends Error {
   constructor(
     public readonly code: Neo4jClientErrorCode,
@@ -515,17 +525,21 @@ export class Neo4jClient {
   }
 
   /**
-   * Returns all HAS_ACCESS grants on the resource (does not include the owner).
+   * Returns HAS_ACCESS grants on the resource (does not include the owner).
+   * Results are ordered by granted_at DESC for determinism. An optional limit
+   * caps the number of entries returned.
    */
-  async listSharing(resourceId: string): Promise<SharingEntry[]> {
+  async listSharing(resourceId: string, limit: number): Promise<SharingEntry[]> {
     const session = this.driver.session();
     try {
       const result = await session.run(
         `
         MATCH (u:User)-[acc:HAS_ACCESS]->(r:Resource {id: $resourceId})
         RETURN u.id AS user_id, acc.role AS role, acc.granted_at AS granted_at
+        ORDER BY acc.granted_at DESC
+        LIMIT $limit
         `,
-        { resourceId },
+        { resourceId, limit: neo4j.int(limit) },
       );
       return result.records.map((record) => ({
         user_id: record.get('user_id') as string,
@@ -641,6 +655,7 @@ export class Neo4jClient {
     userId: string,
     entryId: string,
     direction: EntryRelationDirection,
+    limit: number,
   ): Promise<EntryRelation[]> {
     const entry = await this.getResource(entryId);
     if (!entry) {
@@ -660,6 +675,7 @@ export class Neo4jClient {
           WHERE EXISTS { MATCH (:User {id: $userId})-[:OWNS|HAS_ACCESS]->(other) }
           RETURN 'outbound' AS direction, r.relation_type AS relation_type, r.label AS label, other.id AS entry_id, other.title AS entry_title
           ORDER BY relation_type, entry_title
+          LIMIT $limit
         `;
       } else if (direction === 'inbound') {
         query = `
@@ -667,20 +683,26 @@ export class Neo4jClient {
           WHERE EXISTS { MATCH (:User {id: $userId})-[:OWNS|HAS_ACCESS]->(other) }
           RETURN 'inbound' AS direction, r.relation_type AS relation_type, r.label AS label, other.id AS entry_id, other.title AS entry_title
           ORDER BY relation_type, entry_title
+          LIMIT $limit
         `;
       } else {
         query = `
-          MATCH (base:Resource {id: $entryId})-[r:ENTRY_RELATION]->(otherOut:Resource)
-          WHERE EXISTS { MATCH (:User {id: $userId})-[:OWNS|HAS_ACCESS]->(otherOut) }
-          RETURN 'outbound' AS direction, r.relation_type AS relation_type, r.label AS label, otherOut.id AS entry_id, otherOut.title AS entry_title
-          UNION ALL
-          MATCH (otherIn:Resource)-[r:ENTRY_RELATION]->(base:Resource {id: $entryId})
-          WHERE EXISTS { MATCH (:User {id: $userId})-[:OWNS|HAS_ACCESS]->(otherIn) }
-          RETURN 'inbound' AS direction, r.relation_type AS relation_type, r.label AS label, otherIn.id AS entry_id, otherIn.title AS entry_title
+          CALL {
+            MATCH (base:Resource {id: $entryId})-[r:ENTRY_RELATION]->(otherOut:Resource)
+            WHERE EXISTS { MATCH (:User {id: $userId})-[:OWNS|HAS_ACCESS]->(otherOut) }
+            RETURN 'outbound' AS direction, r.relation_type AS relation_type, r.label AS label, otherOut.id AS entry_id, otherOut.title AS entry_title
+            UNION ALL
+            MATCH (otherIn:Resource)-[r:ENTRY_RELATION]->(base:Resource {id: $entryId})
+            WHERE EXISTS { MATCH (:User {id: $userId})-[:OWNS|HAS_ACCESS]->(otherIn) }
+            RETURN 'inbound' AS direction, r.relation_type AS relation_type, r.label AS label, otherIn.id AS entry_id, otherIn.title AS entry_title
+          }
+          RETURN direction, relation_type, label, entry_id, entry_title
+          ORDER BY relation_type, entry_title
+          LIMIT $limit
         `;
       }
 
-      const result = await session.run(query, { userId, entryId });
+      const result = await session.run(query, { userId, entryId, limit: neo4j.int(limit) });
       return result.records.map((record) => ({
         direction: record.get('direction') as 'outbound' | 'inbound',
         relation_type: record.get('relation_type') as string,
@@ -690,6 +712,236 @@ export class Neo4jClient {
           title: record.get('entry_title') as string,
         },
       }));
+    } finally {
+      await session.close();
+    }
+  }
+
+  // ── Graph traversal ─────────────────────────────────────────────────────────
+
+  /**
+   * Expands the neighborhood of `entryId` up to `maxHops` hops away.
+   *
+   * Only nodes the caller can read (OWNS|HAS_ACCESS) are traversed and returned.
+   * Paths that pass through inaccessible intermediate nodes are excluded.
+   * Results are grouped by minimum distance from the anchor entry.
+   * `limit` caps the total number of unique nodes returned across all hops.
+   */
+  async expandContext(params: {
+    userId: string;
+    entryId: string;
+    direction?: EntryRelationDirection;
+    maxHops: number;
+    relationTypes: string[] | null;
+    limit: number;
+  }): Promise<ExpandContextLayer[]> {
+    const entry = await this.getResource(params.entryId);
+    if (!entry) {
+      throw new Neo4jClientError('RESOURCE_NOT_FOUND', 'Resource not found');
+    }
+    const role = await this.getEffectiveRole(params.userId, params.entryId);
+    if (!Neo4jClient.hasReadPermission(role)) {
+      throw new Neo4jClientError('PERMISSION_DENIED', 'Permission denied');
+    }
+    if (params.relationTypes !== null) {
+      for (const rt of params.relationTypes) {
+        if (!ENTRY_RELATION_TYPE_REGEX.test(rt)) {
+          throw new Neo4jClientError('INVALID_PARAMS', `relation_type must be UPPER_SNAKE_CASE: ${rt}`);
+        }
+      }
+    }
+
+    const dir = params.direction ?? 'both';
+    // Neo4j does not allow parameters as range bounds in variable-length path
+    // patterns — embed the integer literal directly (safe: already capped).
+    const hopsLiteral = params.maxHops;
+    let pathPattern: string;
+    if (dir === 'outbound') {
+      pathPattern = `(start:Resource {id: $entryId})-[:ENTRY_RELATION*1..${hopsLiteral}]->(neighbor:Resource)`;
+    } else if (dir === 'inbound') {
+      pathPattern = `(neighbor:Resource)-[:ENTRY_RELATION*1..${hopsLiteral}]->(start:Resource {id: $entryId})`;
+    } else {
+      pathPattern = `(start:Resource {id: $entryId})-[:ENTRY_RELATION*1..${hopsLiteral}]-(neighbor:Resource)`;
+    }
+
+    const neighborFilter = dir === 'both' ? 'AND neighbor <> start' : '';
+
+    const query = `
+      MATCH path = ${pathPattern}
+      WHERE neighbor.namespace = start.namespace
+        ${neighborFilter}
+        AND ALL(n IN nodes(path) WHERE
+          n = start OR EXISTS { MATCH (:User {id: $userId})-[:OWNS|HAS_ACCESS]->(n) }
+        )
+        AND ($relTypes IS NULL OR ALL(r IN relationships(path) WHERE r.relation_type IN $relTypes))
+      WITH neighbor, min(length(path)) AS distance
+      ORDER BY distance, neighbor.id
+      LIMIT $limit
+      WITH distance, collect({ id: neighbor.id, title: neighbor.title }) AS entries
+      RETURN distance, entries
+      ORDER BY distance
+    `;
+
+    const session = this.driver.session();
+    try {
+      const result = await session.run(query, {
+        userId: params.userId,
+        entryId: params.entryId,
+        relTypes: params.relationTypes,
+        limit: neo4j.int(params.limit),
+      });
+      return result.records.map((record) => ({
+        distance: neo4j.integer.toNumber(record.get('distance')),
+        entries: record.get('entries') as Array<{ id: string; title: string }>,
+      }));
+    } finally {
+      await session.close();
+    }
+  }
+
+  /**
+   * Finds directed paths between two entries via ENTRY_RELATION edges.
+   *
+   * Only paths where every node is accessible to the caller are returned.
+   * Both entries must exist in the same namespace and the caller must have
+   * read access to both.
+   */
+  async findPaths(params: {
+    userId: string;
+    fromId: string;
+    toId: string;
+    maxDepth: number;
+    maxPaths: number;
+    relationTypes: string[] | null;
+  }): Promise<PathResult[]> {
+    if (params.fromId === params.toId) {
+      throw new Neo4jClientError('INVALID_PARAMS', 'from_id and to_id must be different');
+    }
+    if (params.relationTypes !== null) {
+      for (const rt of params.relationTypes) {
+        if (!ENTRY_RELATION_TYPE_REGEX.test(rt)) {
+          throw new Neo4jClientError('INVALID_PARAMS', `relation_type must be UPPER_SNAKE_CASE: ${rt}`);
+        }
+      }
+    }
+
+    const fromResource = await this.getResource(params.fromId);
+    const toResource = await this.getResource(params.toId);
+    if (!fromResource || !toResource) {
+      throw new Neo4jClientError('RESOURCE_NOT_FOUND', 'Resource not found');
+    }
+    if (fromResource.namespace !== toResource.namespace) {
+      throw new Neo4jClientError('INVALID_PARAMS', 'Entries must belong to the same namespace');
+    }
+
+    const fromRole = await this.getEffectiveRole(params.userId, params.fromId);
+    const toRole = await this.getEffectiveRole(params.userId, params.toId);
+    if (!Neo4jClient.hasReadPermission(fromRole) || !Neo4jClient.hasReadPermission(toRole)) {
+      throw new Neo4jClientError('PERMISSION_DENIED', 'Permission denied');
+    }
+
+    // Embed depth literal — Neo4j does not allow parameters in range bounds.
+    const depthLiteral = params.maxDepth;
+    const session = this.driver.session();
+    try {
+      const result = await session.run(
+        `
+        MATCH path = (fromNode:Resource {id: $fromId})-[:ENTRY_RELATION*1..${depthLiteral}]->(toNode:Resource {id: $toId})
+        WHERE ALL(n IN nodes(path) WHERE EXISTS { MATCH (:User {id: $userId})-[:OWNS|HAS_ACCESS]->(n) })
+          AND ($relTypes IS NULL OR ALL(r IN relationships(path) WHERE r.relation_type IN $relTypes))
+        WITH path LIMIT $maxPaths
+        RETURN
+          [n IN nodes(path) | { id: n.id, title: n.title }] AS pathNodes,
+          [r IN relationships(path) | { relation_type: r.relation_type, label: r.label }] AS pathRels
+        `,
+        {
+          userId: params.userId,
+          fromId: params.fromId,
+          toId: params.toId,
+          maxPaths: neo4j.int(params.maxPaths),
+          relTypes: params.relationTypes,
+        },
+      );
+      return result.records.map((record) => {
+        const rawNodes = record.get('pathNodes') as Array<{ id: string; title: string }>;
+        const rawRels = record.get('pathRels') as Array<{ relation_type: string; label: string | null }>;
+        return {
+          nodes: rawNodes,
+          relations: rawRels.map((r) => ({
+            relation_type: r.relation_type,
+            ...(r.label !== null ? { label: r.label } : {}),
+          })),
+        };
+      });
+    } finally {
+      await session.close();
+    }
+  }
+
+  /**
+   * Finds all entries that transitively reference (point to) `entryId` via
+   * outbound ENTRY_RELATION edges, up to `maxDepth` hops away (inbound traversal
+   * from the anchor's perspective).
+   *
+   * Only accessible nodes are included; paths through inaccessible nodes are
+   * excluded. Results are grouped by hop distance from the anchor entry.
+   * `limit` caps the total number of unique impacted entries returned.
+   */
+  async impactAnalysis(params: {
+    userId: string;
+    entryId: string;
+    maxDepth: number;
+    relationTypes: string[] | null;
+    limit: number;
+  }): Promise<{ layers: ExpandContextLayer[]; total_impacted: number }> {
+    const entry = await this.getResource(params.entryId);
+    if (!entry) {
+      throw new Neo4jClientError('RESOURCE_NOT_FOUND', 'Resource not found');
+    }
+    const role = await this.getEffectiveRole(params.userId, params.entryId);
+    if (!Neo4jClient.hasReadPermission(role)) {
+      throw new Neo4jClientError('PERMISSION_DENIED', 'Permission denied');
+    }
+    if (params.relationTypes !== null) {
+      for (const rt of params.relationTypes) {
+        if (!ENTRY_RELATION_TYPE_REGEX.test(rt)) {
+          throw new Neo4jClientError('INVALID_PARAMS', `relation_type must be UPPER_SNAKE_CASE: ${rt}`);
+        }
+      }
+    }
+
+    // Embed depth literal — Neo4j does not allow parameters in range bounds.
+    const depthLiteral = params.maxDepth;
+    const session = this.driver.session();
+    try {
+      const result = await session.run(
+        `
+        MATCH path = (impacted:Resource)-[:ENTRY_RELATION*1..${depthLiteral}]->(start:Resource {id: $entryId})
+        WHERE impacted.namespace = start.namespace
+          AND ALL(n IN nodes(path) WHERE
+            n = start OR EXISTS { MATCH (:User {id: $userId})-[:OWNS|HAS_ACCESS]->(n) }
+          )
+          AND ($relTypes IS NULL OR ALL(r IN relationships(path) WHERE r.relation_type IN $relTypes))
+        WITH impacted, min(length(path)) AS distance
+        ORDER BY distance, impacted.id
+        LIMIT $limit
+        WITH distance, collect({ id: impacted.id, title: impacted.title }) AS entries
+        RETURN distance, entries
+        ORDER BY distance
+        `,
+        {
+          userId: params.userId,
+          entryId: params.entryId,
+          relTypes: params.relationTypes,
+          limit: neo4j.int(params.limit),
+        },
+      );
+      const layers: ExpandContextLayer[] = result.records.map((record) => ({
+        distance: neo4j.integer.toNumber(record.get('distance')),
+        entries: record.get('entries') as Array<{ id: string; title: string }>,
+      }));
+      const total_impacted = layers.reduce((sum, l) => sum + l.entries.length, 0);
+      return { layers, total_impacted };
     } finally {
       await session.close();
     }

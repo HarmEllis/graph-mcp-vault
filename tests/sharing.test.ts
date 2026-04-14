@@ -525,3 +525,66 @@ describe('full sharing workflow', () => {
     expect(parseToolError(gb2)['code']).toBe(ErrorCode.PERMISSION_DENIED);
   });
 });
+
+// ── knowledge_list_access limit ───────────────────────────────────────────────
+
+describe('knowledge_list_access with limit', () => {
+  it('respects limit and returns most recently granted first', async () => {
+    const owner = uid('list-access-limit-owner');
+    const ownerSid = await openSession(owner);
+
+    const { body: cb } = await callTool(
+      'knowledge_create_entry',
+      { entry_type: 'note', title: 'Access Limit Test', content: '' },
+      owner,
+      ownerSid,
+    );
+    const parseResult = (b: Record<string, unknown>) => {
+      const result = b['result'] as Record<string, unknown>;
+      const content = result['content'] as Array<{ type: string; text: string }>;
+      return JSON.parse(content[0]!.text) as Record<string, unknown>;
+    };
+    const entryId = parseResult(cb)['id'] as string;
+
+    for (let i = 0; i < 3; i++) {
+      await neo4jClient.shareResource(entryId, `sharing-limit-viewer-${i}-${Date.now()}`, 'viewer');
+      await new Promise((r) => setTimeout(r, 5));
+    }
+
+    const { body: allBody } = await callTool(
+      'knowledge_list_access',
+      { entry_id: entryId },
+      owner,
+      ownerSid,
+    );
+    const allSharing = parseResult(allBody)['sharing'] as Array<Record<string, unknown>>;
+    expect(allSharing.length).toBe(3);
+
+    const { body: limitBody } = await callTool(
+      'knowledge_list_access',
+      { entry_id: entryId, limit: 2 },
+      owner,
+      ownerSid,
+    );
+    const limited = parseResult(limitBody)['sharing'] as Array<Record<string, unknown>>;
+    expect(limited).toHaveLength(2);
+
+    // Should be ordered most-recent first
+    const dates = limited.map((s) => s['granted_at'] as string);
+    expect(dates[0]! >= dates[1]!).toBe(true);
+  });
+
+  it('limit above cap returns INVALID_PARAMS', async () => {
+    const owner = uid('list-access-cap');
+    const ownerSid = await openSession(owner);
+    const entryId = await createEntry(owner, ownerSid);
+
+    const { body } = await callTool(
+      'knowledge_list_access',
+      { entry_id: entryId, limit: 501 }, // cap is 500
+      owner,
+      ownerSid,
+    );
+    expect(parseToolError(body)['code']).toBe(ErrorCode.INVALID_PARAMS);
+  });
+});
