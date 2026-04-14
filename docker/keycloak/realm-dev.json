@@ -20,7 +20,13 @@
         "subType": "anonymous",
         "config": {
           "allow-default-scopes": ["true"],
-          "allowed-client-scopes": ["openid", "profile", "email", "offline_access", "graph-mcp-vault-api"]
+          "allowed-client-scopes": [
+            "openid",
+            "profile",
+            "email",
+            "offline_access",
+            "graph-mcp-vault-api"
+          ]
         }
       }
     ]
@@ -82,7 +88,14 @@
     }
   ],
   "defaultDefaultClientScopes": [
-    "role_list", "profile", "email", "roles", "web-origins", "acr", "basic", "graph-mcp-vault-api"
+    "role_list",
+    "profile",
+    "email",
+    "roles",
+    "web-origins",
+    "acr",
+    "basic",
+    "graph-mcp-vault-api"
   ],
   "clients": [
     {
@@ -102,9 +115,7 @@
         "http://localhost:8080/*",
         "http://localhost:8000/*"
       ],
-      "webOrigins": [
-        "*"
-      ],
+      "webOrigins": ["*"],
       "protocolMappers": [
         {
           "name": "audience-graph-mcp-vault",

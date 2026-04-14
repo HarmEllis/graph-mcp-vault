@@ -1,9 +1,9 @@
-import type { ErrorCodeValue } from '../errors.js';
+import type { ErrorCodeValue } from "../errors.js";
 
 // ── Descriptor types ──────────────────────────────────────────────────────────
 
 export interface McpToolInputSchema {
-  type: 'object';
+  type: "object";
   properties: Record<string, unknown>;
   required?: string[];
   additionalProperties?: boolean;
@@ -44,7 +44,7 @@ export class ToolError extends Error {
     message: string,
   ) {
     super(message);
-    this.name = 'ToolError';
+    this.name = "ToolError";
   }
 }
 

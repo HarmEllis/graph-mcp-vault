@@ -1,13 +1,12 @@
-import { z } from 'zod';
+import { z } from "zod";
+import { ErrorCode } from "../errors.js";
 import {
   ENTRY_RELATION_TYPE_REGEX,
-  Neo4jClientError,
   type EntryRelationDirection,
   type MatchMode,
   type Neo4jClient,
-} from '../neo4j-client.js';
-import { ErrorCode } from '../errors.js';
-import { ToolError, type RegisteredTool, type ToolContext } from './registry.js';
+  Neo4jClientError,
+} from "../neo4j-client.js";
 import {
   DEFAULT_EXPAND_CONTEXT_LIMIT,
   DEFAULT_IMPACT_LIMIT,
@@ -15,27 +14,32 @@ import {
   DEFAULT_MAX_DEPTH,
   DEFAULT_MAX_HOPS,
   DEFAULT_MAX_PATHS,
-  MAX_EXPAND_CONTEXT_LIMIT,
   MAX_DEPTH_CAP,
+  MAX_EXPAND_CONTEXT_LIMIT,
   MAX_HOPS_CAP,
   MAX_IMPACT_LIMIT,
   MAX_LIST_RELATIONS_LIMIT,
   MAX_PATHS_CAP,
-} from './graph-constants.js';
+} from "./graph-constants.js";
+import {
+  type RegisteredTool,
+  type ToolContext,
+  ToolError,
+} from "./registry.js";
 
 // ── Permission helpers ────────────────────────────────────────────────────────
 
-type Permission = 'read' | 'write' | 'delete';
+type Permission = "read" | "write" | "delete";
 
 function hasPermission(
-  role: 'owner' | 'editor' | 'viewer' | null,
+  role: "owner" | "editor" | "viewer" | null,
   permission: Permission,
 ): boolean {
   if (role === null) return false;
-  if (role === 'owner') return true;
-  if (role === 'editor') return permission === 'read' || permission === 'write';
+  if (role === "owner") return true;
+  if (role === "editor") return permission === "read" || permission === "write";
   // viewer
-  return permission === 'read';
+  return permission === "read";
 }
 
 /**
@@ -47,26 +51,27 @@ async function requirePermission(
   userId: string,
   entryId: string,
   permission: Permission,
-): Promise<'owner' | 'editor' | 'viewer'> {
+): Promise<"owner" | "editor" | "viewer"> {
   const resource = await neo4jClient.getResource(entryId);
-  if (!resource) throw new ToolError(ErrorCode.RESOURCE_NOT_FOUND, 'Resource not found');
+  if (!resource)
+    throw new ToolError(ErrorCode.RESOURCE_NOT_FOUND, "Resource not found");
 
   const role = await neo4jClient.getEffectiveRole(userId, entryId);
   if (role === null || !hasPermission(role, permission)) {
-    throw new ToolError(ErrorCode.PERMISSION_DENIED, 'Permission denied');
+    throw new ToolError(ErrorCode.PERMISSION_DENIED, "Permission denied");
   }
   return role;
 }
 
 function throwMappedClientError(error: unknown): never {
   if (error instanceof Neo4jClientError) {
-    if (error.code === 'INVALID_PARAMS') {
+    if (error.code === "INVALID_PARAMS") {
       throw new ToolError(ErrorCode.INVALID_PARAMS, error.message);
     }
-    if (error.code === 'RESOURCE_NOT_FOUND') {
+    if (error.code === "RESOURCE_NOT_FOUND") {
       throw new ToolError(ErrorCode.RESOURCE_NOT_FOUND, error.message);
     }
-    if (error.code === 'PERMISSION_DENIED') {
+    if (error.code === "PERMISSION_DENIED") {
       throw new ToolError(ErrorCode.PERMISSION_DENIED, error.message);
     }
   }
@@ -101,10 +106,22 @@ async function handleCreate(
 ): Promise<unknown> {
   const parsed = createSchema.safeParse(args);
   if (!parsed.success) {
-    throw new ToolError(ErrorCode.INVALID_PARAMS, `Invalid params: ${parsed.error.message}`);
+    throw new ToolError(
+      ErrorCode.INVALID_PARAMS,
+      `Invalid params: ${parsed.error.message}`,
+    );
   }
-  const { entry_type, title, content, namespace, topic, tags, summary, source, last_verified_at } =
-    parsed.data;
+  const {
+    entry_type,
+    title,
+    content,
+    namespace,
+    topic,
+    tags,
+    summary,
+    source,
+    last_verified_at,
+  } = parsed.data;
   return neo4jClient.createResource({
     userId: ctx.userId,
     namespace: namespace ?? ctx.namespace,
@@ -130,15 +147,20 @@ async function handleGet(
 ): Promise<unknown> {
   const parsed = getSchema.safeParse(args);
   if (!parsed.success) {
-    throw new ToolError(ErrorCode.INVALID_PARAMS, `Invalid params: ${parsed.error.message}`);
+    throw new ToolError(
+      ErrorCode.INVALID_PARAMS,
+      `Invalid params: ${parsed.error.message}`,
+    );
   }
   const { entry_id } = parsed.data;
 
   const resource = await neo4jClient.getResource(entry_id);
-  if (!resource) throw new ToolError(ErrorCode.RESOURCE_NOT_FOUND, 'Resource not found');
+  if (!resource)
+    throw new ToolError(ErrorCode.RESOURCE_NOT_FOUND, "Resource not found");
 
   const role = await neo4jClient.getEffectiveRole(ctx.userId, entry_id);
-  if (role === null) throw new ToolError(ErrorCode.PERMISSION_DENIED, 'Permission denied');
+  if (role === null)
+    throw new ToolError(ErrorCode.PERMISSION_DENIED, "Permission denied");
 
   return { ...resource, role };
 }
@@ -159,12 +181,17 @@ async function handleList(
 ): Promise<unknown> {
   const parsed = listSchema.safeParse(args);
   if (!parsed.success) {
-    throw new ToolError(ErrorCode.INVALID_PARAMS, `Invalid params: ${parsed.error.message}`);
+    throw new ToolError(
+      ErrorCode.INVALID_PARAMS,
+      `Invalid params: ${parsed.error.message}`,
+    );
   }
   const resources = await neo4jClient.listResources({
     userId: ctx.userId,
     namespace: parsed.data.namespace ?? ctx.namespace,
-    ...(parsed.data.entry_type !== undefined && { entry_type: parsed.data.entry_type }),
+    ...(parsed.data.entry_type !== undefined && {
+      entry_type: parsed.data.entry_type,
+    }),
     ...(parsed.data.limit !== undefined && { limit: parsed.data.limit }),
     ...(parsed.data.skip !== undefined && { skip: parsed.data.skip }),
   });
@@ -188,11 +215,23 @@ async function handleUpdate(
 ): Promise<unknown> {
   const parsed = updateSchema.safeParse(args);
   if (!parsed.success) {
-    throw new ToolError(ErrorCode.INVALID_PARAMS, `Invalid params: ${parsed.error.message}`);
+    throw new ToolError(
+      ErrorCode.INVALID_PARAMS,
+      `Invalid params: ${parsed.error.message}`,
+    );
   }
-  const { entry_id, title, content, topic, tags, summary, source, last_verified_at } = parsed.data;
+  const {
+    entry_id,
+    title,
+    content,
+    topic,
+    tags,
+    summary,
+    source,
+    last_verified_at,
+  } = parsed.data;
 
-  await requirePermission(neo4jClient, ctx.userId, entry_id, 'write');
+  await requirePermission(neo4jClient, ctx.userId, entry_id, "write");
   await neo4jClient.updateResource(entry_id, {
     ...(title !== undefined && { title }),
     ...(content !== undefined && { content }),
@@ -216,11 +255,14 @@ async function handleDelete(
 ): Promise<unknown> {
   const parsed = deleteSchema.safeParse(args);
   if (!parsed.success) {
-    throw new ToolError(ErrorCode.INVALID_PARAMS, `Invalid params: ${parsed.error.message}`);
+    throw new ToolError(
+      ErrorCode.INVALID_PARAMS,
+      `Invalid params: ${parsed.error.message}`,
+    );
   }
   const { entry_id } = parsed.data;
 
-  await requirePermission(neo4jClient, ctx.userId, entry_id, 'delete');
+  await requirePermission(neo4jClient, ctx.userId, entry_id, "delete");
   await neo4jClient.deleteResource(entry_id);
   return {};
 }
@@ -233,7 +275,7 @@ const searchSchema = z.object({
   entry_type: z.string().optional(),
   limit: z.number().int().positive().optional(),
   skip: z.number().int().min(0).optional(),
-  match_mode: z.enum(['exact', 'fulltext', 'fuzzy']).optional(),
+  match_mode: z.enum(["exact", "fulltext", "fuzzy"]).optional(),
 });
 
 async function handleSearch(
@@ -243,13 +285,18 @@ async function handleSearch(
 ): Promise<unknown> {
   const parsed = searchSchema.safeParse(args);
   if (!parsed.success) {
-    throw new ToolError(ErrorCode.INVALID_PARAMS, `Invalid params: ${parsed.error.message}`);
+    throw new ToolError(
+      ErrorCode.INVALID_PARAMS,
+      `Invalid params: ${parsed.error.message}`,
+    );
   }
   const resources = await neo4jClient.searchResources({
     userId: ctx.userId,
     query: parsed.data.query,
     namespace: parsed.data.namespace ?? ctx.namespace,
-    ...(parsed.data.entry_type !== undefined && { entry_type: parsed.data.entry_type }),
+    ...(parsed.data.entry_type !== undefined && {
+      entry_type: parsed.data.entry_type,
+    }),
     ...(parsed.data.limit !== undefined && { limit: parsed.data.limit }),
     ...(parsed.data.skip !== undefined && { skip: parsed.data.skip }),
     ...(parsed.data.match_mode !== undefined && {
@@ -263,7 +310,7 @@ async function handleSearch(
 
 const relationTypeSchema = z
   .string()
-  .regex(ENTRY_RELATION_TYPE_REGEX, 'relation_type must be UPPER_SNAKE_CASE');
+  .regex(ENTRY_RELATION_TYPE_REGEX, "relation_type must be UPPER_SNAKE_CASE");
 
 const createRelationSchema = z.object({
   from_id: z.string().min(1),
@@ -279,12 +326,21 @@ async function handleCreateRelation(
 ): Promise<unknown> {
   const parsed = createRelationSchema.safeParse(args);
   if (!parsed.success) {
-    throw new ToolError(ErrorCode.INVALID_PARAMS, `Invalid params: ${parsed.error.message}`);
+    throw new ToolError(
+      ErrorCode.INVALID_PARAMS,
+      `Invalid params: ${parsed.error.message}`,
+    );
   }
   const { from_id, to_id, relation_type, label } = parsed.data;
 
   try {
-    await neo4jClient.createEntryRelation(ctx.userId, from_id, to_id, relation_type, label);
+    await neo4jClient.createEntryRelation(
+      ctx.userId,
+      from_id,
+      to_id,
+      relation_type,
+      label,
+    );
     return {};
   } catch (error) {
     throwMappedClientError(error);
@@ -306,12 +362,20 @@ async function handleDeleteRelation(
 ): Promise<unknown> {
   const parsed = deleteRelationSchema.safeParse(args);
   if (!parsed.success) {
-    throw new ToolError(ErrorCode.INVALID_PARAMS, `Invalid params: ${parsed.error.message}`);
+    throw new ToolError(
+      ErrorCode.INVALID_PARAMS,
+      `Invalid params: ${parsed.error.message}`,
+    );
   }
   const { from_id, to_id, relation_type } = parsed.data;
 
   try {
-    await neo4jClient.deleteEntryRelation(ctx.userId, from_id, to_id, relation_type);
+    await neo4jClient.deleteEntryRelation(
+      ctx.userId,
+      from_id,
+      to_id,
+      relation_type,
+    );
     return {};
   } catch (error) {
     throwMappedClientError(error);
@@ -322,7 +386,7 @@ async function handleDeleteRelation(
 
 const listRelationsSchema = z.object({
   entry_id: z.string().min(1),
-  direction: z.enum(['outbound', 'inbound', 'both']).optional(),
+  direction: z.enum(["outbound", "inbound", "both"]).optional(),
   limit: z.number().int().positive().max(MAX_LIST_RELATIONS_LIMIT).optional(),
 });
 
@@ -333,7 +397,10 @@ async function handleListRelations(
 ): Promise<unknown> {
   const parsed = listRelationsSchema.safeParse(args);
   if (!parsed.success) {
-    throw new ToolError(ErrorCode.INVALID_PARAMS, `Invalid params: ${parsed.error.message}`);
+    throw new ToolError(
+      ErrorCode.INVALID_PARAMS,
+      `Invalid params: ${parsed.error.message}`,
+    );
   }
   const { entry_id, direction, limit: rawLimit } = parsed.data;
   const limit = rawLimit ?? DEFAULT_LIST_RELATIONS_LIMIT;
@@ -342,7 +409,7 @@ async function handleListRelations(
     const relations = await neo4jClient.listEntryRelations(
       ctx.userId,
       entry_id,
-      (direction ?? 'both') as EntryRelationDirection,
+      (direction ?? "both") as EntryRelationDirection,
       limit,
     );
     return { relations };
@@ -355,11 +422,11 @@ async function handleListRelations(
 
 const relationTypesItemSchema = z
   .string()
-  .regex(ENTRY_RELATION_TYPE_REGEX, 'relation_type must be UPPER_SNAKE_CASE');
+  .regex(ENTRY_RELATION_TYPE_REGEX, "relation_type must be UPPER_SNAKE_CASE");
 
 const expandContextSchema = z.object({
   entry_id: z.string().min(1),
-  direction: z.enum(['outbound', 'inbound', 'both']).optional(),
+  direction: z.enum(["outbound", "inbound", "both"]).optional(),
   max_hops: z.number().int().positive().max(MAX_HOPS_CAP).optional(),
   relation_types: z.array(relationTypesItemSchema).optional(),
   limit: z.number().int().positive().max(MAX_EXPAND_CONTEXT_LIMIT).optional(),
@@ -372,9 +439,18 @@ async function handleExpandContext(
 ): Promise<unknown> {
   const parsed = expandContextSchema.safeParse(args);
   if (!parsed.success) {
-    throw new ToolError(ErrorCode.INVALID_PARAMS, `Invalid params: ${parsed.error.message}`);
+    throw new ToolError(
+      ErrorCode.INVALID_PARAMS,
+      `Invalid params: ${parsed.error.message}`,
+    );
   }
-  const { entry_id, direction, max_hops: rawHops, relation_types, limit: rawLimit } = parsed.data;
+  const {
+    entry_id,
+    direction,
+    max_hops: rawHops,
+    relation_types,
+    limit: rawLimit,
+  } = parsed.data;
   const maxHops = rawHops ?? DEFAULT_MAX_HOPS;
   const limit = rawLimit ?? DEFAULT_EXPAND_CONTEXT_LIMIT;
 
@@ -382,7 +458,7 @@ async function handleExpandContext(
     const layers = await neo4jClient.expandContext({
       userId: ctx.userId,
       entryId: entry_id,
-      direction: (direction ?? 'both') as EntryRelationDirection,
+      direction: (direction ?? "both") as EntryRelationDirection,
       maxHops,
       relationTypes: relation_types ?? null,
       limit,
@@ -410,9 +486,18 @@ async function handleFindPaths(
 ): Promise<unknown> {
   const parsed = findPathsSchema.safeParse(args);
   if (!parsed.success) {
-    throw new ToolError(ErrorCode.INVALID_PARAMS, `Invalid params: ${parsed.error.message}`);
+    throw new ToolError(
+      ErrorCode.INVALID_PARAMS,
+      `Invalid params: ${parsed.error.message}`,
+    );
   }
-  const { from_id, to_id, max_depth: rawDepth, max_paths: rawPaths, relation_types } = parsed.data;
+  const {
+    from_id,
+    to_id,
+    max_depth: rawDepth,
+    max_paths: rawPaths,
+    relation_types,
+  } = parsed.data;
   const maxDepth = rawDepth ?? DEFAULT_MAX_DEPTH;
   const maxPaths = rawPaths ?? DEFAULT_MAX_PATHS;
 
@@ -447,9 +532,17 @@ async function handleImpactAnalysis(
 ): Promise<unknown> {
   const parsed = impactAnalysisSchema.safeParse(args);
   if (!parsed.success) {
-    throw new ToolError(ErrorCode.INVALID_PARAMS, `Invalid params: ${parsed.error.message}`);
+    throw new ToolError(
+      ErrorCode.INVALID_PARAMS,
+      `Invalid params: ${parsed.error.message}`,
+    );
   }
-  const { entry_id, max_depth: rawDepth, relation_types, limit: rawLimit } = parsed.data;
+  const {
+    entry_id,
+    max_depth: rawDepth,
+    relation_types,
+    limit: rawLimit,
+  } = parsed.data;
   const maxDepth = rawDepth ?? DEFAULT_MAX_DEPTH;
   const limit = rawLimit ?? DEFAULT_IMPACT_LIMIT;
 
@@ -478,7 +571,11 @@ async function handleListNamespaces(
 
   // Ensure the current session namespace is always present, even with zero counts
   if (!namespaces.some((n) => n.namespace === ctx.namespace)) {
-    namespaces.push({ namespace: ctx.namespace, owned_count: 0, shared_count: 0 });
+    namespaces.push({
+      namespace: ctx.namespace,
+      owned_count: 0,
+      shared_count: 0,
+    });
     namespaces.sort((a, b) => a.namespace.localeCompare(b.namespace));
   }
 
@@ -490,75 +587,93 @@ async function handleListNamespaces(
 /**
  * Returns the knowledge entry tool registrations, each closing over `neo4jClient`.
  */
-export function createResourceTools(neo4jClient: Neo4jClient): RegisteredTool[] {
+export function createResourceTools(
+  neo4jClient: Neo4jClient,
+): RegisteredTool[] {
   return [
     {
       descriptor: {
-        name: 'knowledge_create_entry',
+        name: "knowledge_create_entry",
         description:
-          'Save a new knowledge entry to the memory bank. Use this to store notes, decisions, facts, documentation snippets, or any information that should be remembered. Always retrieve before creating to avoid duplicates.',
+          "Save a new knowledge entry to the memory bank. Use this to store notes, decisions, facts, documentation snippets, or any information that should be remembered. Always retrieve before creating to avoid duplicates.",
         inputSchema: {
-          type: 'object',
+          type: "object",
           properties: {
             entry_type: {
-              type: 'string',
-              description: 'Entry type (e.g. note, decision, fact, reference)',
+              type: "string",
+              description: "Entry type (e.g. note, decision, fact, reference)",
             },
-            title: { type: 'string', description: 'Short descriptive title' },
-            content: { type: 'string', description: 'Full text of the knowledge entry' },
-            namespace: { type: 'string', description: 'Namespace override (optional)' },
-            topic: { type: 'string', description: 'Broad subject area (optional)' },
+            title: { type: "string", description: "Short descriptive title" },
+            content: {
+              type: "string",
+              description: "Full text of the knowledge entry",
+            },
+            namespace: {
+              type: "string",
+              description: "Namespace override (optional)",
+            },
+            topic: {
+              type: "string",
+              description: "Broad subject area (optional)",
+            },
             tags: {
-              type: 'array',
-              items: { type: 'string' },
-              description: 'Keyword tags for filtering and search (optional, max 50)',
+              type: "array",
+              items: { type: "string" },
+              description:
+                "Keyword tags for filtering and search (optional, max 50)",
             },
             summary: {
-              type: 'string',
-              description: 'One-sentence summary for quick scanning (optional)',
+              type: "string",
+              description: "One-sentence summary for quick scanning (optional)",
             },
             source: {
-              type: 'string',
-              description: 'Origin URL or citation (optional, max 2048 chars)',
+              type: "string",
+              description: "Origin URL or citation (optional, max 2048 chars)",
             },
             last_verified_at: {
-              type: 'string',
-              description: 'ISO 8601 datetime when this entry was last verified (optional)',
+              type: "string",
+              description:
+                "ISO 8601 datetime when this entry was last verified (optional)",
             },
           },
-          required: ['entry_type', 'title', 'content'],
+          required: ["entry_type", "title", "content"],
         },
       },
       handler: (args, ctx) => handleCreate(args, ctx, neo4jClient),
     },
     {
       descriptor: {
-        name: 'knowledge_get_entry',
+        name: "knowledge_get_entry",
         description:
-          'Retrieve a specific knowledge entry by its ID. Use this to read a known entry in full. Requires at least read access.',
+          "Retrieve a specific knowledge entry by its ID. Use this to read a known entry in full. Requires at least read access.",
         inputSchema: {
-          type: 'object',
-          properties: { entry_id: { type: 'string', description: 'UUID of the entry' } },
-          required: ['entry_id'],
+          type: "object",
+          properties: {
+            entry_id: { type: "string", description: "UUID of the entry" },
+          },
+          required: ["entry_id"],
         },
       },
       handler: (args, ctx) => handleGet(args, ctx, neo4jClient),
     },
     {
       descriptor: {
-        name: 'knowledge_list_entries',
+        name: "knowledge_list_entries",
         description:
-          'List all knowledge entries the caller can read (owned and shared) in a namespace. Use this to browse the memory bank or discover what has been stored.',
+          "List all knowledge entries the caller can read (owned and shared) in a namespace. Use this to browse the memory bank or discover what has been stored.",
         inputSchema: {
-          type: 'object',
+          type: "object",
           properties: {
             namespace: {
-              type: 'string',
-              description: 'Namespace to list (defaults to session namespace)',
+              type: "string",
+              description: "Namespace to list (defaults to session namespace)",
             },
-            entry_type: { type: 'string', description: 'Filter by entry type' },
-            limit: { type: 'number', description: 'Max results (default 50)' },
-            skip: { type: 'number', description: 'Pagination offset (default 0)' },
+            entry_type: { type: "string", description: "Filter by entry type" },
+            limit: { type: "number", description: "Max results (default 50)" },
+            skip: {
+              type: "number",
+              description: "Pagination offset (default 0)",
+            },
           },
           required: [],
         },
@@ -567,136 +682,156 @@ export function createResourceTools(neo4jClient: Neo4jClient): RegisteredTool[] 
     },
     {
       descriptor: {
-        name: 'knowledge_update_entry',
+        name: "knowledge_update_entry",
         description:
-          'Update the title, content, or metadata of a knowledge entry. Requires editor or owner role. Retrieve the entry first to see its current state.',
+          "Update the title, content, or metadata of a knowledge entry. Requires editor or owner role. Retrieve the entry first to see its current state.",
         inputSchema: {
-          type: 'object',
+          type: "object",
           properties: {
-            entry_id: { type: 'string', description: 'UUID of the entry to update' },
-            title: { type: 'string' },
-            content: { type: 'string' },
-            topic: { type: 'string' },
-            tags: { type: 'array', items: { type: 'string' } },
-            summary: { type: 'string' },
-            source: { type: 'string' },
-            last_verified_at: { type: 'string' },
+            entry_id: {
+              type: "string",
+              description: "UUID of the entry to update",
+            },
+            title: { type: "string" },
+            content: { type: "string" },
+            topic: { type: "string" },
+            tags: { type: "array", items: { type: "string" } },
+            summary: { type: "string" },
+            source: { type: "string" },
+            last_verified_at: { type: "string" },
           },
-          required: ['entry_id'],
+          required: ["entry_id"],
         },
       },
       handler: (args, ctx) => handleUpdate(args, ctx, neo4jClient),
     },
     {
       descriptor: {
-        name: 'knowledge_delete_entry',
+        name: "knowledge_delete_entry",
         description:
-          'Permanently delete a knowledge entry and all its access grants. Owner only. This action is irreversible.',
+          "Permanently delete a knowledge entry and all its access grants. Owner only. This action is irreversible.",
         inputSchema: {
-          type: 'object',
-          properties: { entry_id: { type: 'string' } },
-          required: ['entry_id'],
+          type: "object",
+          properties: { entry_id: { type: "string" } },
+          required: ["entry_id"],
         },
       },
       handler: (args, ctx) => handleDelete(args, ctx, neo4jClient),
     },
     {
       descriptor: {
-        name: 'knowledge_create_relation',
+        name: "knowledge_create_relation",
         description:
-          'Create a typed relation between two knowledge entries. Requires read access to both entries.',
+          "Create a typed relation between two knowledge entries. Requires read access to both entries.",
         inputSchema: {
-          type: 'object',
+          type: "object",
           properties: {
-            from_id: { type: 'string', description: 'UUID of the source entry' },
-            to_id: { type: 'string', description: 'UUID of the target entry' },
-            relation_type: {
-              type: 'string',
-              description: 'Relation type in UPPER_SNAKE_CASE (e.g. DEPENDS_ON)',
+            from_id: {
+              type: "string",
+              description: "UUID of the source entry",
             },
-            label: { type: 'string', description: 'Optional free-text relation label' },
+            to_id: { type: "string", description: "UUID of the target entry" },
+            relation_type: {
+              type: "string",
+              description:
+                "Relation type in UPPER_SNAKE_CASE (e.g. DEPENDS_ON)",
+            },
+            label: {
+              type: "string",
+              description: "Optional free-text relation label",
+            },
           },
-          required: ['from_id', 'to_id', 'relation_type'],
+          required: ["from_id", "to_id", "relation_type"],
         },
       },
       handler: (args, ctx) => handleCreateRelation(args, ctx, neo4jClient),
     },
     {
       descriptor: {
-        name: 'knowledge_delete_relation',
+        name: "knowledge_delete_relation",
         description:
-          'Delete a typed relation between two entries. Requires owner role on the source entry.',
+          "Delete a typed relation between two entries. Requires owner role on the source entry.",
         inputSchema: {
-          type: 'object',
+          type: "object",
           properties: {
-            from_id: { type: 'string', description: 'UUID of the source entry' },
-            to_id: { type: 'string', description: 'UUID of the target entry' },
-            relation_type: { type: 'string', description: 'Relation type in UPPER_SNAKE_CASE' },
+            from_id: {
+              type: "string",
+              description: "UUID of the source entry",
+            },
+            to_id: { type: "string", description: "UUID of the target entry" },
+            relation_type: {
+              type: "string",
+              description: "Relation type in UPPER_SNAKE_CASE",
+            },
           },
-          required: ['from_id', 'to_id', 'relation_type'],
+          required: ["from_id", "to_id", "relation_type"],
         },
       },
       handler: (args, ctx) => handleDeleteRelation(args, ctx, neo4jClient),
     },
     {
       descriptor: {
-        name: 'knowledge_list_relations',
+        name: "knowledge_list_relations",
         description:
-          'List entry relations for one entry. Returns outbound, inbound, or both directions.',
+          "List entry relations for one entry. Returns outbound, inbound, or both directions.",
         inputSchema: {
-          type: 'object',
+          type: "object",
           properties: {
-            entry_id: { type: 'string', description: 'UUID of the entry' },
+            entry_id: { type: "string", description: "UUID of the entry" },
             direction: {
-              type: 'string',
-              enum: ['outbound', 'inbound', 'both'],
-              description: 'Direction filter (default both)',
+              type: "string",
+              enum: ["outbound", "inbound", "both"],
+              description: "Direction filter (default both)",
             },
             limit: {
-              type: 'number',
+              type: "number",
               description: `Max relations to return (default ${DEFAULT_LIST_RELATIONS_LIMIT}, max ${MAX_LIST_RELATIONS_LIMIT})`,
             },
           },
-          required: ['entry_id'],
+          required: ["entry_id"],
         },
       },
       handler: (args, ctx) => handleListRelations(args, ctx, neo4jClient),
     },
     {
       descriptor: {
-        name: 'knowledge_search_entries',
+        name: "knowledge_search_entries",
         description:
-          'Search the knowledge memory bank by keyword. Always call this before creating new entries to avoid duplicates. Only returns entries the caller can read.',
+          "Search the knowledge memory bank by keyword. Always call this before creating new entries to avoid duplicates. Only returns entries the caller can read.",
         inputSchema: {
-          type: 'object',
+          type: "object",
           properties: {
-            query: { type: 'string', description: 'Search keywords or phrase' },
+            query: { type: "string", description: "Search keywords or phrase" },
             namespace: {
-              type: 'string',
-              description: 'Namespace to search in (defaults to session namespace)',
+              type: "string",
+              description:
+                "Namespace to search in (defaults to session namespace)",
             },
-            entry_type: { type: 'string', description: 'Filter by entry type' },
-            limit: { type: 'number', description: 'Max results (default 20)' },
-            skip: { type: 'number', description: 'Pagination offset (default 0)' },
+            entry_type: { type: "string", description: "Filter by entry type" },
+            limit: { type: "number", description: "Max results (default 20)" },
+            skip: {
+              type: "number",
+              description: "Pagination offset (default 0)",
+            },
             match_mode: {
-              type: 'string',
-              enum: ['exact', 'fulltext', 'fuzzy'],
+              type: "string",
+              enum: ["exact", "fulltext", "fuzzy"],
               description:
                 'Search mode: "fuzzy" (default, tolerates typos), "fulltext" (exact keyword match), or "exact" (phrase match)',
             },
           },
-          required: ['query'],
+          required: ["query"],
         },
       },
       handler: (args, ctx) => handleSearch(args, ctx, neo4jClient),
     },
     {
       descriptor: {
-        name: 'knowledge_list_namespaces',
+        name: "knowledge_list_namespaces",
         description:
-          'List all namespaces the caller owns or has shared access to, with per-namespace entry counts.',
+          "List all namespaces the caller owns or has shared access to, with per-namespace entry counts.",
         inputSchema: {
-          type: 'object',
+          type: "object",
           properties: {},
           required: [],
         },
@@ -705,90 +840,105 @@ export function createResourceTools(neo4jClient: Neo4jClient): RegisteredTool[] 
     },
     {
       descriptor: {
-        name: 'knowledge_expand_context',
+        name: "knowledge_expand_context",
         description:
-          'Expand the neighborhood of an entry by traversing entry relations up to max_hops away. Returns entries grouped by hop distance. Only includes entries the caller can read. Use this to explore related knowledge around a central entry.',
+          "Expand the neighborhood of an entry by traversing entry relations up to max_hops away. Returns entries grouped by hop distance. Only includes entries the caller can read. Use this to explore related knowledge around a central entry.",
         inputSchema: {
-          type: 'object',
+          type: "object",
           properties: {
-            entry_id: { type: 'string', description: 'UUID of the anchor entry' },
+            entry_id: {
+              type: "string",
+              description: "UUID of the anchor entry",
+            },
             direction: {
-              type: 'string',
-              enum: ['outbound', 'inbound', 'both'],
-              description: `Traversal direction (default both)`,
+              type: "string",
+              enum: ["outbound", "inbound", "both"],
+              description: "Traversal direction (default both)",
             },
             max_hops: {
-              type: 'number',
+              type: "number",
               description: `Maximum hops to traverse (default ${DEFAULT_MAX_HOPS}, max ${MAX_HOPS_CAP})`,
             },
             relation_types: {
-              type: 'array',
-              items: { type: 'string' },
-              description: 'Filter to specific relation types in UPPER_SNAKE_CASE (optional)',
+              type: "array",
+              items: { type: "string" },
+              description:
+                "Filter to specific relation types in UPPER_SNAKE_CASE (optional)",
             },
             limit: {
-              type: 'number',
+              type: "number",
               description: `Max total nodes returned across all hops (default ${DEFAULT_EXPAND_CONTEXT_LIMIT}, max ${MAX_EXPAND_CONTEXT_LIMIT})`,
             },
           },
-          required: ['entry_id'],
+          required: ["entry_id"],
         },
       },
       handler: (args, ctx) => handleExpandContext(args, ctx, neo4jClient),
     },
     {
       descriptor: {
-        name: 'knowledge_find_paths',
+        name: "knowledge_find_paths",
         description:
-          'Find directed paths between two entries via entry relations. Only returns paths where every intermediate node is accessible to the caller. Both entries must be in the same namespace.',
+          "Find directed paths between two entries via entry relations. Only returns paths where every intermediate node is accessible to the caller. Both entries must be in the same namespace.",
         inputSchema: {
-          type: 'object',
+          type: "object",
           properties: {
-            from_id: { type: 'string', description: 'UUID of the source entry' },
-            to_id: { type: 'string', description: 'UUID of the destination entry' },
+            from_id: {
+              type: "string",
+              description: "UUID of the source entry",
+            },
+            to_id: {
+              type: "string",
+              description: "UUID of the destination entry",
+            },
             max_depth: {
-              type: 'number',
+              type: "number",
               description: `Maximum path depth (default ${DEFAULT_MAX_DEPTH}, max ${MAX_DEPTH_CAP})`,
             },
             max_paths: {
-              type: 'number',
+              type: "number",
               description: `Maximum number of paths to return (default ${DEFAULT_MAX_PATHS}, max ${MAX_PATHS_CAP})`,
             },
             relation_types: {
-              type: 'array',
-              items: { type: 'string' },
-              description: 'Filter to specific relation types in UPPER_SNAKE_CASE (optional)',
+              type: "array",
+              items: { type: "string" },
+              description:
+                "Filter to specific relation types in UPPER_SNAKE_CASE (optional)",
             },
           },
-          required: ['from_id', 'to_id'],
+          required: ["from_id", "to_id"],
         },
       },
       handler: (args, ctx) => handleFindPaths(args, ctx, neo4jClient),
     },
     {
       descriptor: {
-        name: 'knowledge_impact_analysis',
+        name: "knowledge_impact_analysis",
         description:
-          'Find all entries that depend on or reference a given entry, grouped by hop distance (impact layers). Identifies what would be affected if the anchor entry changes. Only readable entries are included.',
+          "Find all entries that depend on or reference a given entry, grouped by hop distance (impact layers). Identifies what would be affected if the anchor entry changes. Only readable entries are included.",
         inputSchema: {
-          type: 'object',
+          type: "object",
           properties: {
-            entry_id: { type: 'string', description: 'UUID of the anchor entry to analyse' },
+            entry_id: {
+              type: "string",
+              description: "UUID of the anchor entry to analyse",
+            },
             max_depth: {
-              type: 'number',
+              type: "number",
               description: `Maximum traversal depth (default ${DEFAULT_MAX_DEPTH}, max ${MAX_DEPTH_CAP})`,
             },
             relation_types: {
-              type: 'array',
-              items: { type: 'string' },
-              description: 'Filter to specific relation types in UPPER_SNAKE_CASE (optional)',
+              type: "array",
+              items: { type: "string" },
+              description:
+                "Filter to specific relation types in UPPER_SNAKE_CASE (optional)",
             },
             limit: {
-              type: 'number',
+              type: "number",
               description: `Max total impacted entries returned across all layers (default ${DEFAULT_IMPACT_LIMIT}, max ${MAX_IMPACT_LIMIT})`,
             },
           },
-          required: ['entry_id'],
+          required: ["entry_id"],
         },
       },
       handler: (args, ctx) => handleImpactAnalysis(args, ctx, neo4jClient),

@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { randomUUID } from "node:crypto";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -44,7 +44,13 @@ export class SessionStore {
   create(userId: string, namespace: string): string {
     const id = randomUUID();
     const now = Date.now();
-    this.sessions.set(id, { id, userId, namespace, createdAt: now, lastActiveAt: now });
+    this.sessions.set(id, {
+      id,
+      userId,
+      namespace,
+      createdAt: now,
+      lastActiveAt: now,
+    });
     return id;
   }
 
@@ -97,9 +103,12 @@ export class SessionStore {
    */
   startCleanup(): void {
     this.stopCleanup();
-    const timer = setInterval(() => this.purgeExpired(), this.cleanupIntervalMs);
+    const timer = setInterval(
+      () => this.purgeExpired(),
+      this.cleanupIntervalMs,
+    );
     // Allow the process to exit even if the timer is still running.
-    if (typeof timer.unref === 'function') timer.unref();
+    if (typeof timer.unref === "function") timer.unref();
     this.cleanupTimer = timer;
   }
 

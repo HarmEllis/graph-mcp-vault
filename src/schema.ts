@@ -1,4 +1,4 @@
-import neo4j, { type Driver } from 'neo4j-driver';
+import neo4j, { type Driver } from "neo4j-driver";
 
 // ── Current schema version ────────────────────────────────────────────────────
 
@@ -7,9 +7,9 @@ const SCHEMA_VERSION = 3;
 // ── Base schema statements (idempotent, version-independent) ──────────────────
 
 const BASE_SCHEMA_STATEMENTS = [
-  'CREATE CONSTRAINT user_id_unique IF NOT EXISTS FOR (u:User) REQUIRE u.id IS UNIQUE',
-  'CREATE CONSTRAINT resource_id_unique IF NOT EXISTS FOR (r:Resource) REQUIRE r.id IS UNIQUE',
-  'CREATE INDEX resource_scope IF NOT EXISTS FOR (r:Resource) ON (r.user_id, r.namespace)',
+  "CREATE CONSTRAINT user_id_unique IF NOT EXISTS FOR (u:User) REQUIRE u.id IS UNIQUE",
+  "CREATE CONSTRAINT resource_id_unique IF NOT EXISTS FOR (r:Resource) REQUIRE r.id IS UNIQUE",
+  "CREATE INDEX resource_scope IF NOT EXISTS FOR (r:Resource) ON (r.user_id, r.namespace)",
 ] as const;
 
 // ── Schema version helpers ────────────────────────────────────────────────────
@@ -17,11 +17,13 @@ const BASE_SCHEMA_STATEMENTS = [
 async function getSchemaVersion(driver: Driver): Promise<number> {
   const session = driver.session();
   try {
-    const result = await session.run('MATCH (s:SchemaInfo) RETURN s.version AS version');
+    const result = await session.run(
+      "MATCH (s:SchemaInfo) RETURN s.version AS version",
+    );
     if (result.records.length === 0) return 0;
     const record = result.records[0];
     if (!record) return 0;
-    const version = record.get('version');
+    const version = record.get("version");
     if (version === null || version === undefined) return 0;
     return neo4j.integer.toNumber(version);
   } finally {
@@ -29,10 +31,13 @@ async function getSchemaVersion(driver: Driver): Promise<number> {
   }
 }
 
-async function setSchemaVersion(driver: Driver, version: number): Promise<void> {
+async function setSchemaVersion(
+  driver: Driver,
+  version: number,
+): Promise<void> {
   const session = driver.session();
   try {
-    await session.run('MERGE (s:SchemaInfo) SET s.version = $version', {
+    await session.run("MERGE (s:SchemaInfo) SET s.version = $version", {
       version: neo4j.int(version),
     });
   } finally {
@@ -63,15 +68,15 @@ async function migrate_v2(driver: Driver): Promise<void> {
     );
 
     // 2. Replace the property index
-    await session.run('DROP INDEX resource_type IF EXISTS');
+    await session.run("DROP INDEX resource_type IF EXISTS");
     await session.run(
-      'CREATE INDEX resource_entry_type IF NOT EXISTS FOR (r:Resource) ON (r.entry_type)',
+      "CREATE INDEX resource_entry_type IF NOT EXISTS FOR (r:Resource) ON (r.entry_type)",
     );
 
     // 3. Rebuild the fulltext index with extended field coverage
-    await session.run('DROP INDEX resource_text IF EXISTS');
+    await session.run("DROP INDEX resource_text IF EXISTS");
     await session.run(
-      'CREATE FULLTEXT INDEX resource_text IF NOT EXISTS FOR (n:Resource) ON EACH [n.title, n.content, n.summary, n.topic, n.tags]',
+      "CREATE FULLTEXT INDEX resource_text IF NOT EXISTS FOR (n:Resource) ON EACH [n.title, n.content, n.summary, n.topic, n.tags]",
     );
   } finally {
     await session.close();
@@ -87,7 +92,7 @@ async function migrate_v3(driver: Driver): Promise<void> {
   const session = driver.session();
   try {
     await session.run(
-      'CREATE INDEX entry_relation_type IF NOT EXISTS FOR ()-[r:ENTRY_RELATION]-() ON (r.relation_type)',
+      "CREATE INDEX entry_relation_type IF NOT EXISTS FOR ()-[r:ENTRY_RELATION]-() ON (r.relation_type)",
     );
   } finally {
     await session.close();

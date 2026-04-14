@@ -1,8 +1,15 @@
-import { z } from 'zod';
-import type { Neo4jClient } from '../neo4j-client.js';
-import { ErrorCode } from '../errors.js';
-import { ToolError, type RegisteredTool, type ToolContext } from './registry.js';
-import { DEFAULT_LIST_ACCESS_LIMIT, MAX_LIST_ACCESS_LIMIT } from './graph-constants.js';
+import { z } from "zod";
+import { ErrorCode } from "../errors.js";
+import type { Neo4jClient } from "../neo4j-client.js";
+import {
+  DEFAULT_LIST_ACCESS_LIMIT,
+  MAX_LIST_ACCESS_LIMIT,
+} from "./graph-constants.js";
+import {
+  type RegisteredTool,
+  type ToolContext,
+  ToolError,
+} from "./registry.js";
 
 // ── Permission helpers ────────────────────────────────────────────────────────
 
@@ -17,11 +24,12 @@ async function requireOwner(
   entryId: string,
 ): Promise<void> {
   const resource = await neo4jClient.getResource(entryId);
-  if (!resource) throw new ToolError(ErrorCode.RESOURCE_NOT_FOUND, 'Resource not found');
+  if (!resource)
+    throw new ToolError(ErrorCode.RESOURCE_NOT_FOUND, "Resource not found");
 
   const role = await neo4jClient.getEffectiveRole(userId, entryId);
-  if (role !== 'owner') {
-    throw new ToolError(ErrorCode.PERMISSION_DENIED, 'Permission denied');
+  if (role !== "owner") {
+    throw new ToolError(ErrorCode.PERMISSION_DENIED, "Permission denied");
   }
 }
 
@@ -35,10 +43,12 @@ async function requireRead(
   entryId: string,
 ): Promise<void> {
   const resource = await neo4jClient.getResource(entryId);
-  if (!resource) throw new ToolError(ErrorCode.RESOURCE_NOT_FOUND, 'Resource not found');
+  if (!resource)
+    throw new ToolError(ErrorCode.RESOURCE_NOT_FOUND, "Resource not found");
 
   const role = await neo4jClient.getEffectiveRole(userId, entryId);
-  if (role === null) throw new ToolError(ErrorCode.PERMISSION_DENIED, 'Permission denied');
+  if (role === null)
+    throw new ToolError(ErrorCode.PERMISSION_DENIED, "Permission denied");
 }
 
 // ── knowledge_share_entry ─────────────────────────────────────────────────────
@@ -46,7 +56,7 @@ async function requireRead(
 const shareSchema = z.object({
   entry_id: z.string().min(1),
   target_user_id: z.string().min(1),
-  role: z.enum(['viewer', 'editor']),
+  role: z.enum(["viewer", "editor"]),
 });
 
 async function handleShare(
@@ -56,7 +66,10 @@ async function handleShare(
 ): Promise<unknown> {
   const parsed = shareSchema.safeParse(args);
   if (!parsed.success) {
-    throw new ToolError(ErrorCode.INVALID_PARAMS, `Invalid params: ${parsed.error.message}`);
+    throw new ToolError(
+      ErrorCode.INVALID_PARAMS,
+      `Invalid params: ${parsed.error.message}`,
+    );
   }
   const { entry_id, target_user_id, role } = parsed.data;
 
@@ -79,23 +92,30 @@ async function handleRevoke(
 ): Promise<unknown> {
   const parsed = revokeSchema.safeParse(args);
   if (!parsed.success) {
-    throw new ToolError(ErrorCode.INVALID_PARAMS, `Invalid params: ${parsed.error.message}`);
+    throw new ToolError(
+      ErrorCode.INVALID_PARAMS,
+      `Invalid params: ${parsed.error.message}`,
+    );
   }
   const { entry_id, target_user_id } = parsed.data;
 
   // Entry must exist before any other check
   const resource = await neo4jClient.getResource(entry_id);
-  if (!resource) throw new ToolError(ErrorCode.RESOURCE_NOT_FOUND, 'Resource not found');
+  if (!resource)
+    throw new ToolError(ErrorCode.RESOURCE_NOT_FOUND, "Resource not found");
 
   // Prevent revoking own access
   if (target_user_id === ctx.userId) {
-    throw new ToolError(ErrorCode.PERMISSION_DENIED, 'Cannot revoke owner access');
+    throw new ToolError(
+      ErrorCode.PERMISSION_DENIED,
+      "Cannot revoke owner access",
+    );
   }
 
   // Only owners may revoke access
   const role = await neo4jClient.getEffectiveRole(ctx.userId, entry_id);
-  if (role !== 'owner') {
-    throw new ToolError(ErrorCode.PERMISSION_DENIED, 'Permission denied');
+  if (role !== "owner") {
+    throw new ToolError(ErrorCode.PERMISSION_DENIED, "Permission denied");
   }
 
   await neo4jClient.revokeAccess(entry_id, target_user_id);
@@ -116,7 +136,10 @@ async function handleListAccess(
 ): Promise<unknown> {
   const parsed = listAccessSchema.safeParse(args);
   if (!parsed.success) {
-    throw new ToolError(ErrorCode.INVALID_PARAMS, `Invalid params: ${parsed.error.message}`);
+    throw new ToolError(
+      ErrorCode.INVALID_PARAMS,
+      `Invalid params: ${parsed.error.message}`,
+    );
   }
   const { entry_id, limit: rawLimit } = parsed.data;
   const limit = rawLimit ?? DEFAULT_LIST_ACCESS_LIMIT;
@@ -135,50 +158,54 @@ export function createSharingTools(neo4jClient: Neo4jClient): RegisteredTool[] {
   return [
     {
       descriptor: {
-        name: 'knowledge_share_entry',
-        description: 'Grant another user access to a knowledge entry. Owner only.',
+        name: "knowledge_share_entry",
+        description:
+          "Grant another user access to a knowledge entry. Owner only.",
         inputSchema: {
-          type: 'object',
+          type: "object",
           properties: {
-            entry_id: { type: 'string', description: 'UUID of the entry to share' },
-            target_user_id: { type: 'string' },
-            role: { type: 'string', enum: ['viewer', 'editor'] },
+            entry_id: {
+              type: "string",
+              description: "UUID of the entry to share",
+            },
+            target_user_id: { type: "string" },
+            role: { type: "string", enum: ["viewer", "editor"] },
           },
-          required: ['entry_id', 'target_user_id', 'role'],
+          required: ["entry_id", "target_user_id", "role"],
         },
       },
       handler: (args, ctx) => handleShare(args, ctx, neo4jClient),
     },
     {
       descriptor: {
-        name: 'knowledge_revoke_access',
+        name: "knowledge_revoke_access",
         description: "Remove a user's access to a knowledge entry. Owner only.",
         inputSchema: {
-          type: 'object',
+          type: "object",
           properties: {
-            entry_id: { type: 'string', description: 'UUID of the entry' },
-            target_user_id: { type: 'string' },
+            entry_id: { type: "string", description: "UUID of the entry" },
+            target_user_id: { type: "string" },
           },
-          required: ['entry_id', 'target_user_id'],
+          required: ["entry_id", "target_user_id"],
         },
       },
       handler: (args, ctx) => handleRevoke(args, ctx, neo4jClient),
     },
     {
       descriptor: {
-        name: 'knowledge_list_access',
+        name: "knowledge_list_access",
         description:
-          'List all users with access to a knowledge entry. Requires at least read access. Results are ordered by grant date (most recent first).',
+          "List all users with access to a knowledge entry. Requires at least read access. Results are ordered by grant date (most recent first).",
         inputSchema: {
-          type: 'object',
+          type: "object",
           properties: {
-            entry_id: { type: 'string' },
+            entry_id: { type: "string" },
             limit: {
-              type: 'number',
+              type: "number",
               description: `Max access grants to return (default ${DEFAULT_LIST_ACCESS_LIMIT}, max ${MAX_LIST_ACCESS_LIMIT})`,
             },
           },
-          required: ['entry_id'],
+          required: ["entry_id"],
         },
       },
       handler: (args, ctx) => handleListAccess(args, ctx, neo4jClient),

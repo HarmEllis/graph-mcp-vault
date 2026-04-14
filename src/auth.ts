@@ -1,6 +1,6 @@
-import { decodeProtectedHeader, importJWK, jwtVerify } from 'jose';
-import type { JWK, KeyLike } from 'jose';
-import type { Config } from './config.js';
+import { decodeProtectedHeader, importJWK, jwtVerify } from "jose";
+import type { JWK, KeyLike } from "jose";
+import type { Config } from "./config.js";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -13,7 +13,7 @@ interface JwksDocument {
 export class AuthError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = 'AuthError';
+    this.name = "AuthError";
   }
 }
 
@@ -63,7 +63,7 @@ export class JwksClient {
     const doc = (await resp.json()) as JwksDocument;
     const entries = await Promise.all(
       doc.keys.map(async (jwk) => {
-        const key = await importJWK(jwk, 'RS256');
+        const key = await importJWK(jwk, "RS256");
         return [jwk.kid, key as KeyLike] as const;
       }),
     );
@@ -89,8 +89,8 @@ export async function validateBearerToken(
   config: Config,
   jwksClient: JwksClient,
 ): Promise<{ userId: string }> {
-  if (!authHeader?.startsWith('Bearer ')) {
-    throw new AuthError('Missing or invalid Authorization header');
+  if (!authHeader?.startsWith("Bearer ")) {
+    throw new AuthError("Missing or invalid Authorization header");
   }
 
   const token = authHeader.slice(7);
@@ -98,11 +98,12 @@ export async function validateBearerToken(
   let kid: string;
   try {
     const header = decodeProtectedHeader(token);
-    if (!header.kid) throw new AuthError('JWT is missing the kid header parameter');
+    if (!header.kid)
+      throw new AuthError("JWT is missing the kid header parameter");
     kid = header.kid;
   } catch (err) {
     if (err instanceof AuthError) throw err;
-    throw new AuthError('Malformed JWT header');
+    throw new AuthError("Malformed JWT header");
   }
 
   // Look up the signing key; force-refresh once if kid is unknown.
@@ -117,14 +118,16 @@ export async function validateBearerToken(
     const { payload } = await jwtVerify(token, key, {
       issuer: config.oidcIssuer,
       audience: config.oidcAudience,
-      algorithms: ['RS256'],
+      algorithms: ["RS256"],
       clockTolerance: 30, // seconds — handles clock skew for nbf and exp
     });
 
-    if (!payload.sub) throw new AuthError('JWT is missing the sub claim');
+    if (!payload.sub) throw new AuthError("JWT is missing the sub claim");
     return { userId: payload.sub };
   } catch (err) {
     if (err instanceof AuthError) throw err;
-    throw new AuthError(err instanceof Error ? err.message : 'JWT validation failed');
+    throw new AuthError(
+      err instanceof Error ? err.message : "JWT validation failed",
+    );
   }
 }

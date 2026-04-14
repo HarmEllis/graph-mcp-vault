@@ -1,8 +1,8 @@
-import { describe, it, expect } from 'vitest';
-import { ErrorCode, makeJsonRpcError } from '../src/errors.js';
+import { describe, expect, it } from "vitest";
+import { ErrorCode, makeJsonRpcError } from "../src/errors.js";
 
-describe('ErrorCode', () => {
-  it('has the correct numeric values per the error taxonomy', () => {
+describe("ErrorCode", () => {
+  it("has the correct numeric values per the error taxonomy", () => {
     expect(ErrorCode.PARSE_ERROR).toBe(-32700);
     expect(ErrorCode.INVALID_REQUEST).toBe(-32600);
     expect(ErrorCode.METHOD_NOT_FOUND).toBe(-32601);
@@ -15,40 +15,44 @@ describe('ErrorCode', () => {
   });
 });
 
-describe('makeJsonRpcError', () => {
-  it('creates a well-formed JSON-RPC 2.0 error response', () => {
-    const err = makeJsonRpcError(1, ErrorCode.INVALID_REQUEST, 'bad request');
+describe("makeJsonRpcError", () => {
+  it("creates a well-formed JSON-RPC 2.0 error response", () => {
+    const err = makeJsonRpcError(1, ErrorCode.INVALID_REQUEST, "bad request");
     expect(err).toEqual({
-      jsonrpc: '2.0',
+      jsonrpc: "2.0",
       id: 1,
-      error: { code: -32600, message: 'bad request' },
+      error: { code: -32600, message: "bad request" },
     });
   });
 
-  it('includes optional data field when provided', () => {
-    const err = makeJsonRpcError(2, ErrorCode.INTERNAL_ERROR, 'oops', {
-      detail: 'stack trace',
+  it("includes optional data field when provided", () => {
+    const err = makeJsonRpcError(2, ErrorCode.INTERNAL_ERROR, "oops", {
+      detail: "stack trace",
     });
-    expect(err.error.data).toEqual({ detail: 'stack trace' });
+    expect(err.error.data).toEqual({ detail: "stack trace" });
   });
 
-  it('omits data field when not provided', () => {
-    const err = makeJsonRpcError(3, ErrorCode.PARSE_ERROR, 'malformed');
-    expect('data' in err.error).toBe(false);
+  it("omits data field when not provided", () => {
+    const err = makeJsonRpcError(3, ErrorCode.PARSE_ERROR, "malformed");
+    expect("data" in err.error).toBe(false);
   });
 
-  it('accepts null id for notifications or parse failures', () => {
-    const err = makeJsonRpcError(null, ErrorCode.PARSE_ERROR, 'malformed JSON');
+  it("accepts null id for notifications or parse failures", () => {
+    const err = makeJsonRpcError(null, ErrorCode.PARSE_ERROR, "malformed JSON");
     expect(err.id).toBeNull();
   });
 
-  it('accepts string id', () => {
-    const err = makeJsonRpcError('req-abc', ErrorCode.METHOD_NOT_FOUND, 'unknown method');
-    expect(err.id).toBe('req-abc');
+  it("accepts string id", () => {
+    const err = makeJsonRpcError(
+      "req-abc",
+      ErrorCode.METHOD_NOT_FOUND,
+      "unknown method",
+    );
+    expect(err.id).toBe("req-abc");
   });
 
-  it('returns the exact code value in the error envelope', () => {
-    const err = makeJsonRpcError(5, ErrorCode.PERMISSION_DENIED, 'not allowed');
+  it("returns the exact code value in the error envelope", () => {
+    const err = makeJsonRpcError(5, ErrorCode.PERMISSION_DENIED, "not allowed");
     expect(err.error.code).toBe(-32002);
   });
 });

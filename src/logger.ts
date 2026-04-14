@@ -1,6 +1,6 @@
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-export type LogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error';
+export type LogLevel = "trace" | "debug" | "info" | "warn" | "error";
 
 const LEVEL_RANK: Record<LogLevel, number> = {
   trace: 0,
@@ -47,20 +47,25 @@ export const noopLogger: Logger = {
  */
 export function createLogger(
   minLevel: LogLevel,
-  writeLine: (line: string) => void = (l) => process.stdout.write(l + '\n'),
+  writeLine: (line: string) => void = (l) => process.stdout.write(`${l}\n`),
 ): Logger {
   function emit(level: LogLevel, event: string, fields: LogFields = {}): void {
     if (LEVEL_RANK[level] < LEVEL_RANK[minLevel]) return;
     writeLine(
-      JSON.stringify({ timestamp: new Date().toISOString(), level, event, ...fields }),
+      JSON.stringify({
+        timestamp: new Date().toISOString(),
+        level,
+        event,
+        ...fields,
+      }),
     );
   }
 
   return {
-    trace: (e, f) => emit('trace', e, f),
-    debug: (e, f) => emit('debug', e, f),
-    info: (e, f) => emit('info', e, f),
-    warn: (e, f) => emit('warn', e, f),
-    error: (e, f) => emit('error', e, f),
+    trace: (e, f) => emit("trace", e, f),
+    debug: (e, f) => emit("debug", e, f),
+    info: (e, f) => emit("info", e, f),
+    warn: (e, f) => emit("warn", e, f),
+    error: (e, f) => emit("error", e, f),
   };
 }

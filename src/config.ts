@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from "zod";
 
 const envSchema = z.object({
   OIDC_ISSUER: z.string().url(),
@@ -9,11 +9,13 @@ const envSchema = z.object({
   NEO4J_URI: z.string().min(1),
   NEO4J_USER: z.string().min(1),
   NEO4J_PASSWORD: z.string().min(1),
-  HOST: z.string().default('0.0.0.0'),
+  HOST: z.string().default("0.0.0.0"),
   PORT: z.coerce.number().int().positive().default(8000),
-  DEFAULT_NAMESPACE: z.string().default('default'),
-  LOG_LEVEL: z.enum(['trace', 'debug', 'info', 'warn', 'error']).default('info'),
-  ALLOWED_ORIGINS: z.string().default(''),
+  DEFAULT_NAMESPACE: z.string().default("default"),
+  LOG_LEVEL: z
+    .enum(["trace", "debug", "info", "warn", "error"])
+    .default("info"),
+  ALLOWED_ORIGINS: z.string().default(""),
   SCOPES_ALLOWLIST: z.string().optional(),
 });
 
@@ -29,7 +31,7 @@ export interface Config {
   host: string;
   port: number;
   defaultNamespace: string;
-  logLevel: 'trace' | 'debug' | 'info' | 'warn' | 'error';
+  logLevel: "trace" | "debug" | "info" | "warn" | "error";
   allowedOrigins: string;
   scopesAllowlist: string[] | undefined;
 }
@@ -37,7 +39,9 @@ export interface Config {
 export function parseConfig(env: Record<string, string | undefined>): Config {
   const parsed = envSchema.parse(env);
   const scopesAllowlist = parsed.SCOPES_ALLOWLIST
-    ? parsed.SCOPES_ALLOWLIST.split(',').map((s) => s.trim()).filter((s) => s.length > 0)
+    ? parsed.SCOPES_ALLOWLIST.split(",")
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0)
     : undefined;
 
   return {

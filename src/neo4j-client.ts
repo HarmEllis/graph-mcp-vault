@@ -1,5 +1,5 @@
-import { randomUUID } from 'node:crypto';
-import neo4j, { type Driver } from 'neo4j-driver';
+import { randomUUID } from "node:crypto";
+import neo4j, { type Driver } from "neo4j-driver";
 
 // ── Domain types ──────────────────────────────────────────────────────────────
 
@@ -20,12 +20,12 @@ export interface Resource {
 }
 
 export interface ResourceWithOwnership extends Resource {
-  ownership: 'owner' | 'shared';
+  ownership: "owner" | "shared";
 }
 
 export interface SharingEntry {
   user_id: string;
-  role: 'viewer' | 'editor';
+  role: "viewer" | "editor";
   granted_at: string;
 }
 
@@ -35,11 +35,11 @@ export interface NamespaceSummary {
   shared_count: number;
 }
 
-export type MatchMode = 'exact' | 'fulltext' | 'fuzzy';
-export type EntryRelationDirection = 'outbound' | 'inbound' | 'both';
+export type MatchMode = "exact" | "fulltext" | "fuzzy";
+export type EntryRelationDirection = "outbound" | "inbound" | "both";
 
 export interface EntryRelation {
-  direction: 'outbound' | 'inbound';
+  direction: "outbound" | "inbound";
   relation_type: string;
   label?: string;
   entry: {
@@ -49,7 +49,10 @@ export interface EntryRelation {
 }
 
 export const ENTRY_RELATION_TYPE_REGEX = /^[A-Z][A-Z0-9_]{1,63}$/;
-export type Neo4jClientErrorCode = 'INVALID_PARAMS' | 'RESOURCE_NOT_FOUND' | 'PERMISSION_DENIED';
+export type Neo4jClientErrorCode =
+  | "INVALID_PARAMS"
+  | "RESOURCE_NOT_FOUND"
+  | "PERMISSION_DENIED";
 
 export interface ExpandContextLayer {
   distance: number;
@@ -67,7 +70,7 @@ export class Neo4jClientError extends Error {
     message: string,
   ) {
     super(message);
-    this.name = 'Neo4jClientError';
+    this.name = "Neo4jClientError";
   }
 }
 
@@ -106,7 +109,7 @@ function buildExactQuery(query: string): string {
  * and return an empty result set without hitting the index).
  */
 function buildFuzzyQuery(query: string): string | null {
-  const BOOLEAN_OPS = new Set(['AND', 'OR', 'NOT']);
+  const BOOLEAN_OPS = new Set(["AND", "OR", "NOT"]);
 
   const rawTokens = query.split(/\s+/).filter((t) => t.length > 0);
   const filtered = rawTokens.filter((t) => !BOOLEAN_OPS.has(t));
@@ -121,7 +124,7 @@ function buildFuzzyQuery(query: string): string | null {
       if (len <= 5) return `${escaped}~1`;
       return `${escaped}~2`;
     })
-    .join(' ');
+    .join(" ");
 }
 
 /**
@@ -130,11 +133,11 @@ function buildFuzzyQuery(query: string): string | null {
  */
 function buildLuceneQuery(query: string, mode: MatchMode): string | null {
   switch (mode) {
-    case 'exact':
+    case "exact":
       return buildExactQuery(query);
-    case 'fulltext':
+    case "fulltext":
       return escapeLuceneQuery(query);
-    case 'fuzzy':
+    case "fuzzy":
       return buildFuzzyQuery(query);
   }
 }
@@ -151,8 +154,10 @@ function buildLuceneQuery(query: string, mode: MatchMode): string | null {
 export class Neo4jClient {
   constructor(private readonly driver: Driver) {}
 
-  private static hasReadPermission(role: 'owner' | 'editor' | 'viewer' | null): boolean {
-    return role === 'owner' || role === 'editor' || role === 'viewer';
+  private static hasReadPermission(
+    role: "owner" | "editor" | "viewer" | null,
+  ): boolean {
+    return role === "owner" || role === "editor" || role === "viewer";
   }
 
   // ── Resources ───────────────────────────────────────────────────────────────
@@ -177,11 +182,12 @@ export class Neo4jClient {
     const now = new Date().toISOString();
 
     const optionalProps: Record<string, unknown> = {};
-    if (params.topic !== undefined) optionalProps['topic'] = params.topic;
-    if (params.tags !== undefined) optionalProps['tags'] = params.tags;
-    if (params.summary !== undefined) optionalProps['summary'] = params.summary;
-    if (params.source !== undefined) optionalProps['source'] = params.source;
-    if (params.last_verified_at !== undefined) optionalProps['last_verified_at'] = params.last_verified_at;
+    if (params.topic !== undefined) optionalProps.topic = params.topic;
+    if (params.tags !== undefined) optionalProps.tags = params.tags;
+    if (params.summary !== undefined) optionalProps.summary = params.summary;
+    if (params.source !== undefined) optionalProps.source = params.source;
+    if (params.last_verified_at !== undefined)
+      optionalProps.last_verified_at = params.last_verified_at;
 
     const session = this.driver.session();
     try {
@@ -222,11 +228,14 @@ export class Neo4jClient {
   async getResource(resourceId: string): Promise<Resource | null> {
     const session = this.driver.session();
     try {
-      const result = await session.run('MATCH (r:Resource {id: $id}) RETURN r', { id: resourceId });
+      const result = await session.run(
+        "MATCH (r:Resource {id: $id}) RETURN r",
+        { id: resourceId },
+      );
       if (result.records.length === 0) return null;
       const record = result.records[0];
       if (!record) return null;
-      return record.get('r').properties as Resource;
+      return record.get("r").properties as Resource;
     } finally {
       await session.close();
     }
@@ -266,8 +275,8 @@ export class Neo4jClient {
         },
       );
       return result.records.map((record) => ({
-        ...(record.get('r').properties as Resource),
-        ownership: record.get('ownership') as 'owner' | 'shared',
+        ...(record.get("r").properties as Resource),
+        ownership: record.get("ownership") as "owner" | "shared",
       }));
     } finally {
       await session.close();
@@ -292,17 +301,21 @@ export class Neo4jClient {
   ): Promise<void> {
     const now = new Date().toISOString();
     const patch: Record<string, unknown> = { updated_at: now };
-    if (params.title !== undefined) patch['title'] = params.title;
-    if (params.content !== undefined) patch['content'] = params.content;
-    if (params.topic !== undefined) patch['topic'] = params.topic;
-    if (params.tags !== undefined) patch['tags'] = params.tags;
-    if (params.summary !== undefined) patch['summary'] = params.summary;
-    if (params.source !== undefined) patch['source'] = params.source;
-    if (params.last_verified_at !== undefined) patch['last_verified_at'] = params.last_verified_at;
+    if (params.title !== undefined) patch.title = params.title;
+    if (params.content !== undefined) patch.content = params.content;
+    if (params.topic !== undefined) patch.topic = params.topic;
+    if (params.tags !== undefined) patch.tags = params.tags;
+    if (params.summary !== undefined) patch.summary = params.summary;
+    if (params.source !== undefined) patch.source = params.source;
+    if (params.last_verified_at !== undefined)
+      patch.last_verified_at = params.last_verified_at;
 
     const session = this.driver.session();
     try {
-      await session.run('MATCH (r:Resource {id: $id}) SET r += $patch', { id: resourceId, patch });
+      await session.run("MATCH (r:Resource {id: $id}) SET r += $patch", {
+        id: resourceId,
+        patch,
+      });
     } finally {
       await session.close();
     }
@@ -312,7 +325,9 @@ export class Neo4jClient {
   async deleteResource(resourceId: string): Promise<void> {
     const session = this.driver.session();
     try {
-      await session.run('MATCH (r:Resource {id: $id}) DETACH DELETE r', { id: resourceId });
+      await session.run("MATCH (r:Resource {id: $id}) DETACH DELETE r", {
+        id: resourceId,
+      });
     } finally {
       await session.close();
     }
@@ -344,7 +359,7 @@ export class Neo4jClient {
   }): Promise<ResourceWithOwnership[]> {
     const limit = params.limit ?? 20;
     const skip = params.skip ?? 0;
-    const mode = params.match_mode ?? 'fuzzy';
+    const mode = params.match_mode ?? "fuzzy";
 
     const luceneQuery = buildLuceneQuery(params.query, mode);
     if (luceneQuery === null) return [];
@@ -373,8 +388,8 @@ export class Neo4jClient {
         },
       );
       return result.records.map((record) => ({
-        ...(record.get('r').properties as Resource),
-        ownership: record.get('ownership') as 'owner' | 'shared',
+        ...(record.get("r").properties as Resource),
+        ownership: record.get("ownership") as "owner" | "shared",
       }));
     } finally {
       await session.close();
@@ -392,7 +407,7 @@ export class Neo4jClient {
   async getEffectiveRole(
     userId: string,
     resourceId: string,
-  ): Promise<'owner' | 'editor' | 'viewer' | null> {
+  ): Promise<"owner" | "editor" | "viewer" | null> {
     const session = this.driver.session();
     try {
       const result = await session.run(
@@ -412,8 +427,9 @@ export class Neo4jClient {
       if (result.records.length === 0) return null;
       const record = result.records[0];
       if (!record) return null;
-      const role = record.get('role') as string | null;
-      if (role === 'owner' || role === 'editor' || role === 'viewer') return role;
+      const role = record.get("role") as string | null;
+      if (role === "owner" || role === "editor" || role === "viewer")
+        return role;
       return null;
     } finally {
       await session.close();
@@ -431,7 +447,7 @@ export class Neo4jClient {
   async shareResource(
     resourceId: string,
     targetUserId: string,
-    role: 'viewer' | 'editor',
+    role: "viewer" | "editor",
   ): Promise<void> {
     const now = new Date().toISOString();
     const session = this.driver.session();
@@ -479,7 +495,9 @@ export class Neo4jClient {
    *
    * Results are returned in deterministic alphabetical order by namespace.
    */
-  async listNamespaces(params: { userId: string }): Promise<NamespaceSummary[]> {
+  async listNamespaces(params: { userId: string }): Promise<
+    NamespaceSummary[]
+  > {
     const session = this.driver.session();
     try {
       const ownedResult = await session.run(
@@ -502,14 +520,14 @@ export class Neo4jClient {
       const map = new Map<string, NamespaceSummary>();
 
       for (const record of ownedResult.records) {
-        const namespace = record.get('namespace') as string;
-        const owned_count = neo4j.integer.toNumber(record.get('owned_count'));
+        const namespace = record.get("namespace") as string;
+        const owned_count = neo4j.integer.toNumber(record.get("owned_count"));
         map.set(namespace, { namespace, owned_count, shared_count: 0 });
       }
 
       for (const record of sharedResult.records) {
-        const namespace = record.get('namespace') as string;
-        const shared_count = neo4j.integer.toNumber(record.get('shared_count'));
+        const namespace = record.get("namespace") as string;
+        const shared_count = neo4j.integer.toNumber(record.get("shared_count"));
         const existing = map.get(namespace);
         if (existing) {
           existing.shared_count = shared_count;
@@ -518,7 +536,9 @@ export class Neo4jClient {
         }
       }
 
-      return [...map.values()].sort((a, b) => a.namespace.localeCompare(b.namespace));
+      return [...map.values()].sort((a, b) =>
+        a.namespace.localeCompare(b.namespace),
+      );
     } finally {
       await session.close();
     }
@@ -529,7 +549,10 @@ export class Neo4jClient {
    * Results are ordered by granted_at DESC for determinism. An optional limit
    * caps the number of entries returned.
    */
-  async listSharing(resourceId: string, limit: number): Promise<SharingEntry[]> {
+  async listSharing(
+    resourceId: string,
+    limit: number,
+  ): Promise<SharingEntry[]> {
     const session = this.driver.session();
     try {
       const result = await session.run(
@@ -542,9 +565,9 @@ export class Neo4jClient {
         { resourceId, limit: neo4j.int(limit) },
       );
       return result.records.map((record) => ({
-        user_id: record.get('user_id') as string,
-        role: record.get('role') as 'viewer' | 'editor',
-        granted_at: record.get('granted_at') as string,
+        user_id: record.get("user_id") as string,
+        role: record.get("role") as "viewer" | "editor",
+        granted_at: record.get("granted_at") as string,
       }));
     } finally {
       await session.close();
@@ -561,26 +584,38 @@ export class Neo4jClient {
     label?: string,
   ): Promise<void> {
     if (fromId === toId) {
-      throw new Neo4jClientError('INVALID_PARAMS', 'from_id and to_id must be different');
+      throw new Neo4jClientError(
+        "INVALID_PARAMS",
+        "from_id and to_id must be different",
+      );
     }
     if (!ENTRY_RELATION_TYPE_REGEX.test(relationType)) {
-      throw new Neo4jClientError('INVALID_PARAMS', 'relation_type must be UPPER_SNAKE_CASE');
+      throw new Neo4jClientError(
+        "INVALID_PARAMS",
+        "relation_type must be UPPER_SNAKE_CASE",
+      );
     }
 
     const fromResource = await this.getResource(fromId);
     const toResource = await this.getResource(toId);
     if (!fromResource || !toResource) {
-      throw new Neo4jClientError('RESOURCE_NOT_FOUND', 'Resource not found');
+      throw new Neo4jClientError("RESOURCE_NOT_FOUND", "Resource not found");
     }
 
     if (fromResource.namespace !== toResource.namespace) {
-      throw new Neo4jClientError('INVALID_PARAMS', 'Entries must belong to the same namespace');
+      throw new Neo4jClientError(
+        "INVALID_PARAMS",
+        "Entries must belong to the same namespace",
+      );
     }
 
     const fromRole = await this.getEffectiveRole(userId, fromId);
     const toRole = await this.getEffectiveRole(userId, toId);
-    if (!Neo4jClient.hasReadPermission(fromRole) || !Neo4jClient.hasReadPermission(toRole)) {
-      throw new Neo4jClientError('PERMISSION_DENIED', 'Permission denied');
+    if (
+      !Neo4jClient.hasReadPermission(fromRole) ||
+      !Neo4jClient.hasReadPermission(toRole)
+    ) {
+      throw new Neo4jClientError("PERMISSION_DENIED", "Permission denied");
     }
 
     const now = new Date().toISOString();
@@ -626,15 +661,18 @@ export class Neo4jClient {
     const fromResource = await this.getResource(fromId);
     const toResource = await this.getResource(toId);
     if (!fromResource || !toResource) {
-      throw new Neo4jClientError('RESOURCE_NOT_FOUND', 'Resource not found');
+      throw new Neo4jClientError("RESOURCE_NOT_FOUND", "Resource not found");
     }
     if (!ENTRY_RELATION_TYPE_REGEX.test(relationType)) {
-      throw new Neo4jClientError('INVALID_PARAMS', 'relation_type must be UPPER_SNAKE_CASE');
+      throw new Neo4jClientError(
+        "INVALID_PARAMS",
+        "relation_type must be UPPER_SNAKE_CASE",
+      );
     }
 
     const fromRole = await this.getEffectiveRole(userId, fromId);
-    if (fromRole !== 'owner') {
-      throw new Neo4jClientError('PERMISSION_DENIED', 'Permission denied');
+    if (fromRole !== "owner") {
+      throw new Neo4jClientError("PERMISSION_DENIED", "Permission denied");
     }
 
     const session = this.driver.session();
@@ -659,17 +697,17 @@ export class Neo4jClient {
   ): Promise<EntryRelation[]> {
     const entry = await this.getResource(entryId);
     if (!entry) {
-      throw new Neo4jClientError('RESOURCE_NOT_FOUND', 'Resource not found');
+      throw new Neo4jClientError("RESOURCE_NOT_FOUND", "Resource not found");
     }
     const role = await this.getEffectiveRole(userId, entryId);
     if (!Neo4jClient.hasReadPermission(role)) {
-      throw new Neo4jClientError('PERMISSION_DENIED', 'Permission denied');
+      throw new Neo4jClientError("PERMISSION_DENIED", "Permission denied");
     }
 
     const session = this.driver.session();
     try {
       let query: string;
-      if (direction === 'outbound') {
+      if (direction === "outbound") {
         query = `
           MATCH (base:Resource {id: $entryId})-[r:ENTRY_RELATION]->(other:Resource)
           WHERE EXISTS { MATCH (:User {id: $userId})-[:OWNS|HAS_ACCESS]->(other) }
@@ -677,7 +715,7 @@ export class Neo4jClient {
           ORDER BY relation_type, entry_title
           LIMIT $limit
         `;
-      } else if (direction === 'inbound') {
+      } else if (direction === "inbound") {
         query = `
           MATCH (other:Resource)-[r:ENTRY_RELATION]->(base:Resource {id: $entryId})
           WHERE EXISTS { MATCH (:User {id: $userId})-[:OWNS|HAS_ACCESS]->(other) }
@@ -702,14 +740,20 @@ export class Neo4jClient {
         `;
       }
 
-      const result = await session.run(query, { userId, entryId, limit: neo4j.int(limit) });
+      const result = await session.run(query, {
+        userId,
+        entryId,
+        limit: neo4j.int(limit),
+      });
       return result.records.map((record) => ({
-        direction: record.get('direction') as 'outbound' | 'inbound',
-        relation_type: record.get('relation_type') as string,
-        ...(record.get('label') !== null ? { label: record.get('label') as string } : {}),
+        direction: record.get("direction") as "outbound" | "inbound",
+        relation_type: record.get("relation_type") as string,
+        ...(record.get("label") !== null
+          ? { label: record.get("label") as string }
+          : {}),
         entry: {
-          id: record.get('entry_id') as string,
-          title: record.get('entry_title') as string,
+          id: record.get("entry_id") as string,
+          title: record.get("entry_title") as string,
         },
       }));
     } finally {
@@ -737,34 +781,37 @@ export class Neo4jClient {
   }): Promise<ExpandContextLayer[]> {
     const entry = await this.getResource(params.entryId);
     if (!entry) {
-      throw new Neo4jClientError('RESOURCE_NOT_FOUND', 'Resource not found');
+      throw new Neo4jClientError("RESOURCE_NOT_FOUND", "Resource not found");
     }
     const role = await this.getEffectiveRole(params.userId, params.entryId);
     if (!Neo4jClient.hasReadPermission(role)) {
-      throw new Neo4jClientError('PERMISSION_DENIED', 'Permission denied');
+      throw new Neo4jClientError("PERMISSION_DENIED", "Permission denied");
     }
     if (params.relationTypes !== null) {
       for (const rt of params.relationTypes) {
         if (!ENTRY_RELATION_TYPE_REGEX.test(rt)) {
-          throw new Neo4jClientError('INVALID_PARAMS', `relation_type must be UPPER_SNAKE_CASE: ${rt}`);
+          throw new Neo4jClientError(
+            "INVALID_PARAMS",
+            `relation_type must be UPPER_SNAKE_CASE: ${rt}`,
+          );
         }
       }
     }
 
-    const dir = params.direction ?? 'both';
+    const dir = params.direction ?? "both";
     // Neo4j does not allow parameters as range bounds in variable-length path
     // patterns — embed the integer literal directly (safe: already capped).
     const hopsLiteral = params.maxHops;
     let pathPattern: string;
-    if (dir === 'outbound') {
+    if (dir === "outbound") {
       pathPattern = `(start:Resource {id: $entryId})-[:ENTRY_RELATION*1..${hopsLiteral}]->(neighbor:Resource)`;
-    } else if (dir === 'inbound') {
+    } else if (dir === "inbound") {
       pathPattern = `(neighbor:Resource)-[:ENTRY_RELATION*1..${hopsLiteral}]->(start:Resource {id: $entryId})`;
     } else {
       pathPattern = `(start:Resource {id: $entryId})-[:ENTRY_RELATION*1..${hopsLiteral}]-(neighbor:Resource)`;
     }
 
-    const neighborFilter = dir === 'both' ? 'AND neighbor <> start' : '';
+    const neighborFilter = dir === "both" ? "AND neighbor <> start" : "";
 
     const query = `
       MATCH path = ${pathPattern}
@@ -791,8 +838,8 @@ export class Neo4jClient {
         limit: neo4j.int(params.limit),
       });
       return result.records.map((record) => ({
-        distance: neo4j.integer.toNumber(record.get('distance')),
-        entries: record.get('entries') as Array<{ id: string; title: string }>,
+        distance: neo4j.integer.toNumber(record.get("distance")),
+        entries: record.get("entries") as Array<{ id: string; title: string }>,
       }));
     } finally {
       await session.close();
@@ -815,12 +862,18 @@ export class Neo4jClient {
     relationTypes: string[] | null;
   }): Promise<PathResult[]> {
     if (params.fromId === params.toId) {
-      throw new Neo4jClientError('INVALID_PARAMS', 'from_id and to_id must be different');
+      throw new Neo4jClientError(
+        "INVALID_PARAMS",
+        "from_id and to_id must be different",
+      );
     }
     if (params.relationTypes !== null) {
       for (const rt of params.relationTypes) {
         if (!ENTRY_RELATION_TYPE_REGEX.test(rt)) {
-          throw new Neo4jClientError('INVALID_PARAMS', `relation_type must be UPPER_SNAKE_CASE: ${rt}`);
+          throw new Neo4jClientError(
+            "INVALID_PARAMS",
+            `relation_type must be UPPER_SNAKE_CASE: ${rt}`,
+          );
         }
       }
     }
@@ -828,16 +881,22 @@ export class Neo4jClient {
     const fromResource = await this.getResource(params.fromId);
     const toResource = await this.getResource(params.toId);
     if (!fromResource || !toResource) {
-      throw new Neo4jClientError('RESOURCE_NOT_FOUND', 'Resource not found');
+      throw new Neo4jClientError("RESOURCE_NOT_FOUND", "Resource not found");
     }
     if (fromResource.namespace !== toResource.namespace) {
-      throw new Neo4jClientError('INVALID_PARAMS', 'Entries must belong to the same namespace');
+      throw new Neo4jClientError(
+        "INVALID_PARAMS",
+        "Entries must belong to the same namespace",
+      );
     }
 
     const fromRole = await this.getEffectiveRole(params.userId, params.fromId);
     const toRole = await this.getEffectiveRole(params.userId, params.toId);
-    if (!Neo4jClient.hasReadPermission(fromRole) || !Neo4jClient.hasReadPermission(toRole)) {
-      throw new Neo4jClientError('PERMISSION_DENIED', 'Permission denied');
+    if (
+      !Neo4jClient.hasReadPermission(fromRole) ||
+      !Neo4jClient.hasReadPermission(toRole)
+    ) {
+      throw new Neo4jClientError("PERMISSION_DENIED", "Permission denied");
     }
 
     // Embed depth literal — Neo4j does not allow parameters in range bounds.
@@ -863,8 +922,14 @@ export class Neo4jClient {
         },
       );
       return result.records.map((record) => {
-        const rawNodes = record.get('pathNodes') as Array<{ id: string; title: string }>;
-        const rawRels = record.get('pathRels') as Array<{ relation_type: string; label: string | null }>;
+        const rawNodes = record.get("pathNodes") as Array<{
+          id: string;
+          title: string;
+        }>;
+        const rawRels = record.get("pathRels") as Array<{
+          relation_type: string;
+          label: string | null;
+        }>;
         return {
           nodes: rawNodes,
           relations: rawRels.map((r) => ({
@@ -896,16 +961,19 @@ export class Neo4jClient {
   }): Promise<{ layers: ExpandContextLayer[]; total_impacted: number }> {
     const entry = await this.getResource(params.entryId);
     if (!entry) {
-      throw new Neo4jClientError('RESOURCE_NOT_FOUND', 'Resource not found');
+      throw new Neo4jClientError("RESOURCE_NOT_FOUND", "Resource not found");
     }
     const role = await this.getEffectiveRole(params.userId, params.entryId);
     if (!Neo4jClient.hasReadPermission(role)) {
-      throw new Neo4jClientError('PERMISSION_DENIED', 'Permission denied');
+      throw new Neo4jClientError("PERMISSION_DENIED", "Permission denied");
     }
     if (params.relationTypes !== null) {
       for (const rt of params.relationTypes) {
         if (!ENTRY_RELATION_TYPE_REGEX.test(rt)) {
-          throw new Neo4jClientError('INVALID_PARAMS', `relation_type must be UPPER_SNAKE_CASE: ${rt}`);
+          throw new Neo4jClientError(
+            "INVALID_PARAMS",
+            `relation_type must be UPPER_SNAKE_CASE: ${rt}`,
+          );
         }
       }
     }
@@ -937,10 +1005,13 @@ export class Neo4jClient {
         },
       );
       const layers: ExpandContextLayer[] = result.records.map((record) => ({
-        distance: neo4j.integer.toNumber(record.get('distance')),
-        entries: record.get('entries') as Array<{ id: string; title: string }>,
+        distance: neo4j.integer.toNumber(record.get("distance")),
+        entries: record.get("entries") as Array<{ id: string; title: string }>,
       }));
-      const total_impacted = layers.reduce((sum, l) => sum + l.entries.length, 0);
+      const total_impacted = layers.reduce(
+        (sum, l) => sum + l.entries.length,
+        0,
+      );
       return { layers, total_impacted };
     } finally {
       await session.close();
@@ -955,14 +1026,20 @@ export class Neo4jClient {
   ): Promise<Resource[]> {
     const entry = await this.getResource(entryId);
     if (!entry) {
-      throw new Neo4jClientError('RESOURCE_NOT_FOUND', 'Resource not found');
+      throw new Neo4jClientError("RESOURCE_NOT_FOUND", "Resource not found");
     }
     const role = await this.getEffectiveRole(userId, entryId);
     if (!Neo4jClient.hasReadPermission(role)) {
-      throw new Neo4jClientError('PERMISSION_DENIED', 'Permission denied');
+      throw new Neo4jClientError("PERMISSION_DENIED", "Permission denied");
     }
-    if (relationType !== undefined && !ENTRY_RELATION_TYPE_REGEX.test(relationType)) {
-      throw new Neo4jClientError('INVALID_PARAMS', 'relation_type must be UPPER_SNAKE_CASE');
+    if (
+      relationType !== undefined &&
+      !ENTRY_RELATION_TYPE_REGEX.test(relationType)
+    ) {
+      throw new Neo4jClientError(
+        "INVALID_PARAMS",
+        "relation_type must be UPPER_SNAKE_CASE",
+      );
     }
 
     const session = this.driver.session();
@@ -983,7 +1060,9 @@ export class Neo4jClient {
           limit: neo4j.int(limit),
         },
       );
-      return result.records.map((record) => record.get('other').properties as Resource);
+      return result.records.map(
+        (record) => record.get("other").properties as Resource,
+      );
     } finally {
       await session.close();
     }

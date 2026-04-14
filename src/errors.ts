@@ -13,7 +13,7 @@ export const ErrorCode = {
 export type ErrorCodeValue = (typeof ErrorCode)[keyof typeof ErrorCode];
 
 export interface JsonRpcError {
-  jsonrpc: '2.0';
+  jsonrpc: "2.0";
   id: number | string | null;
   error: {
     code: ErrorCodeValue;
@@ -28,9 +28,9 @@ export function makeJsonRpcError(
   message: string,
   data?: unknown,
 ): JsonRpcError {
-  const error: JsonRpcError['error'] = { code, message };
+  const error: JsonRpcError["error"] = { code, message };
   if (data !== undefined) {
     error.data = data;
   }
-  return { jsonrpc: '2.0', id, error };
+  return { jsonrpc: "2.0", id, error };
 }
