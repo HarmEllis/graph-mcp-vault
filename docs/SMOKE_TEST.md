@@ -228,6 +228,8 @@ docker compose logs graph-mcp-vault --since 5m | head -50
 | Auth failure | `event` | `"auth_failure"` |
 | All log lines | `timestamp` | ISO-8601 string |
 | All log lines | `level` | one of `trace`, `debug`, `info`, `warn`, `error` |
+| Tool call (any outcome) | `sessionNamespace` | Namespace bound to the MCP session at initialization time |
+| Tool call (any outcome) | `requestNamespace` | String value of `arguments.namespace` if the caller passed a string; `null` otherwise (absent, `null`, or non-string value) |
 
 **Confirm absent**: no `Authorization` header values, no JWT token strings, no entry `content` field in logs.
 

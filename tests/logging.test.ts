@@ -334,8 +334,19 @@ const failTool: RegisteredTool = {
   },
 };
 
+const crashTool: RegisteredTool = {
+  descriptor: {
+    name: 'crash',
+    description: 'Throws a raw Error (simulates internal server error).',
+    inputSchema: { type: 'object', properties: {}, required: [] },
+  },
+  handler: async () => {
+    throw new Error('unexpected crash');
+  },
+};
+
 describe('MCP logging: tool_call', () => {
-  it('emits tool_call info with tool, userId, namespace, durationMs, isError:false on success', async () => {
+  it('emits tool_call info with tool, userId, sessionNamespace, requestNamespace:null, durationMs, isError:false on success (no namespace in args)', async () => {
     stubJwks();
     const { app, lines } = buildApp([echoTool]);
     const token = await makeToken('call-user');
@@ -352,12 +363,69 @@ describe('MCP logging: tool_call', () => {
     expect(entry!['level']).toBe('info');
     expect(entry!['tool']).toBe('echo');
     expect(entry!['userId']).toBe('call-user');
-    expect(entry!['namespace']).toBe('call-ns');
+    expect(entry!['sessionNamespace']).toBe('call-ns');
+    expect(entry!['requestNamespace']).toBeNull();
+    expect('namespace' in entry!).toBe(false);
     expect(typeof entry!['durationMs']).toBe('number');
     expect(entry!['isError']).toBe(false);
   });
 
-  it('emits tool_call info with isError:true and jsonRpcErrorCode on ToolError', async () => {
+  it('emits tool_call with requestNamespace equal to the string namespace arg when provided', async () => {
+    stubJwks();
+    const { app, lines } = buildApp([echoTool]);
+    const token = await makeToken('ns-user');
+    const sid = await doInitialize(app, token, 'my-ns');
+    lines.length = 0;
+    await post(
+      app,
+      '/mcp',
+      { jsonrpc: '2.0', id: 10, method: 'tools/call', params: { name: 'echo', arguments: { msg: 'hi', namespace: 'override-ns' } } },
+      { Authorization: `Bearer ${token}`, 'Mcp-Session-Id': sid },
+    );
+    const entry = lines.find((l) => l['event'] === 'tool_call');
+    expect(entry).toBeDefined();
+    expect(entry!['sessionNamespace']).toBe('my-ns');
+    expect(entry!['requestNamespace']).toBe('override-ns');
+    expect('namespace' in entry!).toBe(false);
+  });
+
+  it('emits tool_call with requestNamespace:null when namespace arg is null', async () => {
+    stubJwks();
+    const { app, lines } = buildApp([echoTool]);
+    const token = await makeToken('ns-null-user');
+    const sid = await doInitialize(app, token, 'base-ns');
+    lines.length = 0;
+    await post(
+      app,
+      '/mcp',
+      { jsonrpc: '2.0', id: 11, method: 'tools/call', params: { name: 'echo', arguments: { msg: 'hi', namespace: null } } },
+      { Authorization: `Bearer ${token}`, 'Mcp-Session-Id': sid },
+    );
+    const entry = lines.find((l) => l['event'] === 'tool_call');
+    expect(entry).toBeDefined();
+    expect(entry!['requestNamespace']).toBeNull();
+    expect('namespace' in entry!).toBe(false);
+  });
+
+  it('emits tool_call with requestNamespace:null when namespace arg is a number', async () => {
+    stubJwks();
+    const { app, lines } = buildApp([echoTool]);
+    const token = await makeToken('ns-num-user');
+    const sid = await doInitialize(app, token, 'base-ns');
+    lines.length = 0;
+    await post(
+      app,
+      '/mcp',
+      { jsonrpc: '2.0', id: 12, method: 'tools/call', params: { name: 'echo', arguments: { msg: 'hi', namespace: 42 } } },
+      { Authorization: `Bearer ${token}`, 'Mcp-Session-Id': sid },
+    );
+    const entry = lines.find((l) => l['event'] === 'tool_call');
+    expect(entry).toBeDefined();
+    expect(entry!['requestNamespace']).toBeNull();
+    expect('namespace' in entry!).toBe(false);
+  });
+
+  it('emits tool_call info with isError:true and jsonRpcErrorCode on ToolError, with sessionNamespace and requestNamespace', async () => {
     stubJwks();
     const { app, lines } = buildApp([failTool]);
     const token = await makeToken('fail-user');
@@ -373,7 +441,31 @@ describe('MCP logging: tool_call', () => {
     expect(entry).toBeDefined();
     expect(entry!['isError']).toBe(true);
     expect(entry!['jsonRpcErrorCode']).toBe(ErrorCode.PERMISSION_DENIED);
+    expect(entry!['sessionNamespace']).toBe('fail-ns');
+    expect(entry!['requestNamespace']).toBeNull();
+    expect('namespace' in entry!).toBe(false);
     expect(typeof entry!['durationMs']).toBe('number');
+  });
+
+  it('emits tool_call_internal_error with sessionNamespace and requestNamespace on raw Error', async () => {
+    stubJwks();
+    const { app, lines } = buildApp([crashTool]);
+    const token = await makeToken('crash-user');
+    const sid = await doInitialize(app, token, 'crash-ns');
+    lines.length = 0;
+    await post(
+      app,
+      '/mcp',
+      { jsonrpc: '2.0', id: 13, method: 'tools/call', params: { name: 'crash', arguments: {} } },
+      { Authorization: `Bearer ${token}`, 'Mcp-Session-Id': sid },
+    );
+    const entry = lines.find((l) => l['event'] === 'tool_call_internal_error');
+    expect(entry).toBeDefined();
+    expect(entry!['level']).toBe('error');
+    expect(entry!['sessionNamespace']).toBe('crash-ns');
+    expect(entry!['requestNamespace']).toBeNull();
+    expect('namespace' in entry!).toBe(false);
+    expect(entry!['message']).toBe('unexpected crash');
   });
 
   it('does not log resource content in tool_call logs', async () => {

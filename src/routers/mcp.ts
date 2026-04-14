@@ -402,6 +402,7 @@ export function createMcpRouter(
     }
 
     const args = (params?.['arguments'] ?? {}) as Record<string, unknown>;
+    const requestNamespace = typeof args['namespace'] === 'string' ? args['namespace'] : null;
     const startMs = Date.now();
 
     try {
@@ -410,7 +411,8 @@ export function createMcpRouter(
       logger.info('tool_call', {
         requestId,
         userId: ctx.userId,
-        namespace: ctx.namespace,
+        sessionNamespace: ctx.namespace,
+        requestNamespace,
         tool: toolName,
         durationMs,
         httpStatus: 200,
@@ -434,7 +436,8 @@ export function createMcpRouter(
         logger.info('tool_call', {
           requestId,
           userId: ctx.userId,
-          namespace: ctx.namespace,
+          sessionNamespace: ctx.namespace,
+          requestNamespace,
           tool: toolName,
           durationMs,
           httpStatus: 200,
@@ -460,7 +463,8 @@ export function createMcpRouter(
       logger.error('tool_call_internal_error', {
         requestId,
         userId: ctx.userId,
-        namespace: ctx.namespace,
+        sessionNamespace: ctx.namespace,
+        requestNamespace,
         tool: toolName,
         durationMs,
         message: msg,

@@ -445,3 +445,19 @@ Relation type values are validated against `^[A-Z][A-Z0-9_]{1,63}$` (UPPER_SNAKE
 - Filtering counterpart visibility in `listEntryRelations` ensures users never discover entries they have no access to through the relation graph.
 
 **Rejected alternative**: one Neo4j relationship type per semantic (e.g. `DEPENDS_ON`, `RUNS_ON` as labels). Rejected because it requires a schema migration for every new relation type a user wants to introduce.
+
+---
+
+## D-027 — tool_call log: replace `namespace` with `sessionNamespace` + `requestNamespace`
+
+**Date**: 2026-04-14
+**Status**: Accepted
+
+**Decision**: The `tool_call` and `tool_call_internal_error` log events no longer emit a single `namespace` field. Instead they emit two explicit fields:
+
+- `sessionNamespace` — the namespace bound to the MCP session at initialization time (from `ctx.namespace`).
+- `requestNamespace` — the value of `arguments.namespace` in the tool call, if and only if it is a string; `null` in all other cases (field absent, value is `null`, or value is a non-string type).
+
+**Rationale**: The legacy `namespace` field was ambiguous — it was silently set to the session namespace regardless of what the caller passed in `arguments.namespace`. This made it impossible to distinguish, from the log alone, whether a tool invocation included an explicit namespace override or inherited the session default. The two-field approach makes both dimensions observable without changing any runtime behavior (namespace resolution inside tool handlers is unchanged).
+
+**Rejected alternative**: Keep `namespace` and add a separate `requestNamespace` field alongside it. Rejected because having two fields with overlapping semantics increases confusion; the clean split is easier to query in structured log systems.
