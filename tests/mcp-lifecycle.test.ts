@@ -7,6 +7,8 @@ import { JwksClient } from '../src/auth.js';
 import { SessionStore } from '../src/session.js';
 import { ErrorCode } from '../src/errors.js';
 import type { Config } from '../src/config.js';
+import type { Neo4jClient } from '../src/neo4j-client.js';
+import { createResourceTools } from '../src/tools/resources.js';
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -530,6 +532,33 @@ describe('tools/list', () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(Array.isArray(body.result.tools)).toBe(true);
+  });
+
+  it('includes list_namespaces in the tool list', async () => {
+    stubJwks();
+    const token = await makeToken();
+
+    // Use a stub Neo4jClient — handlers are closures and won't be called for tools/list
+    const tools = createResourceTools({} as Neo4jClient);
+    const config = { ...BASE_CONFIG };
+    const sessionStore = new SessionStore();
+    const jwksClient = new JwksClient(JWKS_URI, config.jwksCacheTtl * 1000);
+    const app = new Hono();
+    app.route('/', createMcpRouter(config, sessionStore, jwksClient, tools));
+
+    const { sessionId } = await doInitialize(app, token);
+
+    const res = await post(
+      app,
+      '/mcp',
+      { jsonrpc: '2.0', id: 2, method: 'tools/list' },
+      { Authorization: `Bearer ${token}`, 'Mcp-Session-Id': sessionId },
+    );
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    const toolNames = (body.result.tools as Array<{ name: string }>).map((t) => t.name);
+    expect(toolNames).toContain('list_namespaces');
   });
 });
 

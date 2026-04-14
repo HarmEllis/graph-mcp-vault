@@ -195,10 +195,28 @@ async function handleSearch(
   return { resources };
 }
 
+// ── list_namespaces ───────────────────────────────────────────────────────────
+
+async function handleListNamespaces(
+  _args: Record<string, unknown>,
+  ctx: ToolContext,
+  neo4jClient: Neo4jClient,
+): Promise<unknown> {
+  const namespaces = await neo4jClient.listNamespaces({ userId: ctx.userId });
+
+  // Ensure the current session namespace is always present, even with zero counts
+  if (!namespaces.some((n) => n.namespace === ctx.namespace)) {
+    namespaces.push({ namespace: ctx.namespace, owned_count: 0, shared_count: 0 });
+    namespaces.sort((a, b) => a.namespace.localeCompare(b.namespace));
+  }
+
+  return { namespaces };
+}
+
 // ── Factory ───────────────────────────────────────────────────────────────────
 
 /**
- * Returns the six resource tool registrations, each closing over `neo4jClient`.
+ * Returns the seven resource tool registrations, each closing over `neo4jClient`.
  */
 export function createResourceTools(neo4jClient: Neo4jClient): RegisteredTool[] {
   return [
@@ -293,6 +311,18 @@ export function createResourceTools(neo4jClient: Neo4jClient): RegisteredTool[] 
         },
       },
       handler: (args, ctx) => handleSearch(args, ctx, neo4jClient),
+    },
+    {
+      descriptor: {
+        name: 'list_namespaces',
+        description: 'List all namespaces the caller owns or has shared access to, with per-namespace resource counts.',
+        inputSchema: {
+          type: 'object',
+          properties: {},
+          required: [],
+        },
+      },
+      handler: (args, ctx) => handleListNamespaces(args, ctx, neo4jClient),
     },
   ];
 }

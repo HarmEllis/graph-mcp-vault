@@ -467,6 +467,84 @@ describe('Neo4jClient.searchResources', () => {
   });
 });
 
+// ── listNamespaces ────────────────────────────────────────────────────────────
+
+describe('Neo4jClient.listNamespaces', () => {
+  it('converts Neo4j integer counts to JS numbers', async () => {
+    const userId = 'user-ns-int-conv';
+    await client.createResource({ userId, namespace: 'ns-int', type: 'note', title: 'T', content: '' });
+
+    const result = await client.listNamespaces({ userId });
+
+    const ns = result.find((n) => n.namespace === 'ns-int');
+    expect(ns).toBeDefined();
+    expect(typeof ns!.owned_count).toBe('number');
+    expect(typeof ns!.shared_count).toBe('number');
+  });
+
+  it('returns owned and shared counts split correctly', async () => {
+    const owner = 'user-ns-owned-split';
+    const sharer = 'user-ns-shared-split';
+    const r1 = await client.createResource({ userId: owner, namespace: 'ns-split', type: 'note', title: 'Owned', content: '' });
+    const r2 = await client.createResource({ userId: sharer, namespace: 'ns-split', type: 'note', title: 'Shared', content: '' });
+    await client.shareResource(r2.id, owner, 'viewer');
+
+    const result = await client.listNamespaces({ userId: owner });
+    const ns = result.find((n) => n.namespace === 'ns-split');
+
+    expect(ns).toBeDefined();
+    expect(ns!.owned_count).toBe(1);
+    expect(ns!.shared_count).toBe(1);
+  });
+
+  it('counts mixed owned and shared within the same namespace', async () => {
+    const owner = 'user-ns-mixed-owner';
+    const other = 'user-ns-mixed-other';
+    await client.createResource({ userId: owner, namespace: 'ns-mixed', type: 'note', title: 'O1', content: '' });
+    await client.createResource({ userId: owner, namespace: 'ns-mixed', type: 'note', title: 'O2', content: '' });
+    const shared1 = await client.createResource({ userId: other, namespace: 'ns-mixed', type: 'note', title: 'S1', content: '' });
+    const shared2 = await client.createResource({ userId: other, namespace: 'ns-mixed', type: 'note', title: 'S2', content: '' });
+    await client.shareResource(shared1.id, owner, 'viewer');
+    await client.shareResource(shared2.id, owner, 'editor');
+
+    const result = await client.listNamespaces({ userId: owner });
+    const ns = result.find((n) => n.namespace === 'ns-mixed');
+
+    expect(ns).toBeDefined();
+    expect(ns!.owned_count).toBe(2);
+    expect(ns!.shared_count).toBe(2);
+  });
+
+  it('excludes self-shared resources from shared_count', async () => {
+    const userId = 'user-ns-selfshare';
+    const other = 'user-ns-selfshare-other';
+    const r = await client.createResource({ userId, namespace: 'ns-selfshare', type: 'note', title: 'Mine', content: '' });
+    // Owner self-shares — should not double-count
+    await client.shareResource(r.id, userId, 'editor');
+
+    const result = await client.listNamespaces({ userId });
+    const ns = result.find((n) => n.namespace === 'ns-selfshare');
+
+    expect(ns).toBeDefined();
+    expect(ns!.owned_count).toBe(1);
+    expect(ns!.shared_count).toBe(0);
+  });
+
+  it('returns namespaces in alphabetical order', async () => {
+    const userId = 'user-ns-alpha';
+    await client.createResource({ userId, namespace: 'zz-last', type: 'note', title: 'Z', content: '' });
+    await client.createResource({ userId, namespace: 'aa-first', type: 'note', title: 'A', content: '' });
+    await client.createResource({ userId, namespace: 'mm-mid', type: 'note', title: 'M', content: '' });
+
+    const result = await client.listNamespaces({ userId });
+    const ownedNamespaces = result.filter((n) =>
+      ['zz-last', 'aa-first', 'mm-mid'].includes(n.namespace),
+    );
+
+    expect(ownedNamespaces.map((n) => n.namespace)).toEqual(['aa-first', 'mm-mid', 'zz-last']);
+  });
+});
+
 // ── listSharing ───────────────────────────────────────────────────────────────
 
 describe('Neo4jClient.listSharing', () => {

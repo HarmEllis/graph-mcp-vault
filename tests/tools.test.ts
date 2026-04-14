@@ -671,6 +671,112 @@ describe('search_resources', () => {
   });
 });
 
+// ── list_namespaces ───────────────────────────────────────────────────────────
+
+describe('list_namespaces', () => {
+  it('empty user still includes current session namespace with zero counts', async () => {
+    const sub = uniqueUser('ns-empty');
+    const sid = await openSession(sub, 'my-session-ns');
+
+    const { status, body } = await callTool('list_namespaces', {}, sub, sid);
+
+    expect(status).toBe(200);
+    const result = body['result'] as Record<string, unknown>;
+    expect(result['isError']).toBe(false);
+    const data = parseToolSuccess(body);
+    const namespaces = data['namespaces'] as Array<Record<string, unknown>>;
+    const ns = namespaces.find((n) => n['namespace'] === 'my-session-ns');
+    expect(ns).toBeDefined();
+    expect(ns!['owned_count']).toBe(0);
+    expect(ns!['shared_count']).toBe(0);
+  });
+
+  it('owned-only namespace has correct owned_count and zero shared_count', async () => {
+    const sub = uniqueUser('ns-owned');
+    const sid = await openSession(sub, 'owned-ns');
+    await callTool('create_resource', { type: 'note', title: 'R1', content: '' }, sub, sid);
+    await callTool('create_resource', { type: 'note', title: 'R2', content: '' }, sub, sid);
+
+    const { body } = await callTool('list_namespaces', {}, sub, sid);
+    const namespaces = parseToolSuccess(body)['namespaces'] as Array<Record<string, unknown>>;
+    const ns = namespaces.find((n) => n['namespace'] === 'owned-ns');
+
+    expect(ns).toBeDefined();
+    expect(ns!['owned_count']).toBe(2);
+    expect(ns!['shared_count']).toBe(0);
+  });
+
+  it('shared-only namespace has zero owned_count and correct shared_count', async () => {
+    const owner = uniqueUser('ns-shared-owner');
+    const sharer = uniqueUser('ns-shared-user');
+    const ownerSid = await openSession(owner, 'shared-only-ns');
+    const sharerSid = await openSession(sharer, 'shared-only-ns');
+
+    const { body: cb1 } = await callTool('create_resource', { type: 'note', title: 'S1', content: '' }, owner, ownerSid);
+    const { body: cb2 } = await callTool('create_resource', { type: 'note', title: 'S2', content: '' }, owner, ownerSid);
+    const id1 = parseToolSuccess(cb1)['id'] as string;
+    const id2 = parseToolSuccess(cb2)['id'] as string;
+    await neo4jClient.shareResource(id1, sharer, 'viewer');
+    await neo4jClient.shareResource(id2, sharer, 'viewer');
+
+    const { body } = await callTool('list_namespaces', {}, sharer, sharerSid);
+    const namespaces = parseToolSuccess(body)['namespaces'] as Array<Record<string, unknown>>;
+    const ns = namespaces.find((n) => n['namespace'] === 'shared-only-ns');
+
+    expect(ns).toBeDefined();
+    expect(ns!['owned_count']).toBe(0);
+    expect(ns!['shared_count']).toBe(2);
+  });
+
+  it('mixed same namespace has correct owned and shared counts', async () => {
+    const owner = uniqueUser('ns-mix-owner');
+    const user = uniqueUser('ns-mix-user');
+    const ownerSid = await openSession(owner, 'mix-ns');
+    const userSid = await openSession(user, 'mix-ns');
+
+    await callTool('create_resource', { type: 'note', title: 'Mine', content: '' }, user, userSid);
+    const { body: cb } = await callTool('create_resource', { type: 'note', title: 'Theirs', content: '' }, owner, ownerSid);
+    const sharedId = parseToolSuccess(cb)['id'] as string;
+    await neo4jClient.shareResource(sharedId, user, 'viewer');
+
+    const { body } = await callTool('list_namespaces', {}, user, userSid);
+    const namespaces = parseToolSuccess(body)['namespaces'] as Array<Record<string, unknown>>;
+    const ns = namespaces.find((n) => n['namespace'] === 'mix-ns');
+
+    expect(ns).toBeDefined();
+    expect(ns!['owned_count']).toBe(1);
+    expect(ns!['shared_count']).toBe(1);
+  });
+
+  it('excludes namespaces that belong to unrelated users', async () => {
+    const sub = uniqueUser('ns-isolated');
+    const other = uniqueUser('ns-isolated-other');
+    const sid = await openSession(sub, 'isolated-ns');
+    const otherSid = await openSession(other, 'other-private-ns');
+    await callTool('create_resource', { type: 'note', title: 'Private', content: '' }, other, otherSid);
+
+    const { body } = await callTool('list_namespaces', {}, sub, sid);
+    const namespaces = parseToolSuccess(body)['namespaces'] as Array<Record<string, unknown>>;
+
+    expect(namespaces.some((n) => n['namespace'] === 'other-private-ns')).toBe(false);
+  });
+
+  it('returns isError false and content with type text containing JSON', async () => {
+    const sub = uniqueUser('ns-format');
+    const sid = await openSession(sub);
+
+    const { status, body } = await callTool('list_namespaces', {}, sub, sid);
+
+    expect(status).toBe(200);
+    const result = body['result'] as Record<string, unknown>;
+    expect(result['isError']).toBe(false);
+    const content = result['content'] as Array<{ type: string; text: string }>;
+    expect(content[0]?.type).toBe('text');
+    const parsed = JSON.parse(content[0]!.text) as Record<string, unknown>;
+    expect(Array.isArray(parsed['namespaces'])).toBe(true);
+  });
+});
+
 // ── Full lifecycle ────────────────────────────────────────────────────────────
 
 describe('full lifecycle', () => {

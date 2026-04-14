@@ -24,6 +24,12 @@ export interface SharingEntry {
   granted_at: string;
 }
 
+export interface NamespaceSummary {
+  namespace: string;
+  owned_count: number;
+  shared_count: number;
+}
+
 // ── Lucene helpers ────────────────────────────────────────────────────────────
 
 /**
@@ -331,6 +337,64 @@ export class Neo4jClient {
         `,
         { targetUserId, resourceId },
       );
+    } finally {
+      await session.close();
+    }
+  }
+
+  /**
+   * Returns namespace-level aggregated counts for all resources the user can access.
+   *
+   * Two-pass aggregation:
+   *   1. Count resources the user owns per namespace (OWNS relationships).
+   *   2. Count resources the user can access but does not own per namespace
+   *      (HAS_ACCESS WHERE NOT OWNS), to prevent owner/self-share double counting.
+   *
+   * Note: the two passes are non-atomic under concurrent writes — a resource
+   * created between the two queries may appear in one count but not the other.
+   *
+   * Results are returned in deterministic alphabetical order by namespace.
+   */
+  async listNamespaces(params: { userId: string }): Promise<NamespaceSummary[]> {
+    const session = this.driver.session();
+    try {
+      const ownedResult = await session.run(
+        `
+        MATCH (u:User {id: $userId})-[:OWNS]->(r:Resource)
+        RETURN r.namespace AS namespace, count(r) AS owned_count
+        `,
+        { userId: params.userId },
+      );
+
+      const sharedResult = await session.run(
+        `
+        MATCH (u:User {id: $userId})-[:HAS_ACCESS]->(r:Resource)
+        WHERE NOT (u)-[:OWNS]->(r)
+        RETURN r.namespace AS namespace, count(r) AS shared_count
+        `,
+        { userId: params.userId },
+      );
+
+      const map = new Map<string, NamespaceSummary>();
+
+      for (const record of ownedResult.records) {
+        const namespace = record.get('namespace') as string;
+        const owned_count = neo4j.integer.toNumber(record.get('owned_count'));
+        map.set(namespace, { namespace, owned_count, shared_count: 0 });
+      }
+
+      for (const record of sharedResult.records) {
+        const namespace = record.get('namespace') as string;
+        const shared_count = neo4j.integer.toNumber(record.get('shared_count'));
+        const existing = map.get(namespace);
+        if (existing) {
+          existing.shared_count = shared_count;
+        } else {
+          map.set(namespace, { namespace, owned_count: 0, shared_count });
+        }
+      }
+
+      return [...map.values()].sort((a, b) => a.namespace.localeCompare(b.namespace));
     } finally {
       await session.close();
     }
