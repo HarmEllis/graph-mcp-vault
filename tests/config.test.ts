@@ -113,4 +113,30 @@ describe("parseConfig", () => {
     });
     expect(config.scopesAllowlist).toEqual(["openid", "profile"]);
   });
+
+  // ── PUBLIC_URL ──────────────────────────────────────────────────────────────
+
+  it("publicUrl defaults to http://localhost:<PORT> when PUBLIC_URL is not set", () => {
+    const config = parseConfig(required);
+    expect(config.publicUrl).toBe("http://localhost:8000");
+  });
+
+  it("publicUrl uses the configured PORT in the default", () => {
+    const config = parseConfig({ ...required, PORT: "3000" });
+    expect(config.publicUrl).toBe("http://localhost:3000");
+  });
+
+  it("accepts and stores PUBLIC_URL", () => {
+    const config = parseConfig({
+      ...required,
+      PUBLIC_URL: "https://mcp.example.com",
+    });
+    expect(config.publicUrl).toBe("https://mcp.example.com");
+  });
+
+  it("throws when PUBLIC_URL is set but not a valid URL", () => {
+    expect(() =>
+      parseConfig({ ...required, PUBLIC_URL: "not-a-url" }),
+    ).toThrow();
+  });
 });

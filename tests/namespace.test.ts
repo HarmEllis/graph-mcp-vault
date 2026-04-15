@@ -39,6 +39,7 @@ const BASE_CONFIG: Config = {
   logLevel: "info",
   allowedOrigins: "",
   oidcDiscoveryUrl: undefined,
+  publicUrl: "http://localhost:8000",
   scopesAllowlist: undefined,
 };
 

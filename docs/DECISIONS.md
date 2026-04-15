@@ -488,6 +488,40 @@ The `Neo4jClient` instance is passed into `createMcpRouter` as a required parame
 
 ---
 
+## D-030 — MCP auth discovery: Protected Resource Metadata (RFC 9728) + DCR suppression
+
+**Date**: 2026-04-15
+**Status**: Accepted
+
+**Decision**: The server exposes two OAuth discovery endpoints:
+
+1. **`GET /.well-known/oauth-protected-resource`** (RFC 9728, new) — the authoritative MCP discovery path. Returns a static document identifying this server as a protected resource and naming the upstream OIDC provider as the authorization server:
+   ```json
+   {
+     "resource": "<PUBLIC_URL>",
+     "authorization_servers": ["<OIDC_ISSUER>"],
+     "bearer_methods_supported": ["header"],
+     "resource_signing_alg_values_supported": ["RS256"]
+   }
+   ```
+   MCP-compliant clients (Claude Code, etc.) discover this via the `resource_metadata` parameter in the `WWW-Authenticate` header and go directly to the upstream IdP for auth — bypassing the proxy entirely.
+
+2. **`GET /.well-known/oauth-authorization-server`** (RFC 8414, backwards-compat proxy) — proxies the upstream OIDC discovery document for clients that look for auth metadata on the MCP server domain. `registration_endpoint` is always stripped before the response is returned.
+
+**`WWW-Authenticate` header on 401**: set to `Bearer resource_metadata="<PUBLIC_URL>/.well-known/oauth-protected-resource"` so clients can discover the protected resource metadata endpoint from any 401 response without knowing the URL in advance.
+
+**`PUBLIC_URL` env var**: optional, defaults to `http://localhost:<PORT>`. Must be set to the public-facing URL in production.
+
+**Rationale**:
+- Without `/.well-known/oauth-protected-resource`, clients that implement the current MCP auth spec cannot discover the authorization server and fall back to treating the MCP server itself as the OAuth server.
+- The `/.well-known/oauth-authorization-server` proxy previously leaked `registration_endpoint` from the upstream IdP. Claude Code's OAuth SDK treats a `registration_endpoint` as an invitation to perform Dynamic Client Registration (DCR). If the IdP's DCR policy rejects the request (e.g., Pocket ID's "Allowed Client Scopes" policy), the entire auth flow fails — even when a pre-registered `clientId` is configured in the client.
+- Stripping `registration_endpoint` from the proxy response prevents DCR attempts without affecting any other auth flow. Clients that legitimately need DCR (there are none in this deployment) can register directly with the IdP.
+- The `resource_metadata` approach is the correct MCP 2025-03-26 pattern: the resource server describes itself, points to an external authorization server, and stays out of the token-issuance path.
+
+**Rejected alternative**: configure the IdP's DCR policy to allow the requested scopes. Rejected because it requires IdP-specific configuration on every deployment and does not fix the underlying protocol mismatch.
+
+---
+
 ## D-029 — Security scan: lockfile-native Trivy scan replaces `pnpm audit`
 
 **Date**: 2026-04-15

@@ -4,6 +4,7 @@ const envSchema = z.object({
   OIDC_ISSUER: z.string().url(),
   OIDC_AUDIENCE: z.string().min(1),
   OIDC_DISCOVERY_URL: z.string().url().optional(),
+  PUBLIC_URL: z.string().url().optional(),
   JWKS_CACHE_TTL: z.coerce.number().int().positive().default(3600),
   METADATA_CACHE_TTL: z.coerce.number().int().positive().default(3600),
   NEO4J_URI: z.string().min(1),
@@ -23,6 +24,7 @@ export interface Config {
   oidcIssuer: string;
   oidcAudience: string;
   oidcDiscoveryUrl: string | undefined;
+  publicUrl: string;
   jwksCacheTtl: number;
   metadataCacheTtl: number;
   neo4jUri: string;
@@ -48,6 +50,7 @@ export function parseConfig(env: Record<string, string | undefined>): Config {
     oidcIssuer: parsed.OIDC_ISSUER,
     oidcAudience: parsed.OIDC_AUDIENCE,
     oidcDiscoveryUrl: parsed.OIDC_DISCOVERY_URL,
+    publicUrl: parsed.PUBLIC_URL ?? `http://localhost:${parsed.PORT}`,
     jwksCacheTtl: parsed.JWKS_CACHE_TTL,
     metadataCacheTtl: parsed.METADATA_CACHE_TTL,
     neo4jUri: parsed.NEO4J_URI,

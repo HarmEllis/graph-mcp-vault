@@ -4,11 +4,7 @@
       "type": "http",
       "url": "http://localhost:8000/mcp",
       "auth": {
-        "type": "oauth2",
-        "clientId": "graph-mcp-vault",
-        "authorizationUrl": "http://localhost:8081/realms/graph-mcp-vault/protocol/openid-connect/auth",
-        "tokenUrl": "http://localhost:8081/realms/graph-mcp-vault/protocol/openid-connect/token",
-        "scopes": ["openid", "profile"]
+	"callbackPort": 19876
       }
     }
   }

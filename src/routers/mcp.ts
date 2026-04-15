@@ -244,10 +244,12 @@ export function createMcpRouter(
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unauthorized";
       logger.warn("auth_failure", { requestId, message });
-      return withCorsHeaders(
-        c.json({ error: "unauthorized", message }, 401),
-        cors.allowOrigin,
+      const response = c.json({ error: "unauthorized", message }, 401);
+      response.headers.set(
+        "WWW-Authenticate",
+        `Bearer resource_metadata="${config.publicUrl}/.well-known/oauth-protected-resource"`,
       );
+      return withCorsHeaders(response, cors.allowOrigin);
     }
 
     // 4. Batch vs single

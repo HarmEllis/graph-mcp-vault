@@ -60,7 +60,7 @@ Add to `~/.claude/mcp.json` (or use `claude mcp add`):
         "clientId": "graph-mcp-vault",
         "authorizationUrl": "https://idp.your-domain.com/authorize",
         "tokenUrl": "https://idp.your-domain.com/token",
-        "scopes": ["openid", "profile"]
+        "scopes": ["openid", "profile", "email"]
       }
     },
     "neo4j-personal": {
@@ -71,7 +71,7 @@ Add to `~/.claude/mcp.json` (or use `claude mcp add`):
         "clientId": "graph-mcp-vault",
         "authorizationUrl": "https://idp.your-domain.com/authorize",
         "tokenUrl": "https://idp.your-domain.com/token",
-        "scopes": ["openid", "profile"]
+        "scopes": ["openid", "profile", "email"]
       }
     }
   }

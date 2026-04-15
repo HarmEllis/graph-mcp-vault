@@ -8,12 +8,14 @@ import {
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
 const ISSUER = "https://oidc.example.com";
+const PUBLIC_URL = "https://mcp.example.com";
 
 const UPSTREAM_METADATA = {
   issuer: ISSUER,
   authorization_endpoint: `${ISSUER}/authorize`,
   token_endpoint: `${ISSUER}/token`,
   jwks_uri: `${ISSUER}/.well-known/jwks.json`,
+  registration_endpoint: `${ISSUER}/clients`,
   scopes_supported: ["openid", "profile", "email"],
   response_types_supported: ["code"],
   grant_types_supported: ["authorization_code"],
@@ -116,7 +118,7 @@ function buildApp(
   discoveryUrl?: string,
 ): { app: Hono; client: OidcMetadataClient } {
   const client = new OidcMetadataClient(ISSUER, ttlMs, discoveryUrl);
-  const router = createOAuthMetaRouter(client, scopesAllowlist);
+  const router = createOAuthMetaRouter(client, PUBLIC_URL, ISSUER, scopesAllowlist);
   const app = new Hono();
   app.route("/", router);
   return { app, client };
@@ -203,6 +205,118 @@ describe("GET /.well-known/oauth-authorization-server", () => {
     await app.request("/.well-known/oauth-authorization-server");
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ── GET /.well-known/oauth-protected-resource (RFC 9728) ─────────────────────
+
+describe("GET /.well-known/oauth-protected-resource", () => {
+  it("returns HTTP 200", async () => {
+    const { app } = buildApp();
+
+    const res = await app.request("/.well-known/oauth-protected-resource");
+
+    expect(res.status).toBe(200);
+  });
+
+  it("returns JSON content-type", async () => {
+    const { app } = buildApp();
+
+    const res = await app.request("/.well-known/oauth-protected-resource");
+
+    expect(res.headers.get("content-type")).toMatch(/application\/json/);
+  });
+
+  it("includes resource set to the server public URL", async () => {
+    const { app } = buildApp();
+
+    const res = await app.request("/.well-known/oauth-protected-resource");
+    const body = await res.json();
+
+    expect(body.resource).toBe(PUBLIC_URL);
+  });
+
+  it("includes authorization_servers pointing to the OIDC issuer", async () => {
+    const { app } = buildApp();
+
+    const res = await app.request("/.well-known/oauth-protected-resource");
+    const body = await res.json();
+
+    expect(body.authorization_servers).toEqual([ISSUER]);
+  });
+
+  it("includes bearer_methods_supported: ['header']", async () => {
+    const { app } = buildApp();
+
+    const res = await app.request("/.well-known/oauth-protected-resource");
+    const body = await res.json();
+
+    expect(body.bearer_methods_supported).toEqual(["header"]);
+  });
+
+  it("includes resource_signing_alg_values_supported: ['RS256']", async () => {
+    const { app } = buildApp();
+
+    const res = await app.request("/.well-known/oauth-protected-resource");
+    const body = await res.json();
+
+    expect(body.resource_signing_alg_values_supported).toEqual(["RS256"]);
+  });
+
+  it("includes scopes_supported when scopesAllowlist is configured", async () => {
+    const { app } = buildApp(3_600_000, ["openid", "profile"]);
+
+    const res = await app.request("/.well-known/oauth-protected-resource");
+    const body = await res.json();
+
+    expect(body.scopes_supported).toEqual(["openid", "profile"]);
+  });
+
+  it("omits scopes_supported when no scopesAllowlist is configured", async () => {
+    const { app } = buildApp();
+
+    const res = await app.request("/.well-known/oauth-protected-resource");
+    const body = await res.json();
+
+    expect(body).not.toHaveProperty("scopes_supported");
+  });
+
+  it("does not require a live upstream OIDC provider", async () => {
+    // Protected resource metadata is static — no upstream fetch should occur
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const { app } = buildApp();
+
+    await app.request("/.well-known/oauth-protected-resource");
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+// ── registration_endpoint stripping ──────────────────────────────────────────
+
+describe("registration_endpoint stripping", () => {
+  it("strips registration_endpoint from /.well-known/oauth-authorization-server", async () => {
+    stubFetch(UPSTREAM_METADATA); // upstream includes registration_endpoint
+    const { app } = buildApp();
+
+    const res = await app.request("/.well-known/oauth-authorization-server");
+    const body = await res.json();
+
+    expect(body).not.toHaveProperty("registration_endpoint");
+  });
+
+  it("preserves all other upstream fields when stripping registration_endpoint", async () => {
+    stubFetch(UPSTREAM_METADATA);
+    const { app } = buildApp();
+
+    const res = await app.request("/.well-known/oauth-authorization-server");
+    const body = await res.json();
+
+    expect(body.issuer).toBe(UPSTREAM_METADATA.issuer);
+    expect(body.authorization_endpoint).toBe(UPSTREAM_METADATA.authorization_endpoint);
+    expect(body.token_endpoint).toBe(UPSTREAM_METADATA.token_endpoint);
+    expect(body.jwks_uri).toBe(UPSTREAM_METADATA.jwks_uri);
   });
 });
 

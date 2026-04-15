@@ -68,7 +68,15 @@ const metadataClient = new OidcMetadataClient(
 // ── Hono app ──────────────────────────────────────────────────────────────────
 
 const app = new Hono();
-app.route("/", createOAuthMetaRouter(metadataClient, config.scopesAllowlist));
+app.route(
+  "/",
+  createOAuthMetaRouter(
+    metadataClient,
+    config.publicUrl,
+    config.oidcIssuer,
+    config.scopesAllowlist,
+  ),
+);
 const tools = [
   ...createResourceTools(_neo4jClient),
   ...createSharingTools(_neo4jClient),
