@@ -30,9 +30,18 @@ jobs:
         id: sha
         run: |
           TAG="${{ github.event.inputs.tag || github.ref_name }}"
-          SHA=$(gh api "repos/${{ github.repository }}/git/refs/tags/${TAG}" \
-            --jq '.object | if .type == "tag" then .sha else .sha end' 2>/dev/null || \
-            echo "${{ github.sha }}")
+          REF_INFO=$(gh api "repos/${{ github.repository }}/git/refs/tags/${TAG}" 2>/dev/null || echo "{}")
+          OBJ_TYPE=$(echo "${REF_INFO}" | jq -r '.object.type // empty')
+          OBJ_SHA=$(echo "${REF_INFO}"  | jq -r '.object.sha  // empty')
+          if [[ "${OBJ_TYPE}" == "tag" ]]; then
+            # Annotated tag: dereference tag object to get the commit SHA
+            SHA=$(gh api "repos/${{ github.repository }}/git/tags/${OBJ_SHA}" \
+              --jq '.object.sha' 2>/dev/null || echo "${{ github.sha }}")
+          elif [[ -n "${OBJ_SHA}" ]]; then
+            SHA="${OBJ_SHA}"
+          else
+            SHA="${{ github.sha }}"
+          fi
           echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
         env:
           GH_TOKEN: ${{ github.token }}
@@ -62,6 +71,7 @@ jobs:
       tags: ${{ steps.meta.outputs.tags }}
       labels: ${{ steps.meta.outputs.labels }}
       version: ${{ steps.meta.outputs.version }}
+      json: ${{ steps.meta.outputs.json }}
     steps:
       - name: Validate tag format
         run: |
@@ -192,7 +202,7 @@ jobs:
             --format '{{.Manifest.Digest}}')
           echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
         env:
-          DOCKER_METADATA_OUTPUT_JSON: ${{ needs.prepare.outputs.tags }}
+          DOCKER_METADATA_OUTPUT_JSON: ${{ needs.prepare.outputs.json }}
 
       - name: Install Cosign
         uses: sigstore/cosign-installer@d7d6bc7722e3daa8354c50bcb52f4837da5e9b6a  # v3.8.1
