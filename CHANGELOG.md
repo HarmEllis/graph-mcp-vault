@@ -5,6 +5,18 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.5] - 2026-04-15
+
+Adds an authorization endpoint proxy that injects a missing `scope` parameter before forwarding to the upstream IdP. Opt-in via `INJECT_MISSING_SCOPE=true`.
+
+### Added
+
+- `GET /authorize` scope-injection proxy: when `INJECT_MISSING_SCOPE=true`, the server registers this endpoint and overrides `authorization_endpoint` in the OAuth authorization server metadata to point to it. Incoming requests without a `scope` parameter have one injected (from `SCOPES_ALLOWLIST`, or `"openid"` as fallback) before a 302 redirect to the real upstream authorization endpoint. This works around MCP clients that omit `scope` from the authorization request, causing providers like Pocket ID to reject with `Scope is required`.
+- `INJECT_MISSING_SCOPE` environment variable (default: `false`).
+- `PUBLIC_URL` documented in `.env.example` with description.
+
+**Full Changelog**: [v0.0.4...v0.0.5][0.0.5]
+
 ## [0.0.4] - 2026-04-15
 
 Include `scope` in the `WWW-Authenticate: Bearer` header on 401 responses so that MCP clients read the required scopes directly from the challenge and include them in the authorization request.

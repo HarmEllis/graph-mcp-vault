@@ -50,6 +50,7 @@ const BASE_CONFIG: Config = {
   oidcDiscoveryUrl: undefined,
   publicUrl: "http://localhost:8000",
   scopesAllowlist: undefined,
+  injectMissingScope: false,
 };
 
 beforeAll(async () => {
@@ -407,7 +408,7 @@ describe("initialize", () => {
     const { res } = await doInitialize(app, token);
     const body = await res.json();
 
-    expect(body.result.serverInfo.version).toBe("0.0.4");
+    expect(body.result.serverInfo.version).toBe("0.0.5");
   });
 
   it("includes capabilities.tools in result", async () => {

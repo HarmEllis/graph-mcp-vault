@@ -18,6 +18,10 @@ const envSchema = z.object({
     .default("info"),
   ALLOWED_ORIGINS: z.string().default(""),
   SCOPES_ALLOWLIST: z.string().optional(),
+  INJECT_MISSING_SCOPE: z
+    .string()
+    .optional()
+    .transform((v) => v !== undefined && (v === "true" || v === "1")),
 });
 
 export interface Config {
@@ -36,6 +40,7 @@ export interface Config {
   logLevel: "trace" | "debug" | "info" | "warn" | "error";
   allowedOrigins: string;
   scopesAllowlist: string[] | undefined;
+  injectMissingScope: boolean;
 }
 
 export function parseConfig(env: Record<string, string | undefined>): Config {
@@ -62,5 +67,6 @@ export function parseConfig(env: Record<string, string | undefined>): Config {
     logLevel: parsed.LOG_LEVEL,
     allowedOrigins: parsed.ALLOWED_ORIGINS,
     scopesAllowlist,
+    injectMissingScope: parsed.INJECT_MISSING_SCOPE,
   };
 }

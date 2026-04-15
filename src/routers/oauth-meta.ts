@@ -113,6 +113,7 @@ export function createOAuthMetaRouter(
   oidcIssuer: string,
   clientId: string,
   scopesAllowlist?: string[],
+  injectMissingScope = false,
 ): Hono {
   const app = new Hono();
 
@@ -148,13 +149,19 @@ export function createOAuthMetaRouter(
         issuer: publicUrl,
         registration_endpoint: `${publicUrl}/clients`,
       };
-      const withScopes = {
+      const withScopes: Record<string, unknown> = {
         ...base,
         scopes_supported: resolveSupportedScopes(
           base.scopes_supported,
           scopesAllowlist,
         ),
       };
+      // When scope injection is enabled the authorization_endpoint is overridden
+      // to our own proxy so we can add the missing scope parameter before
+      // forwarding to the upstream IdP.
+      if (injectMissingScope) {
+        withScopes.authorization_endpoint = `${publicUrl}/authorize`;
+      }
       return c.json(withScopes);
     } catch (err) {
       const message =
@@ -199,6 +206,48 @@ export function createOAuthMetaRouter(
 
     return c.json(response, 201);
   });
+
+  // ── Authorization proxy (scope injection) ────────────────────────────────
+  // Only registered when INJECT_MISSING_SCOPE is enabled. Acts as a thin
+  // passthrough in front of the upstream authorization endpoint: copies all
+  // query parameters forwarded by the MCP client and adds a `scope` parameter
+  // if the client did not include one. This works around MCP clients (e.g.
+  // Open WebUI) that omit `scope` from the authorization request, causing
+  // strict OIDC providers (e.g. Pocket ID) to reject with "scope is required".
+  if (injectMissingScope) {
+    app.get("/authorize", async (c) => {
+      let upstreamAuthEndpoint: string;
+      try {
+        const upstream = (await metadataClient.getMetadata()) as Record<
+          string,
+          unknown
+        >;
+        if (typeof upstream.authorization_endpoint !== "string") {
+          return c.json(
+            {
+              error: "upstream_unavailable",
+              detail: "no authorization_endpoint in upstream metadata",
+            },
+            502,
+          );
+        }
+        upstreamAuthEndpoint = upstream.authorization_endpoint;
+      } catch (err) {
+        const message =
+          err instanceof Error ? err.message : "upstream unavailable";
+        return c.json({ error: "upstream_unavailable", detail: message }, 502);
+      }
+
+      const params = new URLSearchParams(
+        c.req.query() as Record<string, string>,
+      );
+      if (!params.has("scope")) {
+        params.set("scope", scopesAllowlist?.join(" ") ?? "openid");
+      }
+
+      return c.redirect(`${upstreamAuthEndpoint}?${params.toString()}`, 302);
+    });
+  }
 
   return app;
 }
