@@ -139,14 +139,17 @@ export function createOAuthMetaRouter(
         unknown
       >;
 
-      // Strip the upstream registration_endpoint and replace with ours.
-      // Override issuer to publicUrl — RFC 8414 §3.3 requires the issuer to
-      // equal the URL prefix from which this document was retrieved.
-      const { registration_endpoint: _reg, issuer: _iss, ...rest } = upstream;
+      // Replace registration_endpoint with our DCR proxy so MCP clients never
+      // interact with the upstream IdP's client registration directly.
+      // We intentionally keep the upstream issuer so that MCP clients can
+      // validate the `iss` claim of tokens issued by the upstream IdP against
+      // the issuer advertised here. Overriding issuer to publicUrl would cause
+      // token validation to fail because the IdP stamps tokens with its own
+      // issuer, not ours.
+      const { registration_endpoint: _reg, ...rest } = upstream;
 
       const base: Record<string, unknown> = {
         ...rest,
-        issuer: publicUrl,
         registration_endpoint: `${publicUrl}/clients`,
       };
       const withScopes: Record<string, unknown> = {

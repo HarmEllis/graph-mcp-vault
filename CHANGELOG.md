@@ -5,6 +5,16 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.6] - 2026-04-15
+
+Fixes token validation failures caused by the `iss` claim mismatch between the upstream IdP's tokens and the previously overridden `issuer` in the OAuth authorization server metadata.
+
+### Fixed
+
+- Stop overriding `issuer` in the `/.well-known/oauth-authorization-server` response. MCP clients (e.g. Open WebUI) validate the `iss` claim of received tokens against the `issuer` advertised in the AS metadata. Because tokens are issued by the upstream IdP with its own issuer, overriding the field to `PUBLIC_URL` caused a claim mismatch and an `invalid_claim: Invalid claim 'iss'` error. The upstream issuer is now passed through unchanged. `registration_endpoint` and (when `INJECT_MISSING_SCOPE=true`) `authorization_endpoint` are still overridden.
+
+**Full Changelog**: [v0.0.5...v0.0.6][0.0.6]
+
 ## [0.0.5] - 2026-04-15
 
 Adds an authorization endpoint proxy that injects a missing `scope` parameter before forwarding to the upstream IdP. Opt-in via `INJECT_MISSING_SCOPE=true`.

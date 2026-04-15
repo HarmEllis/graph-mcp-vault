@@ -152,14 +152,14 @@ describe("GET /.well-known/oauth-authorization-server", () => {
     expect(res.headers.get("content-type")).toMatch(/application\/json/);
   });
 
-  it("overrides issuer to the proxy public URL (RFC 8414 §3.3)", async () => {
+  it("preserves the upstream issuer so token iss validation succeeds", async () => {
     stubFetch(UPSTREAM_METADATA);
     const { app } = buildApp();
 
     const res = await app.request("/.well-known/oauth-authorization-server");
     const body = await res.json();
 
-    expect(body.issuer).toBe(PUBLIC_URL);
+    expect(body.issuer).toBe(UPSTREAM_METADATA.issuer);
   });
 
   it("includes authorization_endpoint, token_endpoint, jwks_uri, scopes_supported", async () => {
@@ -322,8 +322,7 @@ describe("registration_endpoint replacement", () => {
     const res = await app.request("/.well-known/oauth-authorization-server");
     const body = await res.json();
 
-    // issuer is overridden to publicUrl per RFC 8414 §3.3
-    expect(body.issuer).toBe(PUBLIC_URL);
+    expect(body.issuer).toBe(UPSTREAM_METADATA.issuer);
     expect(body.authorization_endpoint).toBe(
       UPSTREAM_METADATA.authorization_endpoint,
     );
@@ -407,8 +406,7 @@ describe("scopes_supported behavior", () => {
     const res = await app.request("/.well-known/oauth-authorization-server");
     const body = await res.json();
 
-    // issuer is overridden to publicUrl per RFC 8414 §3.3
-    expect(body.issuer).toBe(PUBLIC_URL);
+    expect(body.issuer).toBe(UPSTREAM_METADATA.issuer);
     expect(body.authorization_endpoint).toBe(
       UPSTREAM_METADATA.authorization_endpoint,
     );
