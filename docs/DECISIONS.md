@@ -485,3 +485,20 @@ The `Neo4jClient` instance is passed into `createMcpRouter` as a required parame
 - Upsert on `initialize` (once per session) keeps the write path simple and predictable; it does not add overhead to per-request tool calls.
 
 **Rejected alternative**: Add `name`/`email` to `ToolContext` and upsert inside tool handlers. Rejected because the plan explicitly prohibits adding speculative fields to `ToolContext`, and the upsert is a session-lifecycle concern, not a tool concern.
+
+---
+
+## D-029 — Security scan: lockfile-native Trivy scan replaces `pnpm audit`
+
+**Date**: 2026-04-15
+**Status**: Accepted
+
+**Decision**: Replace `pnpm audit --audit-level=high` in CI with a lockfile-native Trivy filesystem scan (`scan-type: fs`, `scan-ref: pnpm-lock.yaml`, `severity: CRITICAL,HIGH,MEDIUM`). The Trivy action is pinned to the same SHA already used in `docker-publish.yml` (`aquasecurity/trivy-action@76071ef0d7ec797419534a183b498b4d6366cf37`). Vulnerability threshold is raised from HIGH+ to MODERATE+.
+
+**Rationale**:
+- On 2026-04-15 the `pnpm audit` step began failing with HTTP 410 responses from the npm audit endpoints (`/-/npm/v1/security/audits/quick` and fallback `/-/npm/v1/security/audits`), indicating those endpoints have been retired. The step blocked every CI run with an error unrelated to actual dependency vulnerabilities.
+- Trivy reads the `pnpm-lock.yaml` lockfile directly without making registry requests. It parses the resolved package graph and matches it against its bundled advisory database, making the scan reliable in air-gapped or endpoint-restricted environments.
+- `pnpm audit` resolves the audit data through npm's shadow tree (the "bulk audits" endpoint), which does not accurately reflect the pnpm lockfile's resolved tree. Trivy's lockfile-native mode scans the actual resolved packages, avoiding false negatives from shadow-tree divergence.
+- The threshold is expanded to MODERATE+ because Trivy's CVSS-based severity classification is more granular than npm's model; a HIGH-only threshold would undercount the same risk surface that `pnpm audit --audit-level=high` was intended to cover.
+
+**Rejected alternative**: `pnpm audit --audit-level=high` against the npm registry endpoint — retired; not usable from CI.

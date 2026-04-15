@@ -1301,7 +1301,9 @@ describe("knowledge_search_entries", () => {
     const resources = parseToolSuccess(body).resources as Array<
       Record<string, unknown>
     >;
-    expect(resources.every((r) => r.namespace === "ns-false-only-a")).toBe(true);
+    expect(resources.every((r) => r.namespace === "ns-false-only-a")).toBe(
+      true,
+    );
   });
 });
 
