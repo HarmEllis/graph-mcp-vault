@@ -3,7 +3,7 @@
     "graph-mcp-vault": {
       "type": "http",
       "url": "http://localhost:8000/mcp",
-      "auth": {
+      "oauth": {
 	"callbackPort": 19876
       }
     }
