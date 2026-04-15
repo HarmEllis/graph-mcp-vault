@@ -56,6 +56,18 @@ No fixed agent handoff order is prescribed in this repository. Task ownership an
 
 ---
 
+## Release Process
+
+For any release activity, always follow [`docs/RELEASE.md`](./docs/RELEASE.md) as the source of truth.
+
+This includes:
+- Required preflight checks
+- Release metadata updates
+- Tag creation and push sequence
+- GitHub draft release creation
+
+---
+
 ## Development Workflow: TDD
 
 **All features are developed using Test-Driven Development (TDD).**
