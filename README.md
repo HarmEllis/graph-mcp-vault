@@ -20,6 +20,8 @@ MCP transport: **Streamable HTTP 2025-03-26** — JSON-only responses, no SSE.
 - [Session lifecycle](#session-lifecycle)
 - [Client setup](#client-setup)
 - [Development](#development)
+- [Changelog](#changelog)
+- [Release](#release)
 
 ---
 
@@ -636,3 +638,12 @@ docker compose logs -f        # follow logs
 docker compose down           # stop (data volume persists)
 docker compose down -v        # stop and delete Neo4j data
 ```
+
+## Changelog
+
+See [`CHANGELOG.md`](CHANGELOG.md) for release history.
+
+## Release
+
+Use [`docs/RELEASE.md`](docs/RELEASE.md) for the exact release procedure, including
+preflight checks, tagging, push steps, and GitHub release creation.

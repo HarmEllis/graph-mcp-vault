@@ -398,6 +398,17 @@ describe("initialize", () => {
     expect(body.result.serverInfo.name).toBe("graph-mcp-vault");
   });
 
+  it("includes the current server version in result", async () => {
+    stubJwks();
+    const token = await makeToken();
+    const { app } = buildApp();
+
+    const { res } = await doInitialize(app, token);
+    const body = await res.json();
+
+    expect(body.result.serverInfo.version).toBe("0.0.1");
+  });
+
   it("includes capabilities.tools in result", async () => {
     stubJwks();
     const token = await makeToken();
