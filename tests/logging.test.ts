@@ -7,10 +7,15 @@ import type { Config } from "../src/config.js";
 import { ErrorCode } from "../src/errors.js";
 import { createLogger } from "../src/logger.js";
 import type { LogLevel, Logger } from "../src/logger.js";
+import type { Neo4jClient } from "../src/neo4j-client.js";
 import { createMcpRouter } from "../src/routers/mcp.js";
 import { SessionStore } from "../src/session.js";
 import { ToolError } from "../src/tools/registry.js";
 import type { RegisteredTool } from "../src/tools/registry.js";
+
+const stubNeo4j = {
+  upsertUserProfile: vi.fn().mockResolvedValue(undefined),
+} as unknown as Neo4jClient;
 
 // ── Logger unit tests ─────────────────────────────────────────────────────────
 
@@ -164,7 +169,14 @@ function buildApp(
   const app = new Hono();
   app.route(
     "/",
-    createMcpRouter(BASE_CONFIG, sessionStore, jwksClient, tools, logger),
+    createMcpRouter(
+      BASE_CONFIG,
+      sessionStore,
+      jwksClient,
+      tools,
+      stubNeo4j,
+      logger,
+    ),
   );
   return { app, lines: captured };
 }

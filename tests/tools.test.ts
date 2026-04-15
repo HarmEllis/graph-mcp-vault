@@ -92,7 +92,10 @@ beforeAll(async () => {
   const jwksClient = new JwksClient(JWKS_URI, BASE_CONFIG.jwksCacheTtl * 1000);
   const tools = createResourceTools(neo4jClient);
   app = new Hono();
-  app.route("/", createMcpRouter(BASE_CONFIG, sessionStore, jwksClient, tools));
+  app.route(
+    "/",
+    createMcpRouter(BASE_CONFIG, sessionStore, jwksClient, tools, neo4jClient),
+  );
 }, 120_000);
 
 afterAll(async () => {

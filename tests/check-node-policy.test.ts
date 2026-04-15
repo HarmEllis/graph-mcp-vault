@@ -16,9 +16,9 @@ ${steps}
 
 describe("workflows without setup-node", () => {
   it("returns no violations for a workflow with no steps", () => {
-    expect(checkNodePolicy("jobs:\n  ci:\n    steps: []", "ci.yml")).toHaveLength(
-      0,
-    );
+    expect(
+      checkNodePolicy("jobs:\n  ci:\n    steps: []", "ci.yml"),
+    ).toHaveLength(0);
   });
 
   it("returns no violations for a workflow that only uses other actions", () => {
@@ -125,9 +125,7 @@ describe("node-version-file only", () => {
 
 describe("no version specified", () => {
   it("returns a violation when neither node-version nor node-version-file is present", () => {
-    const yaml = workflow(
-      "      - uses: actions/setup-node@abc123",
-    );
+    const yaml = workflow("      - uses: actions/setup-node@abc123");
     const violations = checkNodePolicy(yaml, "ci.yml");
     expect(violations).toHaveLength(1);
     expect(violations[0]?.message).toContain("no node-version");

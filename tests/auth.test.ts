@@ -83,10 +83,17 @@ async function makeToken(
     exp?: number;
     /** Unix seconds; if set, adds nbf claim */
     nbf?: number;
+    /** Optional OIDC name claim */
+    name?: string;
+    /** Optional OIDC email claim */
+    email?: string;
   } = {},
 ): Promise<string> {
   const nowSec = Math.floor(Date.now() / 1000);
-  let builder = new SignJWT({ sub: opts.sub ?? "user-123" })
+  const extra: Record<string, unknown> = {};
+  if (opts.name !== undefined) extra.name = opts.name;
+  if (opts.email !== undefined) extra.email = opts.email;
+  let builder = new SignJWT({ sub: opts.sub ?? "user-123", ...extra })
     .setProtectedHeader({ alg: "RS256", kid: opts.kid ?? KID_1 })
     .setIssuer(opts.iss ?? ISSUER)
     .setAudience(opts.aud ?? AUDIENCE)
@@ -310,5 +317,67 @@ describe("validateBearerToken", () => {
     await expect(
       validateBearerToken(`Bearer ${token}`, testConfig, client),
     ).rejects.toThrow(AuthError);
+  });
+
+  it("returns name and email from JWT claims when both are present", async () => {
+    const jwks = await buildJwks([{ key: publicKey1, kid: KID_1 }]);
+    stubFetch(jwks);
+    const client = freshClient();
+
+    const token = await makeToken({
+      name: "Alice Smith",
+      email: "alice@example.com",
+    });
+    const result = await validateBearerToken(
+      `Bearer ${token}`,
+      testConfig,
+      client,
+    );
+
+    expect(result.name).toBe("Alice Smith");
+    expect(result.email).toBe("alice@example.com");
+  });
+
+  it("returns null for name and email when those claims are absent", async () => {
+    const jwks = await buildJwks([{ key: publicKey1, kid: KID_1 }]);
+    stubFetch(jwks);
+    const client = freshClient();
+
+    const token = await makeToken();
+    const result = await validateBearerToken(
+      `Bearer ${token}`,
+      testConfig,
+      client,
+    );
+
+    expect(result.name).toBeNull();
+    expect(result.email).toBeNull();
+  });
+
+  it("returns null for name when the claim is not a string", async () => {
+    const jwks = await buildJwks([{ key: publicKey1, kid: KID_1 }]);
+    stubFetch(jwks);
+    const client = freshClient();
+
+    // Build a token where name is a non-string (number) — not a standard claim value
+    const nowSec = Math.floor(Date.now() / 1000);
+    const rawToken = await new SignJWT({
+      sub: "user-123",
+      name: 42, // not a string
+    })
+      .setProtectedHeader({ alg: "RS256", kid: KID_1 })
+      .setIssuer(ISSUER)
+      .setAudience(AUDIENCE)
+      .setIssuedAt()
+      .setExpirationTime(nowSec + 3600)
+      .sign(privateKey1);
+
+    const result = await validateBearerToken(
+      `Bearer ${rawToken}`,
+      testConfig,
+      client,
+    );
+
+    expect(result.name).toBeNull();
   });
 });

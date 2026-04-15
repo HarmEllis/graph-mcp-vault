@@ -10,6 +10,20 @@ import { createMcpRouter } from "../src/routers/mcp.js";
 import { SessionStore } from "../src/session.js";
 import { createResourceTools } from "../src/tools/resources.js";
 
+// ── Stub Neo4jClient ──────────────────────────────────────────────────────────
+
+function makeStubNeo4j(): Neo4jClient & {
+  upsertUserProfileSpy: ReturnType<typeof vi.fn>;
+} {
+  const upsertUserProfileSpy = vi.fn().mockResolvedValue(undefined);
+  return {
+    upsertUserProfile: upsertUserProfileSpy,
+    upsertUserProfileSpy,
+  } as unknown as Neo4jClient & {
+    upsertUserProfileSpy: ReturnType<typeof vi.fn>;
+  };
+}
+
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
 const ISSUER = "https://oidc.example.com";
@@ -70,16 +84,24 @@ async function makeToken(sub = "user-123"): Promise<string> {
     .sign(privateKey);
 }
 
-function buildApp(configOverride: Partial<Config> = {}): {
+function buildApp(
+  configOverride: Partial<Config> = {},
+  neo4jOverride?: Neo4jClient,
+): {
   app: Hono;
   sessionStore: SessionStore;
+  neo4jClient: Neo4jClient;
 } {
   const config = { ...BASE_CONFIG, ...configOverride };
   const sessionStore = new SessionStore();
   const jwksClient = new JwksClient(JWKS_URI, config.jwksCacheTtl * 1000);
+  const neo4jClient = neo4jOverride ?? makeStubNeo4j();
   const app = new Hono();
-  app.route("/", createMcpRouter(config, sessionStore, jwksClient, []));
-  return { app, sessionStore };
+  app.route(
+    "/",
+    createMcpRouter(config, sessionStore, jwksClient, [], neo4jClient),
+  );
+  return { app, sessionStore, neo4jClient };
 }
 
 async function post(
@@ -535,7 +557,16 @@ describe("session validation", () => {
     const sessionStore = new SessionStore(1); // 1 ms TTL
     const jwksClient = new JwksClient(JWKS_URI, 3_600_000);
     const app = new Hono();
-    app.route("/", createMcpRouter(BASE_CONFIG, sessionStore, jwksClient, []));
+    app.route(
+      "/",
+      createMcpRouter(
+        BASE_CONFIG,
+        sessionStore,
+        jwksClient,
+        [],
+        makeStubNeo4j(),
+      ),
+    );
 
     const { sessionId } = await doInitialize(app, token);
     await new Promise((r) => setTimeout(r, 20));
@@ -585,7 +616,10 @@ describe("tools/list", () => {
     const sessionStore = new SessionStore();
     const jwksClient = new JwksClient(JWKS_URI, config.jwksCacheTtl * 1000);
     const app = new Hono();
-    app.route("/", createMcpRouter(config, sessionStore, jwksClient, tools));
+    app.route(
+      "/",
+      createMcpRouter(config, sessionStore, jwksClient, tools, makeStubNeo4j()),
+    );
 
     const { sessionId } = await doInitialize(app, token);
 
@@ -923,5 +957,87 @@ describe("batch requests", () => {
     expect(res.status).toBe(202);
     const text = await res.text();
     expect(text).toBe("");
+  });
+});
+
+// ── User profile upsert on initialize ─────────────────────────────────────────
+
+describe("user profile upsert on initialize", () => {
+  it("calls upsertUserProfile once per initialize with userId", async () => {
+    stubJwks();
+    const token = await makeToken("profile-user");
+    const stub = makeStubNeo4j();
+    const { app } = buildApp({}, stub);
+
+    await doInitialize(app, token);
+
+    expect(stub.upsertUserProfileSpy).toHaveBeenCalledTimes(1);
+    expect(stub.upsertUserProfileSpy).toHaveBeenCalledWith(
+      "profile-user",
+      null,
+      null,
+    );
+  });
+
+  it("passes name and email from JWT claims to upsertUserProfile", async () => {
+    // Build a token with name and email claims
+    const nowSec = Math.floor(Date.now() / 1000);
+    const tokenWithProfile = await new SignJWT({
+      sub: "user-with-profile",
+      name: "Alice Smith",
+      email: "alice@example.com",
+    })
+      .setProtectedHeader({ alg: "RS256", kid: KID })
+      .setIssuer(ISSUER)
+      .setAudience(AUDIENCE)
+      .setIssuedAt()
+      .setExpirationTime(nowSec + 3600)
+      .sign(privateKey);
+
+    stubJwks();
+    const stub = makeStubNeo4j();
+    const { app } = buildApp({}, stub);
+
+    await doInitialize(app, tokenWithProfile);
+
+    expect(stub.upsertUserProfileSpy).toHaveBeenCalledWith(
+      "user-with-profile",
+      "Alice Smith",
+      "alice@example.com",
+    );
+  });
+
+  it("passes null for claims absent from the JWT", async () => {
+    stubJwks();
+    const token = await makeToken("no-profile-user");
+    const stub = makeStubNeo4j();
+    const { app } = buildApp({}, stub);
+
+    await doInitialize(app, token);
+
+    expect(stub.upsertUserProfileSpy).toHaveBeenCalledWith(
+      "no-profile-user",
+      null,
+      null,
+    );
+  });
+
+  it("does not call upsertUserProfile for non-initialize methods", async () => {
+    stubJwks();
+    const token = await makeToken();
+    const stub = makeStubNeo4j();
+    const { app } = buildApp({}, stub);
+
+    const { sessionId } = await doInitialize(app, token);
+    stub.upsertUserProfileSpy.mockClear();
+
+    await post(
+      app,
+      "/mcp",
+      { jsonrpc: "2.0", id: 2, method: "tools/list" },
+      { Authorization: `Bearer ${token}`, "Mcp-Session-Id": sessionId },
+    );
+
+    expect(stub.upsertUserProfileSpy).not.toHaveBeenCalled();
   });
 });

@@ -160,6 +160,35 @@ export class Neo4jClient {
     return role === "owner" || role === "editor" || role === "viewer";
   }
 
+  // ── User profile ─────────────────────────────────────────────────────────────
+
+  /**
+   * Upserts the `name` and `email` profile fields on a (:User) node.
+   *
+   * Uses `coalesce` so that a null claim (absent from the JWT) does not
+   * overwrite a value that was stored during a previous session. A new User
+   * node is created by the MERGE when one does not exist yet.
+   */
+  async upsertUserProfile(
+    userId: string,
+    name: string | null,
+    email: string | null,
+  ): Promise<void> {
+    const session = this.driver.session();
+    try {
+      await session.run(
+        `
+        MERGE (u:User {id: $userId})
+        SET u.name  = coalesce($name,  u.name),
+            u.email = coalesce($email, u.email)
+        `,
+        { userId, name, email },
+      );
+    } finally {
+      await session.close();
+    }
+  }
+
   // ── Resources ───────────────────────────────────────────────────────────────
 
   /**

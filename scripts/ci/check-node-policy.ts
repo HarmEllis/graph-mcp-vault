@@ -14,8 +14,8 @@
  */
 
 import { readFileSync, readdirSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import yaml from "js-yaml";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -45,8 +45,7 @@ export interface PolicyViolation {
 
 function isSetupNodeStep(step: WorkflowStep): boolean {
   return (
-    typeof step.uses === "string" &&
-    step.uses.startsWith("actions/setup-node@")
+    typeof step.uses === "string" && step.uses.startsWith("actions/setup-node@")
   );
 }
 
@@ -132,7 +131,9 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     process.exit(0);
   }
 
-  console.log(`Checking Node 24 policy in ${files.length} workflow file(s)...\n`);
+  console.log(
+    `Checking Node 24 policy in ${files.length} workflow file(s)...\n`,
+  );
 
   let hasViolations = false;
   for (const file of files) {

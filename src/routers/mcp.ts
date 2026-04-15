@@ -5,6 +5,7 @@ import { type JwksClient, validateBearerToken } from "../auth.js";
 import type { Config } from "../config.js";
 import { ErrorCode, makeJsonRpcError } from "../errors.js";
 import { type Logger, noopLogger } from "../logger.js";
+import type { Neo4jClient } from "../neo4j-client.js";
 import type { SessionStore } from "../session.js";
 import {
   type RegisteredTool,
@@ -152,6 +153,7 @@ export function createMcpRouter(
   sessionStore: SessionStore,
   jwksClient: JwksClient,
   tools: RegisteredTool[],
+  neo4jClient: Neo4jClient,
   logger: Logger = noopLogger,
 ): Hono {
   const app = new Hono();
@@ -231,8 +233,10 @@ export function createMcpRouter(
 
     // 3. Authenticate
     let userId: string;
+    let name: string | null;
+    let email: string | null;
     try {
-      ({ userId } = await validateBearerToken(
+      ({ userId, name, email } = await validateBearerToken(
         c.req.header("authorization"),
         config,
         jwksClient,
@@ -252,6 +256,8 @@ export function createMcpRouter(
         await handleBatch(
           rawBody,
           userId,
+          name,
+          email,
           urlNamespace,
           c.req.header("mcp-session-id"),
           requestId,
@@ -263,6 +269,8 @@ export function createMcpRouter(
       await handleSingle(
         rawBody,
         userId,
+        name,
+        email,
         urlNamespace,
         c.req.header("mcp-session-id"),
         requestId,
@@ -276,6 +284,8 @@ export function createMcpRouter(
   async function handleSingle(
     raw: unknown,
     userId: string,
+    name: string | null,
+    email: string | null,
     urlNamespace: string | undefined,
     sessionHeader: string | undefined,
     requestId: string,
@@ -299,6 +309,8 @@ export function createMcpRouter(
     const result = await dispatchRequest(
       msg,
       userId,
+      name,
+      email,
       urlNamespace,
       sessionHeader,
       requestId,
@@ -316,6 +328,8 @@ export function createMcpRouter(
   async function handleBatch(
     items: unknown[],
     userId: string,
+    name: string | null,
+    email: string | null,
     urlNamespace: string | undefined,
     sessionHeader: string | undefined,
     requestId: string,
@@ -340,6 +354,8 @@ export function createMcpRouter(
       const result = await dispatchRequest(
         msg,
         userId,
+        name,
+        email,
         urlNamespace,
         sessionHeader,
         requestId,
@@ -362,6 +378,8 @@ export function createMcpRouter(
   async function dispatchRequest(
     req: JsonRpcRequest,
     userId: string,
+    name: string | null,
+    email: string | null,
     urlNamespace: string | undefined,
     sessionHeader: string | undefined,
     requestId: string,
@@ -369,7 +387,14 @@ export function createMcpRouter(
     const { id, method } = req;
 
     if (method === "initialize") {
-      return handleInitialize(req, userId, urlNamespace, requestId);
+      return handleInitialize(
+        req,
+        userId,
+        name,
+        email,
+        urlNamespace,
+        requestId,
+      );
     }
 
     if (!sessionHeader) {
@@ -599,12 +624,14 @@ export function createMcpRouter(
 
   // ── initialize handler ────────────────────────────────────────────────────
 
-  function handleInitialize(
+  async function handleInitialize(
     req: JsonRpcRequest,
     userId: string,
+    name: string | null,
+    email: string | null,
     urlNamespace: string | undefined,
     requestId: string,
-  ): DispatchResult {
+  ): Promise<DispatchResult> {
     const { id } = req;
     const params = req.params as Record<string, unknown> | undefined;
 
@@ -641,6 +668,8 @@ export function createMcpRouter(
 
     const namespace = metaNamespace ?? urlNamespace ?? config.defaultNamespace;
     const sessionId = sessionStore.create(userId, namespace);
+
+    await neo4jClient.upsertUserProfile(userId, name, email);
 
     logger.info("session_created", { requestId, userId, namespace, sessionId });
 

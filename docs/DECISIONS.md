@@ -461,3 +461,27 @@ Relation type values are validated against `^[A-Z][A-Z0-9_]{1,63}$` (UPPER_SNAKE
 **Rationale**: The legacy `namespace` field was ambiguous — it was silently set to the session namespace regardless of what the caller passed in `arguments.namespace`. This made it impossible to distinguish, from the log alone, whether a tool invocation included an explicit namespace override or inherited the session default. The two-field approach makes both dimensions observable without changing any runtime behavior (namespace resolution inside tool handlers is unchanged).
 
 **Rejected alternative**: Keep `namespace` and add a separate `requestNamespace` field alongside it. Rejected because having two fields with overlapping semantics increases confusion; the clean split is easier to query in structured log systems.
+
+---
+
+## D-028 — Persist user name/email on (:User) at session initialization
+
+**Date**: 2026-04-15
+**Status**: Accepted
+
+**Decision**: On every `initialize` request, after the JWT is validated and the session is created, upsert the `name` and `email` profile fields onto the `(:User {id})` node in Neo4j. The `name` and `email` claims are extracted from the JWT payload as strings; if a claim is absent or is not a string, `null` is passed. The Cypher pattern uses `coalesce` to preserve existing values when a claim is absent:
+
+```cypher
+MERGE (u:User {id: $userId})
+SET u.name  = coalesce($name,  u.name),
+    u.email = coalesce($email, u.email)
+```
+
+The `Neo4jClient` instance is passed into `createMcpRouter` as a required parameter so that `handleInitialize` can perform the upsert without exposing the client on `ToolContext`.
+
+**Rationale**:
+- OIDC providers include `name` and `email` as standard claims; persisting them makes users identifiable in the graph without a separate directory lookup.
+- `coalesce` ensures that a session from a token lacking a claim does not blank out a value stored during an earlier session (e.g., a token without `name` does not overwrite a `name` that was captured previously).
+- Upsert on `initialize` (once per session) keeps the write path simple and predictable; it does not add overhead to per-request tool calls.
+
+**Rejected alternative**: Add `name`/`email` to `ToolContext` and upsert inside tool handlers. Rejected because the plan explicitly prohibits adding speculative fields to `ToolContext`, and the upsert is a session-lifecycle concern, not a tool concern.

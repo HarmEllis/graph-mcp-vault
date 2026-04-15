@@ -82,13 +82,14 @@ export class JwksClient {
  * - `nbf` is validated with a 30-second clock-skew leeway.
  *
  * Throws `AuthError` on any validation failure.
- * Returns `{ userId }` (the `sub` claim) on success.
+ * Returns `{ userId, name, email }` on success. `name` and `email` are
+ * extracted from standard OIDC claims when present as strings; otherwise null.
  */
 export async function validateBearerToken(
   authHeader: string | undefined,
   config: Config,
   jwksClient: JwksClient,
-): Promise<{ userId: string }> {
+): Promise<{ userId: string; name: string | null; email: string | null }> {
   if (!authHeader?.startsWith("Bearer ")) {
     throw new AuthError("Missing or invalid Authorization header");
   }
@@ -123,7 +124,9 @@ export async function validateBearerToken(
     });
 
     if (!payload.sub) throw new AuthError("JWT is missing the sub claim");
-    return { userId: payload.sub };
+    const name = typeof payload.name === "string" ? payload.name : null;
+    const email = typeof payload.email === "string" ? payload.email : null;
+    return { userId: payload.sub, name, email };
   } catch (err) {
     if (err instanceof AuthError) throw err;
     throw new AuthError(

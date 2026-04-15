@@ -75,7 +75,14 @@ const tools = [
 ];
 app.route(
   "/",
-  createMcpRouter(config, sessionStore, jwksClient, tools, logger),
+  createMcpRouter(
+    config,
+    sessionStore,
+    jwksClient,
+    tools,
+    _neo4jClient,
+    logger,
+  ),
 );
 
 // ── Start server ──────────────────────────────────────────────────────────────

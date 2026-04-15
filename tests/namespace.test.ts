@@ -87,6 +87,7 @@ beforeAll(async () => {
       sessionStore,
       jwksClient,
       createResourceTools(neo4jClient),
+      neo4jClient,
     ),
   );
 }, 120_000);
