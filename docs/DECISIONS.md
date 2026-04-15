@@ -502,3 +502,5 @@ The `Neo4jClient` instance is passed into `createMcpRouter` as a required parame
 - The threshold is expanded to MODERATE+ because Trivy's CVSS-based severity classification is more granular than npm's model; a HIGH-only threshold would undercount the same risk surface that `pnpm audit --audit-level=high` was intended to cover.
 
 **Rejected alternative**: `pnpm audit --audit-level=high` against the npm registry endpoint — retired; not usable from CI.
+
+**Follow-up (2026-04-15)**: The Trivy action was subsequently updated from v0.31.0 (`76071ef0d7ec797419534a183b498b4d6366cf37`) to v0.35.0 (`57a97c7e7821a5776cebc9bb87c984fa69cba8f1`) after CI bootstrap failures caused by default Trivy binary version drift. An explicit `version: v0.69.3` input is now required on all Trivy action steps; omitting it allows the action to download whatever Trivy binary version happens to be current at run time, which can break bootstrap silently when the upstream release changes.
