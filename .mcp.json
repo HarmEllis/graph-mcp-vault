@@ -4,7 +4,7 @@
       "type": "http",
       "url": "http://localhost:8000/mcp",
       "oauth": {
-	"callbackPort": 19876
+        "callbackPort": 19876
       }
     }
   }

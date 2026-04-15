@@ -119,7 +119,13 @@ function buildApp(
   discoveryUrl?: string,
 ): { app: Hono; client: OidcMetadataClient } {
   const client = new OidcMetadataClient(ISSUER, ttlMs, discoveryUrl);
-  const router = createOAuthMetaRouter(client, PUBLIC_URL, ISSUER, CLIENT_ID, scopesAllowlist);
+  const router = createOAuthMetaRouter(
+    client,
+    PUBLIC_URL,
+    ISSUER,
+    CLIENT_ID,
+    scopesAllowlist,
+  );
   const app = new Hono();
   app.route("/", router);
   return { app, client };
@@ -316,7 +322,9 @@ describe("registration_endpoint replacement", () => {
 
     // issuer is overridden to publicUrl per RFC 8414 §3.3
     expect(body.issuer).toBe(PUBLIC_URL);
-    expect(body.authorization_endpoint).toBe(UPSTREAM_METADATA.authorization_endpoint);
+    expect(body.authorization_endpoint).toBe(
+      UPSTREAM_METADATA.authorization_endpoint,
+    );
     expect(body.token_endpoint).toBe(UPSTREAM_METADATA.token_endpoint);
     expect(body.jwks_uri).toBe(UPSTREAM_METADATA.jwks_uri);
   });

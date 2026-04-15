@@ -107,10 +107,7 @@
       "directAccessGrantsEnabled": true,
       "standardFlowEnabled": true,
       "serviceAccountsEnabled": false,
-      "redirectUris": [
-        "http://localhost:*",
-        "http://127.0.0.1:*"
-      ],
+      "redirectUris": ["http://localhost:*", "http://127.0.0.1:*"],
       "webOrigins": ["*"],
       "protocolMappers": [
         {

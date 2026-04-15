@@ -8,7 +8,7 @@ This runbook describes how to publish a tagged release.
 - Working tree is clean.
 - You are authenticated in GitHub CLI (`gh auth status`).
 
-## Release v0.0.1
+## Release v0.0.2
 
 1. Run all checks locally:
 
@@ -24,22 +24,22 @@ pnpm build
 
 ```bash
 git add package.json src/routers/mcp.ts tests/mcp-lifecycle.test.ts CHANGELOG.md README.md docs/RELEASE.md
-git commit -m "chore(release): prepare v0.0.1"
+git commit -m "chore(release): prepare v0.0.2"
 ```
 
 3. Create and push the tag:
 
 ```bash
-git tag -a v0.0.1 -m "Release v0.0.1"
+git tag -a v0.0.2 -m "Release v0.0.2"
 git push origin main
-git push origin v0.0.1
+git push origin v0.0.2
 ```
 
 4. Create the GitHub release:
 
 ```bash
-gh release create v0.0.1 \
-  --title "v0.0.1" \
+gh release create v0.0.2 \
+  --title "v0.0.2" \
   --draft \
   --notes-file CHANGELOG.md
 ```

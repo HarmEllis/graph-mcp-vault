@@ -157,8 +157,8 @@ export function createOAuthMetaRouter(
       // Ignore parse errors — treat missing body as empty registration request.
     }
 
-    const redirectUris = Array.isArray(body["redirect_uris"])
-      ? body["redirect_uris"]
+    const redirectUris = Array.isArray(body.redirect_uris)
+      ? body.redirect_uris
       : [];
 
     const response: Record<string, unknown> = {
