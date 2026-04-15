@@ -29,10 +29,7 @@ services:
     restart: unless-stopped
 
   graph-mcp-vault:
-    # image: ghcr.io/harmellis/graph-mcp-vault:latest
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: ghcr.io/harmellis/graph-mcp-vault:latest
     env_file:
       - path: .env
         required: false
