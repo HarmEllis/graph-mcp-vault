@@ -13,7 +13,10 @@ function resolveSupportedScopes(
 ): string[] {
   const parsedUpstreamScopes = asStringScopes(upstreamScopes);
   if (scopesAllowlist === undefined) {
-    if (parsedUpstreamScopes === undefined || parsedUpstreamScopes.length === 0) {
+    if (
+      parsedUpstreamScopes === undefined ||
+      parsedUpstreamScopes.length === 0
+    ) {
       return [...FALLBACK_SCOPES];
     }
     return parsedUpstreamScopes;
@@ -23,7 +26,9 @@ function resolveSupportedScopes(
     return scopesAllowlist;
   }
 
-  return parsedUpstreamScopes.filter((scope) => scopesAllowlist.includes(scope));
+  return parsedUpstreamScopes.filter((scope) =>
+    scopesAllowlist.includes(scope),
+  );
 }
 
 // ── OidcMetadataClient ────────────────────────────────────────────────────────

@@ -1,16 +1,62 @@
 # Release Runbook
 
-This runbook describes how to publish a tagged release.
+This runbook describes the standard release flow for this repository.
 
 ## Preconditions
 
-- You are on `main`.
-- Working tree is clean.
 - You are authenticated in GitHub CLI (`gh auth status`).
+- Docker is running (tests use Testcontainers).
+- You can push to `main` and create tags.
 
-## Release v0.0.2
+## 1. Prepare branch state
 
-1. Run all checks locally:
+```bash
+git checkout main
+git pull --ff-only
+git status --short
+```
+
+Expected: no output from `git status --short` (clean working tree).
+
+## 2. Review changes since the previous release
+
+```bash
+PREV_TAG="$(git describe --tags --abbrev=0)"
+git log --oneline "${PREV_TAG}..HEAD"
+git diff --stat "${PREV_TAG}..HEAD"
+```
+
+Use this output to prepare the changelog section for the next version.
+
+## 3. Pick the release version
+
+Set the target SemVer without the `v` prefix:
+
+```bash
+VERSION="0.0.3"
+TAG="v${VERSION}"
+```
+
+## 4. Update release metadata
+
+1. Bump package version:
+
+```bash
+pnpm version "${VERSION}" --no-git-tag-version
+```
+
+2. Update server version constant:
+- `src/routers/mcp.ts` (`SERVER_VERSION`)
+- `tests/mcp-lifecycle.test.ts` (assertion for `serverInfo.version`)
+
+3. Add the new section at the top of `CHANGELOG.md`:
+- `## [<VERSION>] - YYYY-MM-DD`
+- Include a short intro summary paragraph before subsection headings.
+- Include `Added` / `Changed` / `Fixed` / `Security` headings as applicable.
+- End the section with:
+  - `**Full Changelog**: https://github.com/<owner>/<repo>/compare/<PREV_TAG>...v<VERSION>`
+
+## 5. Run the full preflight checks
 
 ```bash
 pnpm install --frozen-lockfile
@@ -20,32 +66,73 @@ pnpm test
 pnpm build
 ```
 
-2. Commit release metadata:
+## 6. Commit release changes (do not tag yet)
 
 ```bash
-git add package.json src/routers/mcp.ts tests/mcp-lifecycle.test.ts CHANGELOG.md README.md docs/RELEASE.md
-git commit -m "chore(release): prepare v0.0.2"
+git add package.json src/routers/mcp.ts tests/mcp-lifecycle.test.ts CHANGELOG.md docs/RELEASE.md
+git commit -m "chore(release): prepare ${TAG}"
 ```
 
-3. Create and push the tag:
+## 7. Approval gate before any push
+
+Before pushing the release commit or tag, get explicit approval from the release owner.
+
+## 8. Push release commit to `main` and wait for CI
 
 ```bash
-git tag -a v0.0.2 -m "Release v0.0.2"
 git push origin main
-git push origin v0.0.2
 ```
 
-4. Create the GitHub release:
+Wait for the `CI` workflow on `main` for this exact release commit to complete successfully.
+If CI is not `success`, stop and do not push the tag.
+
+## 9. Create and push the annotated tag
 
 ```bash
-gh release create v0.0.2 \
-  --title "v0.0.2" \
-  --draft \
-  --notes-file CHANGELOG.md
+git tag -a "${TAG}" -m "Release ${TAG}"
+git push origin "${TAG}"
 ```
 
-## Notes
+## 10. Create a draft GitHub release
 
-- Pushing `vX.Y.Z` triggers `.github/workflows/docker-publish.yml`.
-- The docker-publish workflow enforces semver tag format and verifies CI success on the tagged commit.
-- Always create GitHub releases as drafts first, then publish after final verification.
+Build release notes from only the current changelog section (without the section heading), then append a compare link:
+
+```bash
+REPO="$(gh repo view --json nameWithOwner --jq .nameWithOwner)"
+COMPARE_URL="https://github.com/${REPO}/compare/${PREV_TAG}...${TAG}"
+
+{
+awk '
+  $0 ~ "^## \\[" VERSION "\\]" { in_section=1; next }
+  $0 ~ "^## \\[" && in_section { exit }
+  in_section { print }
+' VERSION="${VERSION}" CHANGELOG.md
+  printf "\n**Full Changelog**: %s\n" "${COMPARE_URL}"
+} > /tmp/release-notes.md
+```
+
+Create the draft release:
+
+```bash
+gh release create "${TAG}" \
+  --title "${TAG}" \
+  --draft \
+  --notes-file /tmp/release-notes.md
+```
+
+## 11. Verify publish pipeline, then publish release
+
+- Tag push triggers `.github/workflows/docker-publish.yml`.
+- That workflow enforces `vX.Y.Z` tag format and checks that `CI` passed on the tagged commit.
+- If the workflow fails, do not publish the release.
+- After the workflow succeeds, review the draft release and publish it.
+
+## Recovery
+
+If you tagged the wrong commit and have not published the release yet:
+
+```bash
+git tag -d "${TAG}"
+git push origin ":refs/tags/${TAG}"
+gh release delete "${TAG}" --yes
+```

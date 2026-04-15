@@ -5,6 +5,23 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.3] - 2026-04-15
+
+This release focuses on OAuth scope compatibility improvements and a stricter release process.
+
+### Changed
+
+- Added an explicit release runbook reference to `AGENTS.md`.
+- Reworked `docs/RELEASE.md` into a version-agnostic release flow with approval and CI gates before tag publication.
+- Standardized changelog compare-link formatting for release notes extraction.
+
+### Fixed
+
+- OAuth metadata now consistently exposes usable scopes for MCP OAuth clients, preventing Pocket ID login failures with `Scope is required`.
+- Added regression coverage for scope fallback behavior in OAuth metadata endpoints.
+
+**Full Changelog**: [v0.0.2...v0.0.3][0.0.3]
+
 ## [0.0.2] - 2026-04-15
 
 ### Added
@@ -24,6 +41,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Docker publish workflow now correctly resolves annotated tag commit SHAs and image metadata.
 - CI Trivy SARIF upload permissions now include `security-events: write`.
 
+**Full Changelog**: [v0.0.1...v0.0.2][0.0.2]
+
 ## [0.0.1] - 2026-04-15
 
 ### Added
@@ -42,3 +61,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ### Security
 
 - Added Trivy scans in CI and Docker publish workflows.
+
+**Full Changelog**: [Initial release][0.0.1]
+
+[0.0.3]: https://github.com/HarmEllis/graph-mcp-vault/compare/v0.0.2...v0.0.3
+[0.0.2]: https://github.com/HarmEllis/graph-mcp-vault/compare/v0.0.1...v0.0.2
+[0.0.1]: https://github.com/HarmEllis/graph-mcp-vault/releases/tag/v0.0.1
