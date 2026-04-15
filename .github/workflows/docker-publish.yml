@@ -14,7 +14,8 @@ permissions:
   actions: read
   contents: read
   packages: write
-  id-token: write  # required for keyless Cosign signing
+  id-token: write          # required for keyless Cosign signing
+  security-events: write   # required for upload-sarif (Trivy results)
 
 env:
   REGISTRY: ghcr.io
