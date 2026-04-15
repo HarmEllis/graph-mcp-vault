@@ -1,5 +1,31 @@
 import { Hono } from "hono";
 
+const FALLBACK_SCOPES = ["openid"] as const;
+
+function asStringScopes(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return value.filter((scope): scope is string => typeof scope === "string");
+}
+
+function resolveSupportedScopes(
+  upstreamScopes: unknown,
+  scopesAllowlist: string[] | undefined,
+): string[] {
+  const parsedUpstreamScopes = asStringScopes(upstreamScopes);
+  if (scopesAllowlist === undefined) {
+    if (parsedUpstreamScopes === undefined || parsedUpstreamScopes.length === 0) {
+      return [...FALLBACK_SCOPES];
+    }
+    return parsedUpstreamScopes;
+  }
+
+  if (parsedUpstreamScopes === undefined || parsedUpstreamScopes.length === 0) {
+    return scopesAllowlist;
+  }
+
+  return parsedUpstreamScopes.filter((scope) => scopesAllowlist.includes(scope));
+}
+
 // ── OidcMetadataClient ────────────────────────────────────────────────────────
 
 /**
@@ -94,10 +120,8 @@ export function createOAuthMetaRouter(
       authorization_servers: [publicUrl],
       bearer_methods_supported: ["header"],
       resource_signing_alg_values_supported: ["RS256"],
+      scopes_supported: scopesAllowlist ?? [...FALLBACK_SCOPES],
     };
-    if (scopesAllowlist !== undefined) {
-      metadata.scopes_supported = scopesAllowlist;
-    }
     return c.json(metadata);
   });
 
@@ -119,25 +143,14 @@ export function createOAuthMetaRouter(
         issuer: publicUrl,
         registration_endpoint: `${publicUrl}/clients`,
       };
-
-      if (scopesAllowlist === undefined) {
-        return c.json(base);
-      }
-
-      // Filter scopes_supported to intersection with the allowlist, if provided.
-      const upstreamScopes = base.scopes_supported;
-      if (!Array.isArray(upstreamScopes)) {
-        return c.json(base);
-      }
-
-      const filtered = {
+      const withScopes = {
         ...base,
-        scopes_supported: upstreamScopes.filter(
-          (s): s is string =>
-            typeof s === "string" && scopesAllowlist.includes(s),
+        scopes_supported: resolveSupportedScopes(
+          base.scopes_supported,
+          scopesAllowlist,
         ),
       };
-      return c.json(filtered);
+      return c.json(withScopes);
     } catch (err) {
       const message =
         err instanceof Error ? err.message : "upstream unavailable";
@@ -161,6 +174,14 @@ export function createOAuthMetaRouter(
       ? body.redirect_uris
       : [];
 
+    // Include scope so clients know which scopes to request in the authorization
+    // request. Without this, clients like Open WebUI send no scope parameter to
+    // the IdP, which causes providers like Pocket ID to reject with
+    // "scope is required". Use the allowlist if configured, else fall back to
+    // the minimal "openid" scope.
+    const scope =
+      scopesAllowlist !== undefined ? scopesAllowlist.join(" ") : "openid";
+
     const response: Record<string, unknown> = {
       client_id: clientId,
       client_id_issued_at: Math.floor(Date.now() / 1000),
@@ -168,6 +189,7 @@ export function createOAuthMetaRouter(
       grant_types: ["authorization_code"],
       response_types: ["code"],
       redirect_uris: redirectUris,
+      scope,
     };
 
     return c.json(response, 201);

@@ -279,13 +279,13 @@ describe("GET /.well-known/oauth-protected-resource", () => {
     expect(body.scopes_supported).toEqual(["openid", "profile"]);
   });
 
-  it("omits scopes_supported when no scopesAllowlist is configured", async () => {
+  it("includes fallback scopes_supported when no scopesAllowlist is configured", async () => {
     const { app } = buildApp();
 
     const res = await app.request("/.well-known/oauth-protected-resource");
     const body = await res.json();
 
-    expect(body).not.toHaveProperty("scopes_supported");
+    expect(body.scopes_supported).toEqual(["openid"]);
   });
 
   it("does not require a live upstream OIDC provider", async () => {
@@ -343,7 +343,7 @@ describe("scopes_supported behavior", () => {
     expect(body.scopes_supported).toEqual(UPSTREAM_METADATA.scopes_supported);
   });
 
-  it("does not inject scopes_supported when upstream does not include it", async () => {
+  it("injects fallback scopes_supported when upstream does not include it", async () => {
     const metaWithoutScopes = { ...UPSTREAM_METADATA };
     const { scopes_supported: _omit, ...rest } = metaWithoutScopes;
     stubFetch(rest);
@@ -352,7 +352,19 @@ describe("scopes_supported behavior", () => {
     const res = await app.request("/.well-known/oauth-authorization-server");
     const body = await res.json();
 
-    expect(body).not.toHaveProperty("scopes_supported");
+    expect(body.scopes_supported).toEqual(["openid"]);
+  });
+
+  it("with allowlist: uses the allowlist when upstream omits scopes_supported", async () => {
+    const metaWithoutScopes = { ...UPSTREAM_METADATA };
+    const { scopes_supported: _omit, ...rest } = metaWithoutScopes;
+    stubFetch(rest);
+    const { app } = buildApp(3_600_000, ["openid", "profile", "email"]);
+
+    const res = await app.request("/.well-known/oauth-authorization-server");
+    const body = await res.json();
+
+    expect(body.scopes_supported).toEqual(["openid", "profile", "email"]);
   });
 
   it("with allowlist: returns intersection of allowlist and upstream scopes", async () => {
@@ -491,6 +503,24 @@ describe("POST /clients", () => {
 
     expect(body.client_id_issued_at).toBeGreaterThanOrEqual(before);
     expect(body.client_id_issued_at).toBeLessThanOrEqual(after);
+  });
+
+  it("includes scope defaulting to 'openid' when no allowlist is configured", async () => {
+    const { app } = buildApp(); // no scopesAllowlist
+
+    const res = await app.request("/clients", { method: "POST" });
+    const body = await res.json();
+
+    expect(body.scope).toBe("openid");
+  });
+
+  it("includes scope as space-separated allowlist when scopesAllowlist is configured", async () => {
+    const { app } = buildApp(3_600_000, ["openid", "profile", "email"]);
+
+    const res = await app.request("/clients", { method: "POST" });
+    const body = await res.json();
+
+    expect(body.scope).toBe("openid profile email");
   });
 
   it("does not require a live upstream OIDC provider", async () => {
