@@ -5,6 +5,16 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.4] - 2026-04-15
+
+Include `scope` in the `WWW-Authenticate: Bearer` header on 401 responses so that MCP clients read the required scopes directly from the challenge and include them in the authorization request.
+
+### Fixed
+
+- Added `scope` to the `WWW-Authenticate: Bearer` challenge (RFC 6750) on unauthenticated requests. Clients such as Open WebUI did not forward the `scope` from the DCR response to the authorization URL, causing Pocket ID to reject the request with `Scope is required`. The challenge-level scope is the authoritative signal for what scopes the client must request.
+
+**Full Changelog**: [v0.0.3...v0.0.4][0.0.4]
+
 ## [0.0.3] - 2026-04-15
 
 This release focuses on OAuth scope compatibility improvements and a stricter release process.

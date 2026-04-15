@@ -28,7 +28,7 @@ const KNOWN_PROTOCOL_VERSIONS = new Set([
   "2024-10-07",
 ]);
 const SERVER_NAME = "graph-mcp-vault";
-const SERVER_VERSION = "0.0.3";
+const SERVER_VERSION = "0.0.4";
 
 // ── JSON-RPC types ────────────────────────────────────────────────────────────
 
@@ -245,9 +245,10 @@ export function createMcpRouter(
       const message = err instanceof Error ? err.message : "Unauthorized";
       logger.warn("auth_failure", { requestId, message });
       const response = c.json({ error: "unauthorized", message }, 401);
+      const wwwScope = config.scopesAllowlist?.join(" ") ?? "openid";
       response.headers.set(
         "WWW-Authenticate",
-        `Bearer resource_metadata="${config.publicUrl}/.well-known/oauth-protected-resource"`,
+        `Bearer resource_metadata="${config.publicUrl}/.well-known/oauth-protected-resource", scope="${wwwScope}"`,
       );
       return withCorsHeaders(response, cors.allowOrigin);
     }
