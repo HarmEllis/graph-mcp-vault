@@ -9,6 +9,7 @@ import {
 
 const ISSUER = "https://oidc.example.com";
 const PUBLIC_URL = "https://mcp.example.com";
+const CLIENT_ID = "graph-mcp-vault";
 
 const UPSTREAM_METADATA = {
   issuer: ISSUER,
@@ -118,7 +119,7 @@ function buildApp(
   discoveryUrl?: string,
 ): { app: Hono; client: OidcMetadataClient } {
   const client = new OidcMetadataClient(ISSUER, ttlMs, discoveryUrl);
-  const router = createOAuthMetaRouter(client, PUBLIC_URL, ISSUER, scopesAllowlist);
+  const router = createOAuthMetaRouter(client, PUBLIC_URL, ISSUER, CLIENT_ID, scopesAllowlist);
   const app = new Hono();
   app.route("/", router);
   return { app, client };
@@ -143,14 +144,14 @@ describe("GET /.well-known/oauth-authorization-server", () => {
     expect(res.headers.get("content-type")).toMatch(/application\/json/);
   });
 
-  it("includes issuer in the response body", async () => {
+  it("overrides issuer to the proxy public URL (RFC 8414 §3.3)", async () => {
     stubFetch(UPSTREAM_METADATA);
     const { app } = buildApp();
 
     const res = await app.request("/.well-known/oauth-authorization-server");
     const body = await res.json();
 
-    expect(body.issuer).toBe(ISSUER);
+    expect(body.issuer).toBe(PUBLIC_URL);
   });
 
   it("includes authorization_endpoint, token_endpoint, jwks_uri, scopes_supported", async () => {
@@ -236,13 +237,13 @@ describe("GET /.well-known/oauth-protected-resource", () => {
     expect(body.resource).toBe(PUBLIC_URL);
   });
 
-  it("includes authorization_servers pointing to the OIDC issuer", async () => {
+  it("includes authorization_servers pointing to the proxy public URL", async () => {
     const { app } = buildApp();
 
     const res = await app.request("/.well-known/oauth-protected-resource");
     const body = await res.json();
 
-    expect(body.authorization_servers).toEqual([ISSUER]);
+    expect(body.authorization_servers).toEqual([PUBLIC_URL]);
   });
 
   it("includes bearer_methods_supported: ['header']", async () => {
@@ -293,27 +294,28 @@ describe("GET /.well-known/oauth-protected-resource", () => {
   });
 });
 
-// ── registration_endpoint stripping ──────────────────────────────────────────
+// ── registration_endpoint replacement ────────────────────────────────────────
 
-describe("registration_endpoint stripping", () => {
-  it("strips registration_endpoint from /.well-known/oauth-authorization-server", async () => {
+describe("registration_endpoint replacement", () => {
+  it("replaces upstream registration_endpoint with <publicUrl>/clients", async () => {
     stubFetch(UPSTREAM_METADATA); // upstream includes registration_endpoint
     const { app } = buildApp();
 
     const res = await app.request("/.well-known/oauth-authorization-server");
     const body = await res.json();
 
-    expect(body).not.toHaveProperty("registration_endpoint");
+    expect(body.registration_endpoint).toBe(`${PUBLIC_URL}/clients`);
   });
 
-  it("preserves all other upstream fields when stripping registration_endpoint", async () => {
+  it("preserves all other upstream fields when replacing registration_endpoint", async () => {
     stubFetch(UPSTREAM_METADATA);
     const { app } = buildApp();
 
     const res = await app.request("/.well-known/oauth-authorization-server");
     const body = await res.json();
 
-    expect(body.issuer).toBe(UPSTREAM_METADATA.issuer);
+    // issuer is overridden to publicUrl per RFC 8414 §3.3
+    expect(body.issuer).toBe(PUBLIC_URL);
     expect(body.authorization_endpoint).toBe(UPSTREAM_METADATA.authorization_endpoint);
     expect(body.token_endpoint).toBe(UPSTREAM_METADATA.token_endpoint);
     expect(body.jwks_uri).toBe(UPSTREAM_METADATA.jwks_uri);
@@ -383,12 +385,114 @@ describe("scopes_supported behavior", () => {
     const res = await app.request("/.well-known/oauth-authorization-server");
     const body = await res.json();
 
-    expect(body.issuer).toBe(UPSTREAM_METADATA.issuer);
+    // issuer is overridden to publicUrl per RFC 8414 §3.3
+    expect(body.issuer).toBe(PUBLIC_URL);
     expect(body.authorization_endpoint).toBe(
       UPSTREAM_METADATA.authorization_endpoint,
     );
     expect(body.token_endpoint).toBe(UPSTREAM_METADATA.token_endpoint);
     expect(body.jwks_uri).toBe(UPSTREAM_METADATA.jwks_uri);
+  });
+});
+
+// ── POST /clients (RFC 7591 DCR proxy) ───────────────────────────────────────
+
+describe("POST /clients", () => {
+  it("returns HTTP 201", async () => {
+    const { app } = buildApp();
+
+    const res = await app.request("/clients", { method: "POST" });
+
+    expect(res.status).toBe(201);
+  });
+
+  it("returns JSON content-type", async () => {
+    const { app } = buildApp();
+
+    const res = await app.request("/clients", { method: "POST" });
+
+    expect(res.headers.get("content-type")).toMatch(/application\/json/);
+  });
+
+  it("returns the pre-configured client_id", async () => {
+    const { app } = buildApp();
+
+    const res = await app.request("/clients", { method: "POST" });
+    const body = await res.json();
+
+    expect(body.client_id).toBe(CLIENT_ID);
+  });
+
+  it("registers the client as public (token_endpoint_auth_method: none)", async () => {
+    const { app } = buildApp();
+
+    const res = await app.request("/clients", { method: "POST" });
+    const body = await res.json();
+
+    expect(body.token_endpoint_auth_method).toBe("none");
+  });
+
+  it("includes grant_types: ['authorization_code']", async () => {
+    const { app } = buildApp();
+
+    const res = await app.request("/clients", { method: "POST" });
+    const body = await res.json();
+
+    expect(body.grant_types).toEqual(["authorization_code"]);
+  });
+
+  it("includes response_types: ['code']", async () => {
+    const { app } = buildApp();
+
+    const res = await app.request("/clients", { method: "POST" });
+    const body = await res.json();
+
+    expect(body.response_types).toEqual(["code"]);
+  });
+
+  it("echoes back the redirect_uris from the request body", async () => {
+    const { app } = buildApp();
+    const redirectUris = ["http://localhost:19876/oauth/callback"];
+
+    const res = await app.request("/clients", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ redirect_uris: redirectUris }),
+    });
+    const body = await res.json();
+
+    expect(body.redirect_uris).toEqual(redirectUris);
+  });
+
+  it("returns empty redirect_uris when none are supplied in the request", async () => {
+    const { app } = buildApp();
+
+    const res = await app.request("/clients", { method: "POST" });
+    const body = await res.json();
+
+    expect(body.redirect_uris).toEqual([]);
+  });
+
+  it("includes client_id_issued_at as a Unix timestamp", async () => {
+    const before = Math.floor(Date.now() / 1000);
+    const { app } = buildApp();
+
+    const res = await app.request("/clients", { method: "POST" });
+    const body = await res.json();
+    const after = Math.floor(Date.now() / 1000);
+
+    expect(body.client_id_issued_at).toBeGreaterThanOrEqual(before);
+    expect(body.client_id_issued_at).toBeLessThanOrEqual(after);
+  });
+
+  it("does not require a live upstream OIDC provider", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const { app } = buildApp();
+
+    await app.request("/clients", { method: "POST" });
+
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
 

@@ -74,6 +74,7 @@ app.route(
     metadataClient,
     config.publicUrl,
     config.oidcIssuer,
+    config.oidcAudience,
     config.scopesAllowlist,
   ),
 );

@@ -46,36 +46,52 @@ export class OidcMetadataClient {
 // ── Router ────────────────────────────────────────────────────────────────────
 
 /**
- * Returns a Hono router that serves two OAuth discovery endpoints:
+ * Returns a Hono router that serves three OAuth endpoints:
  *
  * GET /.well-known/oauth-protected-resource  (RFC 9728)
- *   Describes this server as a protected resource and names the upstream
- *   authorization server. MCP-compliant clients discover this endpoint via
- *   the `resource_metadata` parameter in the WWW-Authenticate response header
- *   and use `authorization_servers` to find the real token issuer — without
- *   ever triggering Dynamic Client Registration on this server.
+ *   Describes this server as a protected resource. Points `authorization_servers`
+ *   to `publicUrl` (this server), so clients fetch OUR authorization server
+ *   metadata — not the upstream IdP's — and never see the upstream
+ *   `registration_endpoint`.
  *   → 200 JSON
  *
- * GET /.well-known/oauth-authorization-server  (RFC 8414 proxy, backwards compat)
- *   Proxies the upstream OIDC discovery document for clients that look for
- *   auth metadata on the resource server domain rather than following RFC 9728.
- *   `registration_endpoint` is always stripped to prevent DCR attempts.
- *   → 200 JSON  — upstream metadata (filtered)
+ * GET /.well-known/oauth-authorization-server  (RFC 8414 proxy)
+ *   Proxies the upstream OIDC discovery document with three modifications:
+ *   1. `issuer` is overridden to `publicUrl` (RFC 8414 §3.3 requires issuer to
+ *      match the URL the document was fetched from).
+ *   2. `registration_endpoint` is replaced with `<publicUrl>/clients` — our own
+ *      DCR proxy, which returns the pre-configured client ID without forwarding
+ *      to the upstream provider's DCR service.
+ *   3. `scopes_supported` is filtered to the allowlist, if configured.
+ *   → 200 JSON  — modified upstream metadata
  *   → 502 JSON  — upstream unavailable
+ *
+ * POST /clients  (RFC 7591 Dynamic Client Registration proxy)
+ *   Returns the pre-configured `clientId` so MCP clients that require DCR
+ *   (e.g. Claude Code with no explicit clientId in their config) receive a
+ *   usable client identity without the upstream IdP's scope-policy restrictions.
+ *   The client is registered as public (`token_endpoint_auth_method: "none"`),
+ *   which matches PKCE flows that do not send a client secret.
+ *   `redirect_uris` from the request are echoed back; the upstream IdP must be
+ *   configured with permissive redirect URIs for the pre-configured client.
+ *   → 201 JSON
  */
 export function createOAuthMetaRouter(
   metadataClient: OidcMetadataClient,
   publicUrl: string,
   oidcIssuer: string,
+  clientId: string,
   scopesAllowlist?: string[],
 ): Hono {
   const app = new Hono();
 
   // ── Protected Resource Metadata (RFC 9728) ────────────────────────────────
+  // authorization_servers points to publicUrl so clients fetch our filtered
+  // /.well-known/oauth-authorization-server, not the raw upstream IdP endpoint.
   app.get("/.well-known/oauth-protected-resource", (c) => {
     const metadata: Record<string, unknown> = {
       resource: publicUrl,
-      authorization_servers: [oidcIssuer],
+      authorization_servers: [publicUrl],
       bearer_methods_supported: ["header"],
       resource_signing_alg_values_supported: ["RS256"],
     };
@@ -93,24 +109,29 @@ export function createOAuthMetaRouter(
         unknown
       >;
 
-      // Always strip registration_endpoint — exposing it causes MCP clients
-      // to attempt Dynamic Client Registration (DCR), which upstream providers
-      // may reject with scope policy errors. Clients that need auth endpoints
-      // should use /.well-known/oauth-protected-resource (RFC 9728) instead.
-      const { registration_endpoint: _reg, ...metadata } = upstream;
+      // Strip the upstream registration_endpoint and replace with ours.
+      // Override issuer to publicUrl — RFC 8414 §3.3 requires the issuer to
+      // equal the URL prefix from which this document was retrieved.
+      const { registration_endpoint: _reg, issuer: _iss, ...rest } = upstream;
+
+      const base: Record<string, unknown> = {
+        ...rest,
+        issuer: publicUrl,
+        registration_endpoint: `${publicUrl}/clients`,
+      };
 
       if (scopesAllowlist === undefined) {
-        return c.json(metadata);
+        return c.json(base);
       }
 
       // Filter scopes_supported to intersection with the allowlist, if provided.
-      const upstreamScopes = metadata.scopes_supported;
+      const upstreamScopes = base.scopes_supported;
       if (!Array.isArray(upstreamScopes)) {
-        return c.json(metadata);
+        return c.json(base);
       }
 
       const filtered = {
-        ...metadata,
+        ...base,
         scopes_supported: upstreamScopes.filter(
           (s): s is string =>
             typeof s === "string" && scopesAllowlist.includes(s),
@@ -122,6 +143,34 @@ export function createOAuthMetaRouter(
         err instanceof Error ? err.message : "upstream unavailable";
       return c.json({ error: "upstream_unavailable", detail: message }, 502);
     }
+  });
+
+  // ── DCR proxy (RFC 7591) ─────────────────────────────────────────────────
+  // Returns the pre-configured clientId as a public (PKCE) client so that MCP
+  // clients that perform Dynamic Client Registration do not need to interact
+  // with the upstream IdP's DCR service at all.
+  app.post("/clients", async (c) => {
+    let body: Record<string, unknown> = {};
+    try {
+      body = (await c.req.json()) as Record<string, unknown>;
+    } catch {
+      // Ignore parse errors — treat missing body as empty registration request.
+    }
+
+    const redirectUris = Array.isArray(body["redirect_uris"])
+      ? body["redirect_uris"]
+      : [];
+
+    const response: Record<string, unknown> = {
+      client_id: clientId,
+      client_id_issued_at: Math.floor(Date.now() / 1000),
+      token_endpoint_auth_method: "none",
+      grant_types: ["authorization_code"],
+      response_types: ["code"],
+      redirect_uris: redirectUris,
+    };
+
+    return c.json(response, 201);
   });
 
   return app;
