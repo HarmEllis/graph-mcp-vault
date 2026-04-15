@@ -272,6 +272,7 @@ async function handleDelete(
 const searchSchema = z.object({
   query: z.string().min(1),
   namespace: z.string().optional(),
+  all_namespaces: z.boolean().optional(),
   entry_type: z.string().optional(),
   limit: z.number().int().positive().optional(),
   skip: z.number().int().min(0).optional(),
@@ -290,10 +291,23 @@ async function handleSearch(
       `Invalid params: ${parsed.error.message}`,
     );
   }
+  const { namespace, all_namespaces } = parsed.data;
+
+  if (all_namespaces === true && namespace !== undefined) {
+    throw new ToolError(
+      ErrorCode.INVALID_PARAMS,
+      "Cannot specify both namespace and all_namespaces:true",
+    );
+  }
+
+  // undefined → neo4j-client treats it as NULL, which matches all namespaces
+  const effectiveNamespace =
+    all_namespaces === true ? undefined : (namespace ?? ctx.namespace);
+
   const resources = await neo4jClient.searchResources({
     userId: ctx.userId,
     query: parsed.data.query,
-    namespace: parsed.data.namespace ?? ctx.namespace,
+    ...(effectiveNamespace !== undefined && { namespace: effectiveNamespace }),
     ...(parsed.data.entry_type !== undefined && {
       entry_type: parsed.data.entry_type,
     }),
@@ -805,7 +819,12 @@ export function createResourceTools(
             namespace: {
               type: "string",
               description:
-                "Namespace to search in (defaults to session namespace)",
+                "Namespace to search in (defaults to session namespace). Mutually exclusive with all_namespaces:true.",
+            },
+            all_namespaces: {
+              type: "boolean",
+              description:
+                "If true, search across all namespaces readable by the caller. Mutually exclusive with namespace.",
             },
             entry_type: { type: "string", description: "Filter by entry type" },
             limit: { type: "number", description: "Max results (default 20)" },

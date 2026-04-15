@@ -1072,6 +1072,237 @@ describe("knowledge_search_entries", () => {
     );
     expect(parseToolError(body).code).toBe(ErrorCode.INVALID_PARAMS);
   });
+
+  it("all_namespaces:true returns hits from multiple namespaces for the same user", async () => {
+    const sub = uniqueUser("search-all-ns");
+    const sidA = await openSession(sub, "ns-all-a");
+    const sidB = await openSession(sub, "ns-all-b");
+
+    const tag = `AllNsTag${Date.now()}`;
+    await callTool(
+      "knowledge_create_entry",
+      { entry_type: "note", title: `${tag}-inA`, content: "" },
+      sub,
+      sidA,
+    );
+    await callTool(
+      "knowledge_create_entry",
+      { entry_type: "note", title: `${tag}-inB`, content: "" },
+      sub,
+      sidB,
+    );
+
+    const { body } = await callTool(
+      "knowledge_search_entries",
+      { query: tag, all_namespaces: true },
+      sub,
+      sidA,
+    );
+    const resources = parseToolSuccess(body).resources as Array<
+      Record<string, unknown>
+    >;
+    const namespaces = [...new Set(resources.map((r) => r.namespace))];
+    expect(namespaces).toContain("ns-all-a");
+    expect(namespaces).toContain("ns-all-b");
+  });
+
+  it("default (no all_namespaces) is still restricted to the session namespace", async () => {
+    const sub = uniqueUser("search-default-ns-isolation");
+    const sidA = await openSession(sub, "ns-def-a");
+    const sidB = await openSession(sub, "ns-def-b");
+
+    const tag = `DefaultNsTag${Date.now()}`;
+    await callTool(
+      "knowledge_create_entry",
+      { entry_type: "note", title: `${tag}-inA`, content: "" },
+      sub,
+      sidA,
+    );
+    await callTool(
+      "knowledge_create_entry",
+      { entry_type: "note", title: `${tag}-inB`, content: "" },
+      sub,
+      sidB,
+    );
+
+    const { body } = await callTool(
+      "knowledge_search_entries",
+      { query: tag },
+      sub,
+      sidA,
+    );
+    const resources = parseToolSuccess(body).resources as Array<
+      Record<string, unknown>
+    >;
+    expect(resources.every((r) => r.namespace === "ns-def-a")).toBe(true);
+  });
+
+  it("explicit namespace override still works when all_namespaces is omitted", async () => {
+    const sub = uniqueUser("search-ns-explicit-unchanged");
+    const sidA = await openSession(sub, "ns-exp-a");
+    const sidB = await openSession(sub, "ns-exp-b");
+
+    const tag = `ExplicitNsTag${Date.now()}`;
+    await callTool(
+      "knowledge_create_entry",
+      { entry_type: "note", title: `${tag}`, content: "" },
+      sub,
+      sidA,
+    );
+
+    const { body } = await callTool(
+      "knowledge_search_entries",
+      { query: tag, namespace: "ns-exp-a" },
+      sub,
+      sidB,
+    );
+    const resources = parseToolSuccess(body).resources as Array<
+      Record<string, unknown>
+    >;
+    expect(resources.some((r) => r.title === tag)).toBe(true);
+    expect(resources.every((r) => r.namespace === "ns-exp-a")).toBe(true);
+  });
+
+  it("namespace + all_namespaces:true returns INVALID_PARAMS", async () => {
+    const sub = uniqueUser("search-conflict");
+    const sid = await openSession(sub);
+
+    const { body } = await callTool(
+      "knowledge_search_entries",
+      { query: "test", namespace: "some-ns", all_namespaces: true },
+      sub,
+      sid,
+    );
+    expect(parseToolError(body).code).toBe(ErrorCode.INVALID_PARAMS);
+  });
+
+  it("permission filtering still applies in all_namespaces mode", async () => {
+    const owner = uniqueUser("search-all-perm-owner");
+    const stranger = uniqueUser("search-all-perm-stranger");
+    const ownerSid = await openSession(owner, "ns-perm-all");
+    const strangerSid = await openSession(stranger, "ns-perm-all");
+
+    const tag = `PrivateAllNs${Date.now()}`;
+    await callTool(
+      "knowledge_create_entry",
+      { entry_type: "note", title: tag, content: "" },
+      owner,
+      ownerSid,
+    );
+
+    const { body } = await callTool(
+      "knowledge_search_entries",
+      { query: tag, all_namespaces: true },
+      stranger,
+      strangerSid,
+    );
+    const resources = parseToolSuccess(body).resources as Array<
+      Record<string, unknown>
+    >;
+    expect(resources).toHaveLength(0);
+  });
+
+  it("pagination (limit/skip) works for cross-namespace combined results", async () => {
+    const sub = uniqueUser("search-all-ns-page");
+    const sidA = await openSession(sub, "ns-page-a");
+    const sidB = await openSession(sub, "ns-page-b");
+
+    const tag = `PageAllNs${Date.now()}`;
+    for (let i = 0; i < 3; i++) {
+      await callTool(
+        "knowledge_create_entry",
+        { entry_type: "note", title: `${tag}-a${i}`, content: "" },
+        sub,
+        sidA,
+      );
+    }
+    for (let i = 0; i < 3; i++) {
+      await callTool(
+        "knowledge_create_entry",
+        { entry_type: "note", title: `${tag}-b${i}`, content: "" },
+        sub,
+        sidB,
+      );
+    }
+
+    const { body: b1 } = await callTool(
+      "knowledge_search_entries",
+      { query: tag, all_namespaces: true, limit: 3, skip: 0 },
+      sub,
+      sidA,
+    );
+    const { body: b2 } = await callTool(
+      "knowledge_search_entries",
+      { query: tag, all_namespaces: true, limit: 3, skip: 3 },
+      sub,
+      sidA,
+    );
+
+    const r1 = parseToolSuccess(b1).resources as Array<Record<string, unknown>>;
+    const r2 = parseToolSuccess(b2).resources as Array<Record<string, unknown>>;
+    expect(r1).toHaveLength(3);
+    expect(r2).toHaveLength(3);
+    const ids1 = r1.map((r) => r.id);
+    const ids2 = r2.map((r) => r.id);
+    expect(ids1.some((id) => ids2.includes(id))).toBe(false);
+  });
+
+  it("all_namespaces:false + explicit namespace matches the namespace override behavior", async () => {
+    const sub = uniqueUser("search-false-with-ns");
+    const sidA = await openSession(sub, "ns-false-a");
+    const sidB = await openSession(sub, "ns-false-b");
+
+    const tag = `FalseNsTag${Date.now()}`;
+    await callTool(
+      "knowledge_create_entry",
+      { entry_type: "note", title: tag, content: "" },
+      sub,
+      sidA,
+    );
+
+    const { body } = await callTool(
+      "knowledge_search_entries",
+      { query: tag, namespace: "ns-false-a", all_namespaces: false },
+      sub,
+      sidB,
+    );
+    const resources = parseToolSuccess(body).resources as Array<
+      Record<string, unknown>
+    >;
+    expect(resources.some((r) => r.title === tag)).toBe(true);
+    expect(resources.every((r) => r.namespace === "ns-false-a")).toBe(true);
+  });
+
+  it("all_namespaces:false without namespace matches omitting the flag (session namespace only)", async () => {
+    const sub = uniqueUser("search-false-no-ns");
+    const sidA = await openSession(sub, "ns-false-only-a");
+    const sidB = await openSession(sub, "ns-false-only-b");
+
+    const tag = `FalseNoNsTag${Date.now()}`;
+    await callTool(
+      "knowledge_create_entry",
+      { entry_type: "note", title: `${tag}-inA`, content: "" },
+      sub,
+      sidA,
+    );
+    await callTool(
+      "knowledge_create_entry",
+      { entry_type: "note", title: `${tag}-inB`, content: "" },
+      sub,
+      sidB,
+    );
+
+    const { body } = await callTool(
+      "knowledge_search_entries",
+      { query: tag, all_namespaces: false },
+      sub,
+      sidA,
+    );
+    const resources = parseToolSuccess(body).resources as Array<
+      Record<string, unknown>
+    >;
+    expect(resources.every((r) => r.namespace === "ns-false-only-a")).toBe(true);
+  });
 });
 
 // ── knowledge_*_relation ──────────────────────────────────────────────────────
