@@ -2,6 +2,7 @@
   "realm": "graph-mcp-vault",
   "enabled": true,
   "displayName": "graph-mcp-vault-dev",
+  "accessTokenLifespan": 86400,
   "components": {
     "org.keycloak.services.clientregistration.policy.ClientRegistrationPolicy": [
       {
