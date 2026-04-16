@@ -5,6 +5,21 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.7] - 2026-04-16
+
+Expands what the MCP server exposes to LLMs and users: richer sharing info, relation timestamps, editable entry type and namespace, and a structured instructions block that gives LLMs a full picture of the data model on session start.
+
+### Added
+
+- `knowledge_list_access` now returns `name` and `email` alongside `user_id` for each access grant, so users can identify who has access by name rather than opaque ID.
+- `knowledge_list_relations` now includes `created_at` on each relation, showing when the link was established.
+- `knowledge_update_entry` accepts `entry_type` (rename the category of an entry) and `namespace` (move an entry to a different namespace). Changing `namespace` is rejected with a clear error when the entry has existing relations, preserving the cross-namespace invariant.
+- MCP `instructions` field in the `initialize` response: on every session start, LLMs receive a schema overview, namespace semantics (including per-tool override), a mandatory Markdown requirement for `content`, and a search workflow that instructs the model to retry with `all_namespaces: true` before creating a duplicate entry.
+- `src/server-instructions.md`: the instructions text is stored in a plain Markdown file in the repo, making it easy to update without touching application code.
+- Server name and version are now logged at startup.
+
+**Full Changelog**: https://github.com/harmEllis/graph-mcp-vault/compare/v0.0.6...v0.0.7
+
 ## [0.0.6] - 2026-04-15
 
 Fixes token validation failures caused by the `iss` claim mismatch between the upstream IdP's tokens and the previously overridden `issuer` in the OAuth authorization server metadata.

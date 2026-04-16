@@ -720,7 +720,8 @@ export function createResourceTools(
             title: { type: "string" },
             content: {
               type: "string",
-              description: "Full text of the knowledge entry. Write in Markdown format.",
+              description:
+                "Full text of the knowledge entry. Write in Markdown format.",
             },
             entry_type: {
               type: "string",

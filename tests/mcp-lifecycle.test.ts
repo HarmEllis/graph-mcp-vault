@@ -408,7 +408,7 @@ describe("initialize", () => {
     const { res } = await doInitialize(app, token);
     const body = await res.json();
 
-    expect(body.result.serverInfo.version).toBe("0.0.6");
+    expect(body.result.serverInfo.version).toBe("0.0.7");
   });
 
   it("includes capabilities.tools in result", async () => {
@@ -632,7 +632,14 @@ describe("tools/list", () => {
     const app = new Hono();
     app.route(
       "/",
-      createMcpRouter(config, sessionStore, jwksClient, tools, makeStubNeo4j(), ""),
+      createMcpRouter(
+        config,
+        sessionStore,
+        jwksClient,
+        tools,
+        makeStubNeo4j(),
+        "",
+      ),
     );
 
     const { sessionId } = await doInitialize(app, token);

@@ -96,7 +96,14 @@ beforeAll(async () => {
   app = new Hono();
   app.route(
     "/",
-    createMcpRouter(BASE_CONFIG, sessionStore, jwksClient, tools, neo4jClient, ""),
+    createMcpRouter(
+      BASE_CONFIG,
+      sessionStore,
+      jwksClient,
+      tools,
+      neo4jClient,
+      "",
+    ),
   );
 }, 120_000);
 
