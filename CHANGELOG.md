@@ -5,6 +5,16 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.8] - 2026-04-16
+
+Fixes a container startup crash caused by the compiled `dist/` directory missing the `server-instructions.md` file.
+
+### Fixed
+
+- `server-instructions.md` is now copied to `dist/src/` during the Docker build. The TypeScript compiler only processes `.ts` files, so the Markdown file was absent at runtime, causing an `ENOENT` crash on startup.
+
+**Full Changelog**: https://github.com/harmEllis/graph-mcp-vault/compare/v0.0.7...v0.0.8
+
 ## [0.0.7] - 2026-04-16
 
 Expands what the MCP server exposes to LLMs and users: richer sharing info, relation timestamps, editable entry type and namespace, and a structured instructions block that gives LLMs a full picture of the data model on session start.
