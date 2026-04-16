@@ -177,6 +177,7 @@ function buildApp(
       jwksClient,
       tools,
       stubNeo4j,
+      "",
       logger,
     ),
   );

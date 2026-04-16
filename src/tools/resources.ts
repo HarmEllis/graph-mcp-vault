@@ -205,6 +205,8 @@ const updateSchema = z
     entry_id: z.string().min(1),
     title: z.string().min(1).optional(),
     content: z.string().optional(),
+    entry_type: z.string().min(1).optional(),
+    namespace: z.string().min(1).optional(),
   })
   .merge(metadataSchema);
 
@@ -224,6 +226,8 @@ async function handleUpdate(
     entry_id,
     title,
     content,
+    entry_type,
+    namespace,
     topic,
     tags,
     summary,
@@ -232,15 +236,21 @@ async function handleUpdate(
   } = parsed.data;
 
   await requirePermission(neo4jClient, ctx.userId, entry_id, "write");
-  await neo4jClient.updateResource(entry_id, {
-    ...(title !== undefined && { title }),
-    ...(content !== undefined && { content }),
-    ...(topic !== undefined && { topic }),
-    ...(tags !== undefined && { tags }),
-    ...(summary !== undefined && { summary }),
-    ...(source !== undefined && { source }),
-    ...(last_verified_at !== undefined && { last_verified_at }),
-  });
+  try {
+    await neo4jClient.updateResource(entry_id, {
+      ...(title !== undefined && { title }),
+      ...(content !== undefined && { content }),
+      ...(entry_type !== undefined && { entry_type }),
+      ...(namespace !== undefined && { namespace }),
+      ...(topic !== undefined && { topic }),
+      ...(tags !== undefined && { tags }),
+      ...(summary !== undefined && { summary }),
+      ...(source !== undefined && { source }),
+      ...(last_verified_at !== undefined && { last_verified_at }),
+    });
+  } catch (error) {
+    throwMappedClientError(error);
+  }
   return {};
 }
 
@@ -620,7 +630,8 @@ export function createResourceTools(
             title: { type: "string", description: "Short descriptive title" },
             content: {
               type: "string",
-              description: "Full text of the knowledge entry",
+              description:
+                "Full text of the knowledge entry. Write in Markdown format.",
             },
             namespace: {
               type: "string",
@@ -707,7 +718,19 @@ export function createResourceTools(
               description: "UUID of the entry to update",
             },
             title: { type: "string" },
-            content: { type: "string" },
+            content: {
+              type: "string",
+              description: "Full text of the knowledge entry. Write in Markdown format.",
+            },
+            entry_type: {
+              type: "string",
+              description: "Change the entry type (e.g. note, decision, fact)",
+            },
+            namespace: {
+              type: "string",
+              description:
+                "Move entry to a different namespace. Not allowed if the entry has existing relations.",
+            },
             topic: { type: "string" },
             tags: { type: "array", items: { type: "string" } },
             summary: { type: "string" },

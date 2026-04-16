@@ -101,7 +101,7 @@ function buildApp(
   const app = new Hono();
   app.route(
     "/",
-    createMcpRouter(config, sessionStore, jwksClient, [], neo4jClient),
+    createMcpRouter(config, sessionStore, jwksClient, [], neo4jClient, ""),
   );
   return { app, sessionStore, neo4jClient };
 }
@@ -578,6 +578,7 @@ describe("session validation", () => {
         jwksClient,
         [],
         makeStubNeo4j(),
+        "",
       ),
     );
 
@@ -631,7 +632,7 @@ describe("tools/list", () => {
     const app = new Hono();
     app.route(
       "/",
-      createMcpRouter(config, sessionStore, jwksClient, tools, makeStubNeo4j()),
+      createMcpRouter(config, sessionStore, jwksClient, tools, makeStubNeo4j(), ""),
     );
 
     const { sessionId } = await doInitialize(app, token);

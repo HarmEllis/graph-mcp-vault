@@ -1,4 +1,7 @@
 import "dotenv/config";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import neo4j from "neo4j-driver";
@@ -7,7 +10,7 @@ import { JwksClient } from "./auth.js";
 import { parseConfig } from "./config.js";
 import { createLogger } from "./logger.js";
 import { Neo4jClient } from "./neo4j-client.js";
-import { createMcpRouter } from "./routers/mcp.js";
+import { SERVER_NAME, SERVER_VERSION, createMcpRouter } from "./routers/mcp.js";
 import {
   OidcMetadataClient,
   createOAuthMetaRouter,
@@ -17,12 +20,20 @@ import { SessionStore } from "./session.js";
 import { createResourceTools } from "./tools/resources.js";
 import { createSharingTools } from "./tools/sharing.js";
 
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const instructions = readFileSync(
+  join(__dirname, "server-instructions.md"),
+  "utf-8",
+);
+
 const config = parseConfig(process.env as Record<string, string | undefined>);
 const logger = createLogger(config.logLevel);
 
 // ── Neo4j ─────────────────────────────────────────────────────────────────────
 
 logger.info("startup", {
+  name: SERVER_NAME,
+  version: SERVER_VERSION,
   neo4jUri: config.neo4jUri,
   port: config.port,
   logLevel: config.logLevel,
@@ -91,6 +102,7 @@ app.route(
     jwksClient,
     tools,
     _neo4jClient,
+    instructions,
     logger,
   ),
 );

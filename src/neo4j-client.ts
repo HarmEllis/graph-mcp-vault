@@ -25,6 +25,8 @@ export interface ResourceWithOwnership extends Resource {
 
 export interface SharingEntry {
   user_id: string;
+  name?: string;
+  email?: string;
   role: "viewer" | "editor";
   granted_at: string;
 }
@@ -42,6 +44,7 @@ export interface EntryRelation {
   direction: "outbound" | "inbound";
   relation_type: string;
   label?: string;
+  created_at?: string;
   entry: {
     id: string;
     title: string;
@@ -321,6 +324,8 @@ export class Neo4jClient {
     params: {
       title?: string;
       content?: string;
+      entry_type?: string;
+      namespace?: string;
       topic?: string;
       tags?: string[];
       summary?: string;
@@ -328,10 +333,35 @@ export class Neo4jClient {
       last_verified_at?: string;
     },
   ): Promise<void> {
+    if (params.namespace !== undefined) {
+      const current = await this.getResource(resourceId);
+      if (current && current.namespace !== params.namespace) {
+        const guardSession = this.driver.session();
+        try {
+          const guardResult = await guardSession.run(
+            `MATCH (r:Resource {id: $id})
+             RETURN EXISTS { (r)-[:ENTRY_RELATION]-() } AS hasRelations`,
+            { id: resourceId },
+          );
+          const guardRecord = guardResult.records[0];
+          if (guardRecord && guardRecord.get("hasRelations") === true) {
+            throw new Neo4jClientError(
+              "INVALID_PARAMS",
+              "Cannot change namespace: entry has existing relations",
+            );
+          }
+        } finally {
+          await guardSession.close();
+        }
+      }
+    }
+
     const now = new Date().toISOString();
     const patch: Record<string, unknown> = { updated_at: now };
     if (params.title !== undefined) patch.title = params.title;
     if (params.content !== undefined) patch.content = params.content;
+    if (params.entry_type !== undefined) patch.entry_type = params.entry_type;
+    if (params.namespace !== undefined) patch.namespace = params.namespace;
     if (params.topic !== undefined) patch.topic = params.topic;
     if (params.tags !== undefined) patch.tags = params.tags;
     if (params.summary !== undefined) patch.summary = params.summary;
@@ -587,14 +617,21 @@ export class Neo4jClient {
       const result = await session.run(
         `
         MATCH (u:User)-[acc:HAS_ACCESS]->(r:Resource {id: $resourceId})
-        RETURN u.id AS user_id, acc.role AS role, acc.granted_at AS granted_at
+        RETURN u.id AS user_id, u.name AS name, u.email AS email,
+               acc.role AS role, acc.granted_at AS granted_at
         ORDER BY acc.granted_at DESC
         LIMIT $limit
-        `,
+`,
         { resourceId, limit: neo4j.int(limit) },
       );
       return result.records.map((record) => ({
         user_id: record.get("user_id") as string,
+        ...(record.get("name") !== null
+          ? { name: record.get("name") as string }
+          : {}),
+        ...(record.get("email") !== null
+          ? { email: record.get("email") as string }
+          : {}),
         role: record.get("role") as "viewer" | "editor",
         granted_at: record.get("granted_at") as string,
       }));
@@ -740,7 +777,7 @@ export class Neo4jClient {
         query = `
           MATCH (base:Resource {id: $entryId})-[r:ENTRY_RELATION]->(other:Resource)
           WHERE EXISTS { MATCH (:User {id: $userId})-[:OWNS|HAS_ACCESS]->(other) }
-          RETURN 'outbound' AS direction, r.relation_type AS relation_type, r.label AS label, other.id AS entry_id, other.title AS entry_title
+          RETURN 'outbound' AS direction, r.relation_type AS relation_type, r.label AS label, r.created_at AS created_at, other.id AS entry_id, other.title AS entry_title
           ORDER BY relation_type, entry_title
           LIMIT $limit
         `;
@@ -748,7 +785,7 @@ export class Neo4jClient {
         query = `
           MATCH (other:Resource)-[r:ENTRY_RELATION]->(base:Resource {id: $entryId})
           WHERE EXISTS { MATCH (:User {id: $userId})-[:OWNS|HAS_ACCESS]->(other) }
-          RETURN 'inbound' AS direction, r.relation_type AS relation_type, r.label AS label, other.id AS entry_id, other.title AS entry_title
+          RETURN 'inbound' AS direction, r.relation_type AS relation_type, r.label AS label, r.created_at AS created_at, other.id AS entry_id, other.title AS entry_title
           ORDER BY relation_type, entry_title
           LIMIT $limit
         `;
@@ -757,13 +794,13 @@ export class Neo4jClient {
           CALL {
             MATCH (base:Resource {id: $entryId})-[r:ENTRY_RELATION]->(otherOut:Resource)
             WHERE EXISTS { MATCH (:User {id: $userId})-[:OWNS|HAS_ACCESS]->(otherOut) }
-            RETURN 'outbound' AS direction, r.relation_type AS relation_type, r.label AS label, otherOut.id AS entry_id, otherOut.title AS entry_title
+            RETURN 'outbound' AS direction, r.relation_type AS relation_type, r.label AS label, r.created_at AS created_at, otherOut.id AS entry_id, otherOut.title AS entry_title
             UNION ALL
             MATCH (otherIn:Resource)-[r:ENTRY_RELATION]->(base:Resource {id: $entryId})
             WHERE EXISTS { MATCH (:User {id: $userId})-[:OWNS|HAS_ACCESS]->(otherIn) }
-            RETURN 'inbound' AS direction, r.relation_type AS relation_type, r.label AS label, otherIn.id AS entry_id, otherIn.title AS entry_title
+            RETURN 'inbound' AS direction, r.relation_type AS relation_type, r.label AS label, r.created_at AS created_at, otherIn.id AS entry_id, otherIn.title AS entry_title
           }
-          RETURN direction, relation_type, label, entry_id, entry_title
+          RETURN direction, relation_type, label, created_at, entry_id, entry_title
           ORDER BY relation_type, entry_title
           LIMIT $limit
         `;
@@ -779,6 +816,9 @@ export class Neo4jClient {
         relation_type: record.get("relation_type") as string,
         ...(record.get("label") !== null
           ? { label: record.get("label") as string }
+          : {}),
+        ...(record.get("created_at") !== null
+          ? { created_at: record.get("created_at") as string }
           : {}),
         entry: {
           id: record.get("entry_id") as string,

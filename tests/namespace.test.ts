@@ -90,6 +90,7 @@ beforeAll(async () => {
       jwksClient,
       createResourceTools(neo4jClient),
       neo4jClient,
+      "",
     ),
   );
 }, 120_000);

@@ -27,8 +27,8 @@ const KNOWN_PROTOCOL_VERSIONS = new Set([
   "2024-11-05",
   "2024-10-07",
 ]);
-const SERVER_NAME = "graph-mcp-vault";
-const SERVER_VERSION = "0.0.6";
+export const SERVER_NAME = "graph-mcp-vault";
+export const SERVER_VERSION = "0.0.6";
 
 // ── JSON-RPC types ────────────────────────────────────────────────────────────
 
@@ -154,6 +154,7 @@ export function createMcpRouter(
   jwksClient: JwksClient,
   tools: RegisteredTool[],
   neo4jClient: Neo4jClient,
+  instructions: string,
   logger: Logger = noopLogger,
 ): Hono {
   const app = new Hono();
@@ -684,6 +685,7 @@ export function createMcpRouter(
           protocolVersion: SUPPORTED_VERSION,
           capabilities: { tools: {} },
           serverInfo: { name: SERVER_NAME, version: SERVER_VERSION },
+          instructions,
           meta: { sessionId },
         },
       },
