@@ -368,35 +368,38 @@ describe("scopes_supported behavior", () => {
     expect(body.scopes_supported).toEqual(["openid", "profile", "email"]);
   });
 
-  it("with allowlist: returns intersection of allowlist and upstream scopes", async () => {
+  it("with allowlist: returns the full allowlist regardless of upstream scopes", async () => {
     stubFetch(UPSTREAM_METADATA); // upstream has ['openid', 'profile', 'email']
     const { app } = buildApp(3_600_000, ["openid", "email", "offline_access"]);
 
     const res = await app.request("/.well-known/oauth-authorization-server");
     const body = await res.json();
 
-    // 'offline_access' is in allowlist but not upstream → excluded
-    expect(body.scopes_supported).toEqual(["openid", "email"]);
+    // Allowlist is trusted as-is — no intersection with upstream.
+    // This keeps scopes_supported consistent with the DCR scope field so
+    // clients (e.g. Opencode) don't reject scopes that the upstream treats as
+    // always-on defaults rather than requestable optional scopes.
+    expect(body.scopes_supported).toEqual(["openid", "email", "offline_access"]);
   });
 
-  it("with allowlist: excludes scopes not present in upstream", async () => {
+  it("with allowlist: returns the full allowlist even for scopes absent from upstream", async () => {
     stubFetch(UPSTREAM_METADATA); // upstream has ['openid', 'profile', 'email']
     const { app } = buildApp(3_600_000, ["openid", "graph-mcp-vault-api"]);
 
     const res = await app.request("/.well-known/oauth-authorization-server");
     const body = await res.json();
 
-    expect(body.scopes_supported).toEqual(["openid"]);
+    expect(body.scopes_supported).toEqual(["openid", "graph-mcp-vault-api"]);
   });
 
-  it("with allowlist and no matching upstream scopes: returns empty array", async () => {
+  it("with allowlist and no matching upstream scopes: still returns the full allowlist", async () => {
     stubFetch(UPSTREAM_METADATA);
     const { app } = buildApp(3_600_000, ["nope", "also-nope"]);
 
     const res = await app.request("/.well-known/oauth-authorization-server");
     const body = await res.json();
 
-    expect(body.scopes_supported).toEqual([]);
+    expect(body.scopes_supported).toEqual(["nope", "also-nope"]);
   });
 
   it("preserves all other upstream fields unchanged regardless of allowlist setting", async () => {

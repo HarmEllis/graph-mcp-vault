@@ -11,24 +11,19 @@ function resolveSupportedScopes(
   upstreamScopes: unknown,
   scopesAllowlist: string[] | undefined,
 ): string[] {
-  const parsedUpstreamScopes = asStringScopes(upstreamScopes);
-  if (scopesAllowlist === undefined) {
-    if (
-      parsedUpstreamScopes === undefined ||
-      parsedUpstreamScopes.length === 0
-    ) {
-      return [...FALLBACK_SCOPES];
-    }
-    return parsedUpstreamScopes;
-  }
-
-  if (parsedUpstreamScopes === undefined || parsedUpstreamScopes.length === 0) {
+  // When the operator has explicitly configured an allowlist, trust it as-is.
+  // Intersecting with upstream would hide scopes the upstream treats as default
+  // (always-on) rather than optional/requestable, causing DCR and
+  // scopes_supported to advertise different values and confusing MCP clients.
+  if (scopesAllowlist !== undefined) {
     return scopesAllowlist;
   }
 
-  return parsedUpstreamScopes.filter((scope) =>
-    scopesAllowlist.includes(scope),
-  );
+  const parsedUpstreamScopes = asStringScopes(upstreamScopes);
+  if (parsedUpstreamScopes === undefined || parsedUpstreamScopes.length === 0) {
+    return [...FALLBACK_SCOPES];
+  }
+  return parsedUpstreamScopes;
 }
 
 // ── OidcMetadataClient ────────────────────────────────────────────────────────
