@@ -68,6 +68,33 @@ export interface PathResult {
   relations: Array<{ relation_type: string; label?: string }>;
 }
 
+export interface RelationshipPath {
+  nodes: Array<{ id: string; title: string; entry_type: string }>;
+  relations: Array<{
+    relation_type: string;
+    label?: string;
+    from_id: string;
+    to_id: string;
+  }>;
+  /** Human-readable chain with actual edge directions, e.g.
+   *  "NAS <-[MANAGED_BY]- Management VM -[CONNECTS_TO]-> PiKVM" */
+  formatted: string;
+}
+
+export interface ExplainRelationshipResult {
+  entry_a: { id: string; title: string; entry_type: string };
+  entry_b: { id: string; title: string; entry_type: string };
+  /** Relations where A and B are directly connected (no intermediates). */
+  direct_relations: Array<{
+    relation_type: string;
+    label?: string;
+    direction: "a_to_b" | "b_to_a";
+  }>;
+  paths: RelationshipPath[];
+  /** True if at least one direct relation or path was found. */
+  connected: boolean;
+}
+
 export class Neo4jClientError extends Error {
   constructor(
     public readonly code: Neo4jClientErrorCode,
@@ -144,6 +171,31 @@ function buildLuceneQuery(query: string, mode: MatchMode): string | null {
     case "fuzzy":
       return buildFuzzyQuery(query);
   }
+}
+
+// ── Path helpers ──────────────────────────────────────────────────────────────
+
+/**
+ * Builds a human-readable path string from nodes and relations, showing the
+ * actual direction of each edge based on its `from_id`/`to_id`.
+ *
+ * Example: "NAS <-[MANAGED_BY]- Management VM -[CONNECTS_TO]-> PiKVM"
+ */
+function buildFormattedPath(
+  nodes: Array<{ id: string; title: string }>,
+  relations: Array<{ relation_type: string; from_id: string }>,
+): string {
+  return nodes
+    .map((node, i) => {
+      if (i === 0) return node.title;
+      const rel = relations[i - 1]!;
+      const arrow =
+        rel.from_id === nodes[i - 1]!.id
+          ? `-[${rel.relation_type}]->`
+          : `<-[${rel.relation_type}]-`;
+      return `${arrow} ${node.title}`;
+    })
+    .join(" ");
 }
 
 // ── Neo4jClient ───────────────────────────────────────────────────────────────
@@ -929,7 +981,10 @@ export class Neo4jClient {
   }
 
   /**
-   * Finds directed paths between two entries via ENTRY_RELATION edges.
+   * Finds paths between two entries via ENTRY_RELATION edges.
+   *
+   * Traverses in both directions by default (undirected). Use `direction` to
+   * restrict to outbound-only or inbound-only traversal.
    *
    * Only paths where every node is accessible to the caller are returned.
    * Both entries must exist in the same namespace and the caller must have
@@ -942,6 +997,7 @@ export class Neo4jClient {
     maxDepth: number;
     maxPaths: number;
     relationTypes: string[] | null;
+    direction?: "outbound" | "inbound" | "both";
   }): Promise<PathResult[]> {
     if (params.fromId === params.toId) {
       throw new Neo4jClientError(
@@ -983,11 +1039,20 @@ export class Neo4jClient {
 
     // Embed depth literal — Neo4j does not allow parameters in range bounds.
     const depthLiteral = params.maxDepth;
+    const dir = params.direction ?? "both";
+    let pathPattern: string;
+    if (dir === "outbound") {
+      pathPattern = `(fromNode:Resource {id: $fromId})-[:ENTRY_RELATION*1..${depthLiteral}]->(toNode:Resource {id: $toId})`;
+    } else if (dir === "inbound") {
+      pathPattern = `(fromNode:Resource {id: $fromId})<-[:ENTRY_RELATION*1..${depthLiteral}]-(toNode:Resource {id: $toId})`;
+    } else {
+      pathPattern = `(fromNode:Resource {id: $fromId})-[:ENTRY_RELATION*1..${depthLiteral}]-(toNode:Resource {id: $toId})`;
+    }
     const session = this.driver.session();
     try {
       const result = await session.run(
         `
-        MATCH path = (fromNode:Resource {id: $fromId})-[:ENTRY_RELATION*1..${depthLiteral}]->(toNode:Resource {id: $toId})
+        MATCH path = ${pathPattern}
         WHERE ALL(n IN nodes(path) WHERE EXISTS { MATCH (:User {id: $userId})-[:OWNS|HAS_ACCESS]->(n) })
           AND ($relTypes IS NULL OR ALL(r IN relationships(path) WHERE r.relation_type IN $relTypes))
         WITH path LIMIT $maxPaths
@@ -1020,6 +1085,143 @@ export class Neo4jClient {
           })),
         };
       });
+    } finally {
+      await session.close();
+    }
+  }
+
+  /**
+   * Explains how two entries are connected by finding direct relations and all
+   * indirect paths between them (undirected traversal).
+   *
+   * Returns a structured result including a human-readable `formatted` string
+   * per path (e.g. "NAS <-[MANAGED_BY]- Management VM -[CONNECTS_TO]-> PiKVM").
+   *
+   * Both entries must exist, belong to the same namespace, and be readable by
+   * the caller.
+   */
+  async explainRelationship(params: {
+    userId: string;
+    entryAId: string;
+    entryBId: string;
+    maxDepth: number;
+  }): Promise<ExplainRelationshipResult> {
+    if (params.entryAId === params.entryBId) {
+      throw new Neo4jClientError(
+        "INVALID_PARAMS",
+        "entry_a_id and entry_b_id must be different",
+      );
+    }
+    // Existence + namespace + access checks (reuse existing methods, same as findPaths)
+    const resourceA = await this.getResource(params.entryAId);
+    const resourceB = await this.getResource(params.entryBId);
+    if (!resourceA || !resourceB) {
+      throw new Neo4jClientError("RESOURCE_NOT_FOUND", "Resource not found");
+    }
+    if (resourceA.namespace !== resourceB.namespace) {
+      throw new Neo4jClientError(
+        "INVALID_PARAMS",
+        "Entries must belong to the same namespace",
+      );
+    }
+    const roleA = await this.getEffectiveRole(params.userId, params.entryAId);
+    const roleB = await this.getEffectiveRole(params.userId, params.entryBId);
+    if (
+      !Neo4jClient.hasReadPermission(roleA) ||
+      !Neo4jClient.hasReadPermission(roleB)
+    ) {
+      throw new Neo4jClientError("PERMISSION_DENIED", "Permission denied");
+    }
+
+    const entry_a = {
+      id: resourceA.id,
+      title: resourceA.title,
+      entry_type: resourceA.entry_type,
+    };
+    const entry_b = {
+      id: resourceB.id,
+      title: resourceB.title,
+      entry_type: resourceB.entry_type,
+    };
+
+    const depthLiteral = params.maxDepth;
+    const session = this.driver.session();
+    try {
+      // Step 1: direct relations (bidirectional)
+      const directResult = await session.run(
+        `
+        MATCH (a:Resource {id: $entryAId})-[r:ENTRY_RELATION]-(b:Resource {id: $entryBId})
+        RETURN r.relation_type AS relation_type, r.label AS label,
+               startNode(r).id AS from_id
+        `,
+        { entryAId: params.entryAId, entryBId: params.entryBId },
+      );
+      const direct_relations = directResult.records.map((record) => {
+        const fromId = record.get("from_id") as string;
+        const label = record.get("label") as string | null;
+        return {
+          relation_type: record.get("relation_type") as string,
+          ...(label !== null ? { label } : {}),
+          direction: (fromId === params.entryAId ? "a_to_b" : "b_to_a") as
+            | "a_to_b"
+            | "b_to_a",
+        };
+      });
+
+      // Step 2: indirect paths (undirected, shortest first, deterministic)
+      const pathResult = await session.run(
+        `
+        MATCH path = (a:Resource {id: $entryAId})-[:ENTRY_RELATION*1..${depthLiteral}]-(b:Resource {id: $entryBId})
+        WHERE ALL(n IN nodes(path) WHERE EXISTS { MATCH (:User {id: $userId})-[:OWNS|HAS_ACCESS]->(n) })
+        WITH path ORDER BY length(path), [n IN nodes(path) | n.id]
+        LIMIT 5
+        RETURN
+          [n IN nodes(path) | { id: n.id, title: n.title, entry_type: n.entry_type }] AS pathNodes,
+          [r IN relationships(path) | {
+            relation_type: r.relation_type,
+            label: r.label,
+            from_id: startNode(r).id,
+            to_id: endNode(r).id
+          }] AS pathRels
+        `,
+        {
+          userId: params.userId,
+          entryAId: params.entryAId,
+          entryBId: params.entryBId,
+        },
+      );
+      const paths: RelationshipPath[] = pathResult.records.map((record) => {
+        const rawNodes = record.get("pathNodes") as Array<{
+          id: string;
+          title: string;
+          entry_type: string;
+        }>;
+        const rawRels = record.get("pathRels") as Array<{
+          relation_type: string;
+          label: string | null;
+          from_id: string;
+          to_id: string;
+        }>;
+        const relations = rawRels.map((r) => ({
+          relation_type: r.relation_type,
+          ...(r.label !== null ? { label: r.label } : {}),
+          from_id: r.from_id,
+          to_id: r.to_id,
+        }));
+        return {
+          nodes: rawNodes,
+          relations,
+          formatted: buildFormattedPath(rawNodes, relations),
+        };
+      });
+
+      return {
+        entry_a,
+        entry_b,
+        direct_relations,
+        paths,
+        connected: direct_relations.length > 0 || paths.length > 0,
+      };
     } finally {
       await session.close();
     }

@@ -571,3 +571,31 @@ a no-op for backwards compatibility.
 **Rejected alternative**: keep the session-namespace default and improve the tool description
 to guide LLMs toward `all_namespaces: true`. Rejected because the LLM guidance is purely
 advisory and the silent-empty-result failure mode remains until the LLM explicitly retries.
+
+---
+
+## D-031 — `find_paths` default traversal direction changed to undirected (breaking)
+
+**Date**: 2026-04-17
+**Status**: Accepted
+
+**Decision**: `knowledge_find_paths` now traverses in both directions by default (`direction:"both"`,
+undirected). Previously the traversal was hardcoded to outbound-only (`->`). A `direction`
+parameter is added with values `"outbound"`, `"inbound"`, and `"both"`.
+
+**Rationale**:
+- LLMs using `find_paths` to discover how two nodes were connected received empty results
+  when the graph topology required traversal against edge direction (e.g. `NAS ← Management VM →
+  PiKVM`). The tool appeared broken even though the nodes were clearly connected.
+- `expand_context` already implements direction-aware traversal with "both" as default — this
+  change aligns `find_paths` with the same pattern.
+- "Find paths between A and B" semantically implies undirected connectivity; callers who need
+  directed traversal can opt in via `direction:"outbound"` or `direction:"inbound"`.
+
+**Migration note for existing callers**:
+- Callers that relied on the outbound-only behavior should now pass `direction:"outbound"` explicitly.
+- Callers using `direction:"both"` (or omitting the parameter) will see improved results for
+  mixed-direction graph topologies.
+
+**Rejected alternative**: keep outbound-only default and improve documentation. Rejected because
+documentation is advisory and the silent-empty failure mode persists for undirected topologies.

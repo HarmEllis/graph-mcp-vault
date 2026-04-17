@@ -1817,6 +1817,177 @@ describe("Neo4jClient.findPaths", () => {
 
     expect(paths.length).toBe(1);
   });
+
+  it("direction:'both' (default) finds path through reversed edge (A→B←C, query C→A)", async () => {
+    const userId = "user-paths-dir-both";
+    const ns = "paths-dir-both-ns";
+    const a = await client.createResource({ userId, namespace: ns, entry_type: "note", title: "A", content: "" });
+    const b = await client.createResource({ userId, namespace: ns, entry_type: "note", title: "B", content: "" });
+    const c = await client.createResource({ userId, namespace: ns, entry_type: "note", title: "C", content: "" });
+    // A→B and C→B (so C cannot reach A via outbound only)
+    await client.createEntryRelation(userId, a.id, b.id, "CONNECTS_TO");
+    await client.createEntryRelation(userId, c.id, b.id, "CONNECTS_TO");
+
+    // direction:"both" should find C → B ← A (undirected path)
+    const paths = await client.findPaths({
+      userId,
+      fromId: c.id,
+      toId: a.id,
+      maxDepth: 4,
+      maxPaths: 5,
+      relationTypes: null,
+      direction: "both",
+    });
+    expect(paths.length).toBeGreaterThan(0);
+  });
+
+  it("direction:'outbound' returns empty for the same reversed-edge topology", async () => {
+    const userId = "user-paths-dir-out";
+    const ns = "paths-dir-out-ns";
+    const a = await client.createResource({ userId, namespace: ns, entry_type: "note", title: "A", content: "" });
+    const b = await client.createResource({ userId, namespace: ns, entry_type: "note", title: "B", content: "" });
+    const c = await client.createResource({ userId, namespace: ns, entry_type: "note", title: "C", content: "" });
+    await client.createEntryRelation(userId, a.id, b.id, "CONNECTS_TO");
+    await client.createEntryRelation(userId, c.id, b.id, "CONNECTS_TO");
+
+    const paths = await client.findPaths({
+      userId,
+      fromId: c.id,
+      toId: a.id,
+      maxDepth: 4,
+      maxPaths: 5,
+      relationTypes: null,
+      direction: "outbound",
+    });
+    expect(paths).toHaveLength(0);
+  });
+
+  it("direction:'inbound' finds path when traversing against edge direction", async () => {
+    const userId = "user-paths-dir-in";
+    const ns = "paths-dir-in-ns";
+    const a = await client.createResource({ userId, namespace: ns, entry_type: "note", title: "A", content: "" });
+    const b = await client.createResource({ userId, namespace: ns, entry_type: "note", title: "B", content: "" });
+    // A→B: from A's perspective, B is reachable inbound from B's perspective
+    await client.createEntryRelation(userId, a.id, b.id, "CONNECTS_TO");
+
+    // Query B→A with direction:"inbound" (traverse against the A→B arrow)
+    const paths = await client.findPaths({
+      userId,
+      fromId: b.id,
+      toId: a.id,
+      maxDepth: 4,
+      maxPaths: 5,
+      relationTypes: null,
+      direction: "inbound",
+    });
+    expect(paths.length).toBeGreaterThan(0);
+  });
+});
+
+// ── explainRelationship ───────────────────────────────────────────────────────
+
+describe("Neo4jClient.explainRelationship", () => {
+  it("returns direct_relations and connected:true for a directly connected pair", async () => {
+    const userId = "user-explain-direct";
+    const ns = "explain-direct-ns";
+    const a = await client.createResource({ userId, namespace: ns, entry_type: "device", title: "NAS", content: "" });
+    const b = await client.createResource({ userId, namespace: ns, entry_type: "device", title: "Switch", content: "" });
+    await client.createEntryRelation(userId, a.id, b.id, "CONNECTS_TO", "via eth0");
+
+    const result = await client.explainRelationship({ userId, entryAId: a.id, entryBId: b.id, maxDepth: 4 });
+
+    expect(result.connected).toBe(true);
+    expect(result.direct_relations).toHaveLength(1);
+    expect(result.direct_relations[0]?.relation_type).toBe("CONNECTS_TO");
+    expect(result.direct_relations[0]?.direction).toBe("a_to_b");
+    expect(result.direct_relations[0]?.label).toBe("via eth0");
+  });
+
+  it("returns paths with formatted string for a 2-hop indirect connection", async () => {
+    const userId = "user-explain-indirect";
+    const ns = "explain-indirect-ns";
+    const nas = await client.createResource({ userId, namespace: ns, entry_type: "device", title: "NAS", content: "" });
+    const mgmt = await client.createResource({ userId, namespace: ns, entry_type: "device", title: "Management VM", content: "" });
+    const pikvm = await client.createResource({ userId, namespace: ns, entry_type: "device", title: "PiKVM", content: "" });
+    // NAS ←MANAGED_BY— Management VM —CONNECTS_TO→ PiKVM
+    await client.createEntryRelation(userId, mgmt.id, nas.id, "MANAGED_BY");
+    await client.createEntryRelation(userId, mgmt.id, pikvm.id, "CONNECTS_TO");
+
+    const result = await client.explainRelationship({ userId, entryAId: nas.id, entryBId: pikvm.id, maxDepth: 4 });
+
+    expect(result.connected).toBe(true);
+    expect(result.paths.length).toBeGreaterThan(0);
+    const path = result.paths[0]!;
+    expect(path.formatted).toContain("NAS");
+    expect(path.formatted).toContain("PiKVM");
+    expect(path.formatted).toContain("Management VM");
+  });
+
+  it("returns connected:false for unconnected entries", async () => {
+    const userId = "user-explain-none";
+    const ns = "explain-none-ns";
+    const a = await client.createResource({ userId, namespace: ns, entry_type: "note", title: "Isolated A", content: "" });
+    const b = await client.createResource({ userId, namespace: ns, entry_type: "note", title: "Isolated B", content: "" });
+
+    const result = await client.explainRelationship({ userId, entryAId: a.id, entryBId: b.id, maxDepth: 4 });
+
+    expect(result.connected).toBe(false);
+    expect(result.direct_relations).toHaveLength(0);
+    expect(result.paths).toHaveLength(0);
+  });
+
+  it("excludes paths through inaccessible intermediate nodes", async () => {
+    // owner creates all nodes and relations; querier only gets access to A and B, not middle
+    const owner = "user-explain-acc-owner";
+    const querier = "user-explain-acc-querier";
+    const ns = "explain-acc-ns";
+    const a = await client.createResource({ userId: owner, namespace: ns, entry_type: "note", title: "A", content: "" });
+    const middle = await client.createResource({ userId: owner, namespace: ns, entry_type: "note", title: "Middle", content: "" });
+    const b = await client.createResource({ userId: owner, namespace: ns, entry_type: "note", title: "B", content: "" });
+    await client.createEntryRelation(owner, a.id, middle.id, "CONNECTS_TO");
+    await client.createEntryRelation(owner, middle.id, b.id, "CONNECTS_TO");
+
+    // Grant querier access to A and B, but NOT to middle
+    await client.shareResource(a.id, querier, "viewer");
+    await client.shareResource(b.id, querier, "viewer");
+
+    // querier cannot access middle → path should be excluded
+    const result = await client.explainRelationship({ userId: querier, entryAId: a.id, entryBId: b.id, maxDepth: 4 });
+
+    expect(result.paths).toHaveLength(0);
+  });
+
+  it("throws INVALID_PARAMS for self-reference", async () => {
+    const userId = "user-explain-self";
+    const ns = "explain-self-ns";
+    const a = await client.createResource({ userId, namespace: ns, entry_type: "note", title: "X", content: "" });
+
+    await expect(
+      client.explainRelationship({ userId, entryAId: a.id, entryBId: a.id, maxDepth: 4 }),
+    ).rejects.toMatchObject({ code: "INVALID_PARAMS" });
+  });
+
+  it("throws INVALID_PARAMS for cross-namespace entries", async () => {
+    const userId = "user-explain-xns";
+    const a = await client.createResource({ userId, namespace: "explain-xns-a", entry_type: "note", title: "A", content: "" });
+    const b = await client.createResource({ userId, namespace: "explain-xns-b", entry_type: "note", title: "B", content: "" });
+
+    await expect(
+      client.explainRelationship({ userId, entryAId: a.id, entryBId: b.id, maxDepth: 4 }),
+    ).rejects.toMatchObject({ code: "INVALID_PARAMS" });
+  });
+
+  it("throws PERMISSION_DENIED when caller cannot read endpoint", async () => {
+    const owner = "user-explain-perm-owner";
+    const stranger = "user-explain-perm-stranger";
+    const ns = "explain-perm-ns";
+    const a = await client.createResource({ userId: owner, namespace: ns, entry_type: "note", title: "A", content: "" });
+    const b = await client.createResource({ userId: owner, namespace: ns, entry_type: "note", title: "B", content: "" });
+
+    await expect(
+      client.explainRelationship({ userId: stranger, entryAId: a.id, entryBId: b.id, maxDepth: 4 }),
+    ).rejects.toMatchObject({ code: "PERMISSION_DENIED" });
+  });
 });
 
 // ── impactAnalysis ────────────────────────────────────────────────────────────

@@ -2182,6 +2182,175 @@ describe("knowledge_find_paths", () => {
     );
     expect(parseToolError(body).code).toBe(ErrorCode.INVALID_PARAMS);
   });
+
+  it("direction:both finds path across reversed edges; direction:outbound returns empty+hint", async () => {
+    // Topology: A <-[CONNECTS_TO]- Mid -[CONNECTS_TO]-> B
+    // Outbound from A→B skips this, but undirected finds it.
+    const sub = uniqueUser("paths-dir");
+    const sid = await openSession(sub, "paths-dir-ns");
+    const aId = await createEntry(sub, sid, { title: "A" });
+    const midId = await createEntry(sub, sid, { title: "Mid" });
+    const bId = await createEntry(sub, sid, { title: "B" });
+
+    // Mid → A and Mid → B (so A←Mid→B)
+    await callTool(
+      "knowledge_create_relation",
+      { from_id: midId, to_id: aId, relation_type: "CONNECTS_TO" },
+      sub,
+      sid,
+    );
+    await callTool(
+      "knowledge_create_relation",
+      { from_id: midId, to_id: bId, relation_type: "CONNECTS_TO" },
+      sub,
+      sid,
+    );
+
+    // direction:"both" should find A→Mid→B path
+    const { body: bothBody } = await callTool(
+      "knowledge_find_paths",
+      { from_id: aId, to_id: bId, direction: "both" },
+      sub,
+      sid,
+    );
+    const bothData = parseToolSuccess(bothBody);
+    const bothPaths = bothData.paths as unknown[];
+    expect(bothPaths.length).toBeGreaterThanOrEqual(1);
+
+    // direction:"outbound" from A→B should return empty paths + hint
+    const { body: outBody } = await callTool(
+      "knowledge_find_paths",
+      { from_id: aId, to_id: bId, direction: "outbound" },
+      sub,
+      sid,
+    );
+    const outData = parseToolSuccess(outBody);
+    expect(outData.paths as unknown[]).toHaveLength(0);
+    expect(typeof outData.hint).toBe("string");
+    expect(outData.hint as string).toContain("outbound");
+  });
+});
+
+// ── knowledge_explain_relationship ────────────────────────────────────────────
+
+describe("knowledge_explain_relationship", () => {
+  it("returns INVALID_PARAMS when entry_a_id equals entry_b_id", async () => {
+    const sub = uniqueUser("explain-self");
+    const sid = await openSession(sub, "explain-self-ns");
+    const entryId = await createEntry(sub, sid, { title: "Self" });
+
+    const { body } = await callTool(
+      "knowledge_explain_relationship",
+      { entry_a_id: entryId, entry_b_id: entryId },
+      sub,
+      sid,
+    );
+    expect(parseToolError(body).code).toBe(ErrorCode.INVALID_PARAMS);
+  });
+
+  it("returns INVALID_PARAMS when max_depth exceeds cap", async () => {
+    const sub = uniqueUser("explain-cap");
+    const sid = await openSession(sub, "explain-cap-ns");
+    const aId = await createEntry(sub, sid, { title: "A" });
+    const bId = await createEntry(sub, sid, { title: "B" });
+
+    const { body } = await callTool(
+      "knowledge_explain_relationship",
+      { entry_a_id: aId, entry_b_id: bId, max_depth: 7 }, // cap is 6
+      sub,
+      sid,
+    );
+    expect(parseToolError(body).code).toBe(ErrorCode.INVALID_PARAMS);
+  });
+
+  it("returns direct_relations populated for a directly connected pair", async () => {
+    const sub = uniqueUser("explain-direct");
+    const sid = await openSession(sub, "explain-direct-ns");
+    const aId = await createEntry(sub, sid, { title: "NAS" });
+    const bId = await createEntry(sub, sid, { title: "Router" });
+
+    await callTool(
+      "knowledge_create_relation",
+      { from_id: aId, to_id: bId, relation_type: "CONNECTS_TO" },
+      sub,
+      sid,
+    );
+
+    const { status, body } = await callTool(
+      "knowledge_explain_relationship",
+      { entry_a_id: aId, entry_b_id: bId },
+      sub,
+      sid,
+    );
+    expect(status).toBe(200);
+    const data = parseToolSuccess(body);
+    expect(data.connected).toBe(true);
+    const directRels = data.direct_relations as Array<{
+      relation_type: string;
+      direction: "a_to_b" | "b_to_a";
+    }>;
+    expect(directRels.length).toBeGreaterThanOrEqual(1);
+    expect(directRels[0]?.relation_type).toBe("CONNECTS_TO");
+    expect(directRels[0]?.direction).toBe("a_to_b");
+  });
+
+  it("returns connected:true with formatted path for indirect 2-hop connection", async () => {
+    const sub = uniqueUser("explain-indirect");
+    const sid = await openSession(sub, "explain-indirect-ns");
+    const nasId = await createEntry(sub, sid, { title: "NAS" });
+    const midId = await createEntry(sub, sid, { title: "Management VM" });
+    const pikvmId = await createEntry(sub, sid, { title: "PiKVM" });
+
+    // Mid → NAS and Mid → PiKVM (NAS ←[MANAGED_BY]— Mid —[CONNECTS_TO]→ PiKVM)
+    await callTool(
+      "knowledge_create_relation",
+      { from_id: midId, to_id: nasId, relation_type: "MANAGED_BY" },
+      sub,
+      sid,
+    );
+    await callTool(
+      "knowledge_create_relation",
+      { from_id: midId, to_id: pikvmId, relation_type: "CONNECTS_TO" },
+      sub,
+      sid,
+    );
+
+    const { status, body } = await callTool(
+      "knowledge_explain_relationship",
+      { entry_a_id: nasId, entry_b_id: pikvmId },
+      sub,
+      sid,
+    );
+    expect(status).toBe(200);
+    const data = parseToolSuccess(body);
+    expect(data.connected).toBe(true);
+    const paths = data.paths as Array<{ formatted: string; nodes: unknown[] }>;
+    expect(paths.length).toBeGreaterThanOrEqual(1);
+    // formatted should contain all three node titles
+    const formatted = paths[0]?.formatted ?? "";
+    expect(formatted).toContain("NAS");
+    expect(formatted).toContain("Management VM");
+    expect(formatted).toContain("PiKVM");
+  });
+
+  it("returns connected:false with empty paths for unconnected entries", async () => {
+    const sub = uniqueUser("explain-noconn");
+    const sid = await openSession(sub, "explain-noconn-ns");
+    const aId = await createEntry(sub, sid, { title: "Island A" });
+    const bId = await createEntry(sub, sid, { title: "Island B" });
+
+    const { status, body } = await callTool(
+      "knowledge_explain_relationship",
+      { entry_a_id: aId, entry_b_id: bId },
+      sub,
+      sid,
+    );
+    expect(status).toBe(200);
+    const data = parseToolSuccess(body);
+    expect(data.connected).toBe(false);
+    expect(data.direct_relations as unknown[]).toHaveLength(0);
+    expect(data.paths as unknown[]).toHaveLength(0);
+  });
 });
 
 // ── knowledge_impact_analysis ─────────────────────────────────────────────────

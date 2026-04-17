@@ -507,6 +507,7 @@ const findPathsSchema = z.object({
   max_depth: z.number().int().positive().max(MAX_DEPTH_CAP).optional(),
   max_paths: z.number().int().positive().max(MAX_PATHS_CAP).optional(),
   relation_types: z.array(relationTypesItemSchema).optional(),
+  direction: z.enum(["outbound", "inbound", "both"]).optional(),
 });
 
 async function handleFindPaths(
@@ -527,9 +528,11 @@ async function handleFindPaths(
     max_depth: rawDepth,
     max_paths: rawPaths,
     relation_types,
+    direction,
   } = parsed.data;
   const maxDepth = rawDepth ?? DEFAULT_MAX_DEPTH;
   const maxPaths = rawPaths ?? DEFAULT_MAX_PATHS;
+  const dir = direction ?? "both";
 
   try {
     const paths = await neo4jClient.findPaths({
@@ -539,8 +542,59 @@ async function handleFindPaths(
       maxDepth,
       maxPaths,
       relationTypes: relation_types ?? null,
+      direction: dir,
     });
-    return { paths };
+
+    // Hint: when no path found and direction was explicit, suggest alternatives
+    const hint =
+      paths.length === 0 && direction !== undefined && direction !== "both"
+        ? `No path found in direction '${dir}'. Try direction:'both' to search in all directions, or swap from_id and to_id.`
+        : undefined;
+
+    return { paths, ...(hint !== undefined && { hint }) };
+  } catch (error) {
+    throwMappedClientError(error);
+  }
+}
+
+// ── knowledge_explain_relationship ────────────────────────────────────────────
+
+const explainRelationshipSchema = z.object({
+  entry_a_id: z.string().min(1),
+  entry_b_id: z.string().min(1),
+  max_depth: z.number().int().positive().max(MAX_DEPTH_CAP).optional(),
+});
+
+async function handleExplainRelationship(
+  args: Record<string, unknown>,
+  ctx: ToolContext,
+  neo4jClient: Neo4jClient,
+): Promise<unknown> {
+  const parsed = explainRelationshipSchema.safeParse(args);
+  if (!parsed.success) {
+    throw new ToolError(
+      ErrorCode.INVALID_PARAMS,
+      `Invalid params: ${parsed.error.message}`,
+    );
+  }
+  const { entry_a_id, entry_b_id, max_depth: rawDepth } = parsed.data;
+
+  if (entry_a_id === entry_b_id) {
+    throw new ToolError(
+      ErrorCode.INVALID_PARAMS,
+      "entry_a_id and entry_b_id must be different",
+    );
+  }
+
+  const maxDepth = rawDepth ?? DEFAULT_MAX_DEPTH;
+
+  try {
+    return await neo4jClient.explainRelationship({
+      userId: ctx.userId,
+      entryAId: entry_a_id,
+      entryBId: entry_b_id,
+      maxDepth,
+    });
   } catch (error) {
     throwMappedClientError(error);
   }
@@ -928,7 +982,7 @@ export function createResourceTools(
       descriptor: {
         name: "knowledge_find_paths",
         description:
-          "Find directed paths between two entries via entry relations. Only returns paths where every intermediate node is accessible to the caller. Both entries must be in the same namespace.",
+          "Find paths between two entries via entry relations. Searches in both directions by default (undirected). Use direction to restrict to outbound-only or inbound-only traversal. Only returns paths where every intermediate node is accessible to the caller. Both entries must be in the same namespace.",
         inputSchema: {
           type: "object",
           properties: {
@@ -939,6 +993,12 @@ export function createResourceTools(
             to_id: {
               type: "string",
               description: "UUID of the destination entry",
+            },
+            direction: {
+              type: "string",
+              enum: ["outbound", "inbound", "both"],
+              description:
+                "Traversal direction: 'both' (default, undirected), 'outbound' (following relation arrows), or 'inbound' (against relation arrows)",
             },
             max_depth: {
               type: "number",
@@ -959,6 +1019,33 @@ export function createResourceTools(
         },
       },
       handler: (args, ctx) => handleFindPaths(args, ctx, neo4jClient),
+    },
+    {
+      descriptor: {
+        name: "knowledge_explain_relationship",
+        description:
+          "Explain how two entries are connected. Finds direct relations and all indirect paths between them (undirected, up to max_depth hops). Returns a structured result including human-readable path strings like 'NAS <-[MANAGED_BY]- Management VM -[CONNECTS_TO]-> PiKVM'. Use this as the primary tool when the user asks how two things are related.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            entry_a_id: {
+              type: "string",
+              description: "UUID of the first entry",
+            },
+            entry_b_id: {
+              type: "string",
+              description: "UUID of the second entry",
+            },
+            max_depth: {
+              type: "number",
+              description: `Maximum path depth (default ${DEFAULT_MAX_DEPTH}, max ${MAX_DEPTH_CAP})`,
+            },
+          },
+          required: ["entry_a_id", "entry_b_id"],
+        },
+      },
+      handler: (args, ctx) =>
+        handleExplainRelationship(args, ctx, neo4jClient),
     },
     {
       descriptor: {
