@@ -8,6 +8,36 @@ interface JwksDocument {
   keys: Array<JWK & { kid: string }>;
 }
 
+function readStringClaim(
+  payload: Record<string, unknown>,
+  key: string,
+): string | null {
+  const value = payload[key];
+  return typeof value === "string" ? value : null;
+}
+
+function resolveNameClaim(payload: Record<string, unknown>): string | null {
+  const directName = readStringClaim(payload, "name");
+  if (directName) return directName;
+
+  const givenName = readStringClaim(payload, "given_name");
+  const familyName = readStringClaim(payload, "family_name");
+  if (givenName && familyName) return `${givenName} ${familyName}`;
+  if (givenName) return givenName;
+  if (familyName) return familyName;
+
+  const preferredUsername = readStringClaim(payload, "preferred_username");
+  if (preferredUsername) return preferredUsername;
+
+  return null;
+}
+
+function resolveEmailClaim(payload: Record<string, unknown>): string | null {
+  const email = readStringClaim(payload, "email");
+  if (email) return email;
+  return null;
+}
+
 // ── AuthError ─────────────────────────────────────────────────────────────────
 
 export class AuthError extends Error {
@@ -124,8 +154,9 @@ export async function validateBearerToken(
     });
 
     if (!payload.sub) throw new AuthError("JWT is missing the sub claim");
-    const name = typeof payload.name === "string" ? payload.name : null;
-    const email = typeof payload.email === "string" ? payload.email : null;
+    const payloadRecord = payload as Record<string, unknown>;
+    const name = resolveNameClaim(payloadRecord);
+    const email = resolveEmailClaim(payloadRecord);
     return { userId: payload.sub, name, email };
   } catch (err) {
     if (err instanceof AuthError) throw err;

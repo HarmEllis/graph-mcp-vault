@@ -89,12 +89,22 @@ async function makeToken(
     name?: string;
     /** Optional OIDC email claim */
     email?: string;
+    /** Optional OIDC preferred_username claim */
+    preferred_username?: string;
+    /** Optional OIDC given_name claim */
+    given_name?: string;
+    /** Optional OIDC family_name claim */
+    family_name?: string;
   } = {},
 ): Promise<string> {
   const nowSec = Math.floor(Date.now() / 1000);
   const extra: Record<string, unknown> = {};
   if (opts.name !== undefined) extra.name = opts.name;
   if (opts.email !== undefined) extra.email = opts.email;
+  if (opts.preferred_username !== undefined)
+    extra.preferred_username = opts.preferred_username;
+  if (opts.given_name !== undefined) extra.given_name = opts.given_name;
+  if (opts.family_name !== undefined) extra.family_name = opts.family_name;
   let builder = new SignJWT({ sub: opts.sub ?? "user-123", ...extra })
     .setProtectedHeader({ alg: "RS256", kid: opts.kid ?? KID_1 })
     .setIssuer(opts.iss ?? ISSUER)
@@ -381,5 +391,38 @@ describe("validateBearerToken", () => {
     );
 
     expect(result.name).toBeNull();
+  });
+
+  it("falls back to preferred_username when name is absent", async () => {
+    const jwks = await buildJwks([{ key: publicKey1, kid: KID_1 }]);
+    stubFetch(jwks);
+    const client = freshClient();
+
+    const token = await makeToken({ preferred_username: "alice-dev" });
+    const result = await validateBearerToken(
+      `Bearer ${token}`,
+      testConfig,
+      client,
+    );
+
+    expect(result.name).toBe("alice-dev");
+  });
+
+  it("falls back to given_name + family_name when name is absent", async () => {
+    const jwks = await buildJwks([{ key: publicKey1, kid: KID_1 }]);
+    stubFetch(jwks);
+    const client = freshClient();
+
+    const token = await makeToken({
+      given_name: "Alice",
+      family_name: "Dev",
+    });
+    const result = await validateBearerToken(
+      `Bearer ${token}`,
+      testConfig,
+      client,
+    );
+
+    expect(result.name).toBe("Alice Dev");
   });
 });

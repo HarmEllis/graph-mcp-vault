@@ -39,6 +39,9 @@ services:
       OIDC_AUDIENCE: ${OIDC_AUDIENCE:-graph-mcp-vault}
       # Internal URL — used by the server to fetch JWKS/discovery within the Docker network
       OIDC_DISCOVERY_URL: ${OIDC_DISCOVERY_URL:-http://keycloak:8080/realms/graph-mcp-vault/.well-known/openid-configuration}
+      # Dev-friendly defaults to ensure profile claims are requested by MCP clients.
+      SCOPES_ALLOWLIST: ${SCOPES_ALLOWLIST:-openid,profile,email}
+      INJECT_MISSING_SCOPE: ${INJECT_MISSING_SCOPE:-true}
     ports:
       - "8000:8000"
     depends_on:

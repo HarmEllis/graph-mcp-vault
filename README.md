@@ -42,6 +42,7 @@ curl http://localhost:8000/.well-known/oauth-authorization-server
 TOKEN="$(curl -sS -X POST http://localhost:8081/realms/graph-mcp-vault/protocol/openid-connect/token \
   -H 'content-type: application/x-www-form-urlencoded' \
   -d 'grant_type=password' \
+  -d 'scope=openid profile email' \
   -d 'client_id=graph-mcp-vault' \
   -d 'client_secret=dev-secret' \
   -d 'username=dev-user' \
@@ -78,6 +79,8 @@ Copy `.env.example` to `.env` before running.
 | `DEFAULT_NAMESPACE` | no | `default` | Namespace used when none is specified at session open |
 | `LOG_LEVEL` | no | `info` | Log verbosity (`debug`, `info`, `warn`, `error`) |
 | `ALLOWED_ORIGINS` | no | `""` | Comma-separated CORS origins; `*` for any; empty = no cross-origin requests |
+| `SCOPES_ALLOWLIST` | no | provider scopes (fallback `openid`) | Comma-separated scopes exposed in OAuth metadata and DCR proxy (recommended: `openid,profile,email`) |
+| `INJECT_MISSING_SCOPE` | no | `false` | When `true`, enables `/authorize` proxy to inject missing scope parameter |
 
 When running with `docker compose`, if `OIDC_ISSUER` and `OIDC_AUDIENCE` are unset,
 the stack defaults to the bundled Keycloak development realm:
