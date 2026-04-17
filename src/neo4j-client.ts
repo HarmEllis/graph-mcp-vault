@@ -38,6 +38,21 @@ export interface NamespaceSummary {
   shared_count: number;
 }
 
+export interface UserProfile {
+  user_id: string;
+  name?: string;
+  email?: string;
+}
+
+export type AutoSharePermission = "read" | "write";
+
+export interface NamespaceConfig {
+  namespace: string;
+  auto_share: boolean;
+  auto_share_permission: AutoSharePermission;
+  auto_share_user_ids: string[];
+}
+
 export type MatchMode = "exact" | "fulltext" | "fuzzy";
 export type EntryRelationDirection = "outbound" | "inbound" | "both";
 
@@ -248,6 +263,190 @@ export class Neo4jClient {
         `,
         { userId, name, email },
       );
+    } finally {
+      await session.close();
+    }
+  }
+
+  async getUser(userId: string): Promise<UserProfile | null> {
+    const session = this.driver.session();
+    try {
+      const result = await session.run(
+        `
+        MATCH (u:User {id: $userId})
+        RETURN u.id AS user_id, u.name AS name, u.email AS email
+        `,
+        { userId },
+      );
+      if (result.records.length === 0) return null;
+      const record = result.records[0];
+      if (!record) return null;
+      return {
+        user_id: record.get("user_id") as string,
+        ...(record.get("name") !== null
+          ? { name: record.get("name") as string }
+          : {}),
+        ...(record.get("email") !== null
+          ? { email: record.get("email") as string }
+          : {}),
+      };
+    } finally {
+      await session.close();
+    }
+  }
+
+  async searchUsers(params: {
+    requesterUserId: string;
+    name?: string;
+    email?: string;
+    limit: number;
+  }): Promise<UserProfile[]> {
+    const session = this.driver.session();
+    try {
+      if (params.name === undefined && params.email === undefined) {
+        const relatedResult = await session.run(
+          `
+          MATCH (me:User {id: $requesterUserId})-[:OWNS|HAS_ACCESS]->(r:Resource)<-[:OWNS|HAS_ACCESS]-(u:User)
+          WHERE u.id <> $requesterUserId
+          RETURN DISTINCT u.id AS user_id, u.name AS name, u.email AS email
+          ORDER BY coalesce(u.name, u.email, u.id)
+          LIMIT $limit
+          `,
+          {
+            requesterUserId: params.requesterUserId,
+            limit: neo4j.int(params.limit),
+          },
+        );
+        return relatedResult.records.map((record) => ({
+          user_id: record.get("user_id") as string,
+          ...(record.get("name") !== null
+            ? { name: record.get("name") as string }
+            : {}),
+          ...(record.get("email") !== null
+            ? { email: record.get("email") as string }
+            : {}),
+        }));
+      }
+
+      const result = await session.run(
+        `
+        MATCH (u:User)
+        WHERE u.id <> $requesterUserId
+          AND ($name IS NULL OR toLower(coalesce(u.name, '')) = toLower($name))
+          AND ($email IS NULL OR toLower(coalesce(u.email, '')) = toLower($email))
+        RETURN u.id AS user_id, u.name AS name, u.email AS email
+        ORDER BY coalesce(u.name, u.email, u.id)
+        LIMIT $limit
+        `,
+        {
+          requesterUserId: params.requesterUserId,
+          name: params.name ?? null,
+          email: params.email ?? null,
+          limit: neo4j.int(params.limit),
+        },
+      );
+      return result.records.map((record) => ({
+        user_id: record.get("user_id") as string,
+        ...(record.get("name") !== null
+          ? { name: record.get("name") as string }
+          : {}),
+        ...(record.get("email") !== null
+          ? { email: record.get("email") as string }
+          : {}),
+      }));
+    } finally {
+      await session.close();
+    }
+  }
+
+  async getNamespaceConfig(
+    ownerId: string,
+    namespace: string,
+  ): Promise<NamespaceConfig> {
+    const session = this.driver.session();
+    try {
+      const result = await session.run(
+        `
+        MATCH (cfg:NamespaceConfig {owner_id: $ownerId, namespace: $namespace})
+        RETURN cfg.auto_share AS auto_share,
+               cfg.auto_share_permission AS auto_share_permission,
+               cfg.auto_share_user_ids AS auto_share_user_ids
+        `,
+        { ownerId, namespace },
+      );
+      if (result.records.length === 0) {
+        return {
+          namespace,
+          auto_share: false,
+          auto_share_permission: "read",
+          auto_share_user_ids: [],
+        };
+      }
+      const record = result.records[0];
+      if (!record) {
+        return {
+          namespace,
+          auto_share: false,
+          auto_share_permission: "read",
+          auto_share_user_ids: [],
+        };
+      }
+      const permission =
+        (record.get("auto_share_permission") as AutoSharePermission | null) ??
+        "read";
+      const userIds = record.get("auto_share_user_ids") as string[] | null;
+      return {
+        namespace,
+        auto_share: (record.get("auto_share") as boolean | null) ?? false,
+        auto_share_permission:
+          permission === "write" || permission === "read" ? permission : "read",
+        auto_share_user_ids: Array.isArray(userIds) ? userIds : [],
+      };
+    } finally {
+      await session.close();
+    }
+  }
+
+  async updateNamespaceConfig(params: {
+    ownerId: string;
+    namespace: string;
+    auto_share?: boolean;
+    auto_share_permission?: AutoSharePermission;
+    auto_share_user_ids?: string[];
+  }): Promise<NamespaceConfig> {
+    const existing = await this.getNamespaceConfig(
+      params.ownerId,
+      params.namespace,
+    );
+    const next: NamespaceConfig = {
+      namespace: params.namespace,
+      auto_share: params.auto_share ?? existing.auto_share,
+      auto_share_permission:
+        params.auto_share_permission ?? existing.auto_share_permission,
+      auto_share_user_ids:
+        params.auto_share_user_ids ?? existing.auto_share_user_ids,
+    };
+
+    const session = this.driver.session();
+    try {
+      await session.run(
+        `
+        MERGE (cfg:NamespaceConfig {owner_id: $ownerId, namespace: $namespace})
+        SET cfg.auto_share = $autoShare,
+            cfg.auto_share_permission = $autoSharePermission,
+            cfg.auto_share_user_ids = $autoShareUserIds,
+            cfg.updated_at = $now
+        `,
+        {
+          ownerId: params.ownerId,
+          namespace: params.namespace,
+          autoShare: next.auto_share,
+          autoSharePermission: next.auto_share_permission,
+          autoShareUserIds: next.auto_share_user_ids,
+          now: new Date().toISOString(),
+        },
+      );
+      return next;
     } finally {
       await session.close();
     }

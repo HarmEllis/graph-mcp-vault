@@ -2,7 +2,7 @@ import neo4j, { type Driver } from "neo4j-driver";
 
 // ── Current schema version ────────────────────────────────────────────────────
 
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 
 // ── Base schema statements (idempotent, version-independent) ──────────────────
 
@@ -99,6 +99,23 @@ async function migrate_v3(driver: Driver): Promise<void> {
   }
 }
 
+// ── Migration v4 ──────────────────────────────────────────────────────────────
+//
+// Changes introduced in v4:
+//   1. Create unique constraint for NamespaceConfig(owner_id, namespace)
+//   2. Rely on the backing unique index created by the constraint.
+
+async function migrate_v4(driver: Driver): Promise<void> {
+  const session = driver.session();
+  try {
+    await session.run(
+      "CREATE CONSTRAINT namespace_config_unique IF NOT EXISTS FOR (n:NamespaceConfig) REQUIRE (n.owner_id, n.namespace) IS UNIQUE",
+    );
+  } finally {
+    await session.close();
+  }
+}
+
 // ── initSchema ────────────────────────────────────────────────────────────────
 
 /**
@@ -134,5 +151,15 @@ export async function initSchema(driver: Driver): Promise<void> {
   if (version < 3) {
     await migrate_v3(driver);
     await setSchemaVersion(driver, 3);
+    version = 3;
   }
+
+  if (version < 4) {
+    await migrate_v4(driver);
+    await setSchemaVersion(driver, 4);
+    version = 4;
+  }
+
+  // Keep this assignment to make intent explicit and prevent accidental drift.
+  void SCHEMA_VERSION;
 }

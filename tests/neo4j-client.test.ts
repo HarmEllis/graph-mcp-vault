@@ -50,7 +50,7 @@ describe("initSchema", () => {
     await expect(initSchema(driver)).resolves.toBeUndefined();
   });
 
-  it("sets schema_version to 3 after migration", async () => {
+  it("sets schema_version to 4 after migration", async () => {
     const session = driver.session();
     try {
       const result = await session.run(
@@ -58,7 +58,7 @@ describe("initSchema", () => {
       );
       expect(result.records.length).toBe(1);
       const version = neo4j.integer.toNumber(result.records[0]?.get("version"));
-      expect(version).toBe(3);
+      expect(version).toBe(4);
     } finally {
       await session.close();
     }
@@ -89,6 +89,18 @@ describe("initSchema", () => {
       expect(result.records.length).toBe(1);
       expect(result.records[0]?.get("type")).toBe("RANGE");
       expect(result.records[0]?.get("entityType")).toBe("RELATIONSHIP");
+    } finally {
+      await session.close();
+    }
+  });
+
+  it("creates namespace config unique constraint", async () => {
+    const session = driver.session();
+    try {
+      const result = await session.run(
+        "SHOW CONSTRAINTS YIELD name WHERE name = 'namespace_config_unique'",
+      );
+      expect(result.records.length).toBe(1);
     } finally {
       await session.close();
     }

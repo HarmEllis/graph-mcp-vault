@@ -123,7 +123,10 @@ async function makeToken(sub: string): Promise<string> {
     .sign(privateKey);
 }
 
-async function openSession(sub: string): Promise<string> {
+async function openSession(
+  sub: string,
+  namespace = "default",
+): Promise<string> {
   const token = await makeToken(sub);
   const res = await app.request("/mcp", {
     method: "POST",
@@ -139,6 +142,7 @@ async function openSession(sub: string): Promise<string> {
         protocolVersion: "2025-03-26",
         capabilities: {},
         clientInfo: { name: "test", version: "1.0" },
+        meta: { namespace },
       },
     }),
   });
@@ -223,6 +227,7 @@ describe("knowledge_share_entry", () => {
     const owner = uid("share-owner");
     const target = uid("share-target");
     const ownerSid = await openSession(owner);
+    await openSession(target);
     const id = await createEntry(owner, ownerSid);
 
     const { status, body } = await callTool(
@@ -292,22 +297,20 @@ describe("knowledge_share_entry", () => {
     expect(parseToolSuccess(body).role).toBe("editor");
   });
 
-  it("share to a user who has never been created — stubs User node", async () => {
+  it("share to a user who has never been created returns RESOURCE_NOT_FOUND", async () => {
     const owner = uid("share-stub-owner");
     const brand_new = `never-seen-user-${Date.now()}`;
     const ownerSid = await openSession(owner);
     const id = await createEntry(owner, ownerSid);
 
-    const { status } = await callTool(
+    const { status, body } = await callTool(
       "knowledge_share_entry",
       { entry_id: id, target_user_id: brand_new, role: "viewer" },
       owner,
       ownerSid,
     );
     expect(status).toBe(200);
-
-    const role = await neo4jClient.getEffectiveRole(brand_new, id);
-    expect(role).toBe("viewer");
+    expect(parseToolError(body).code).toBe(ErrorCode.RESOURCE_NOT_FOUND);
   });
 
   it("editor cannot share — returns PERMISSION_DENIED", async () => {
@@ -481,6 +484,8 @@ describe("knowledge_list_access", () => {
     const viewer = uid("list-entries-viewer");
     const editor = uid("list-entries-editor");
     const ownerSid = await openSession(owner);
+    await openSession(viewer);
+    await openSession(editor);
     const id = await createEntry(owner, ownerSid);
 
     await callTool(
@@ -624,6 +629,36 @@ describe("full sharing workflow", () => {
       viewerSid,
     );
     expect(parseToolError(gb2).code).toBe(ErrorCode.PERMISSION_DENIED);
+  });
+
+  it("shared namespace is discoverable even when receiver session namespace differs", async () => {
+    const owner = uid("workflow-discovery-owner");
+    const receiver = uid("workflow-discovery-receiver");
+
+    const ownerSid = await openSession(owner, "shared-project");
+    const receiverSid = await openSession(receiver, "personal-home");
+    const id = await createEntry(owner, ownerSid, "Shared Project Entry");
+
+    await callTool(
+      "knowledge_share_entry",
+      { entry_id: id, target_user_id: receiver, role: "viewer" },
+      owner,
+      ownerSid,
+    );
+
+    const { body: nsBody } = await callTool(
+      "knowledge_list_namespaces",
+      {},
+      receiver,
+      receiverSid,
+    );
+    const namespaces = parseToolSuccess(nsBody).namespaces as Array<
+      Record<string, unknown>
+    >;
+    const sharedNs = namespaces.find((n) => n.namespace === "shared-project");
+
+    expect(sharedNs).toBeDefined();
+    expect(sharedNs?.shared_count).toBe(1);
   });
 });
 

@@ -23,7 +23,9 @@ import { Neo4jClient } from "../src/neo4j-client.js";
 import { createMcpRouter } from "../src/routers/mcp.js";
 import { initSchema } from "../src/schema.js";
 import { SessionStore } from "../src/session.js";
+import { createNamespaceConfigTools } from "../src/tools/namespace-config.js";
 import { createResourceTools } from "../src/tools/resources.js";
+import { createUserTools } from "../src/tools/users.js";
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -92,7 +94,11 @@ beforeAll(async () => {
   // Build app
   const sessionStore = new SessionStore();
   const jwksClient = new JwksClient(JWKS_URI, BASE_CONFIG.jwksCacheTtl * 1000);
-  const tools = createResourceTools(neo4jClient);
+  const tools = [
+    ...createResourceTools(neo4jClient),
+    ...createUserTools(neo4jClient),
+    ...createNamespaceConfigTools(neo4jClient),
+  ];
   app = new Hono();
   app.route(
     "/",
@@ -1767,6 +1773,195 @@ describe("knowledge_list_namespaces", () => {
       unknown
     >;
     expect(Array.isArray(parsed.namespaces)).toBe(true);
+  });
+});
+
+// ── identity and user lookup tools ────────────────────────────────────────────
+
+describe("knowledge_get_current_user", () => {
+  it("returns the authenticated user's profile", async () => {
+    const sub = uniqueUser("current-user");
+    await neo4jClient.upsertUserProfile(
+      sub,
+      "Current User",
+      "current@test.dev",
+    );
+    const sid = await openSession(sub);
+
+    const { status, body } = await callTool(
+      "knowledge_get_current_user",
+      {},
+      sub,
+      sid,
+    );
+
+    expect(status).toBe(200);
+    const data = parseToolSuccess(body);
+    expect(data.user_id).toBe(sub);
+    expect(data.name).toBe("Current User");
+    expect(data.email).toBe("current@test.dev");
+  });
+});
+
+describe("knowledge_search_users", () => {
+  it("without filters returns only users connected by sharing relationships", async () => {
+    const caller = uniqueUser("search-users-caller");
+    const owner = uniqueUser("search-users-owner");
+    const unrelated = uniqueUser("search-users-unrelated");
+    const ownerSid = await openSession(owner);
+    const callerSid = await openSession(caller);
+    await openSession(unrelated);
+
+    await neo4jClient.upsertUserProfile(
+      owner,
+      "Owner User",
+      "owner@privacy.dev",
+    );
+    await neo4jClient.upsertUserProfile(
+      caller,
+      "Caller User",
+      "caller@privacy.dev",
+    );
+    await neo4jClient.upsertUserProfile(
+      unrelated,
+      "Unrelated User",
+      "unrelated@privacy.dev",
+    );
+
+    const entryId = await createEntry(owner, ownerSid);
+    await neo4jClient.shareResource(entryId, caller, "viewer");
+
+    const { status, body } = await callTool(
+      "knowledge_search_users",
+      {},
+      caller,
+      callerSid,
+    );
+
+    expect(status).toBe(200);
+    const users = parseToolSuccess(body).users as Array<
+      Record<string, unknown>
+    >;
+    expect(users.some((u) => u.user_id === owner)).toBe(true);
+    expect(users.some((u) => u.user_id === unrelated)).toBe(false);
+  });
+
+  it("exact email lookup can find a user outside the sharing graph", async () => {
+    const caller = uniqueUser("search-users-exact-caller");
+    const outsider = uniqueUser("search-users-exact-outsider");
+    const sid = await openSession(caller);
+    await openSession(outsider);
+    await neo4jClient.upsertUserProfile(
+      outsider,
+      "Exact Match User",
+      "exact.user@privacy.dev",
+    );
+
+    const { status, body } = await callTool(
+      "knowledge_search_users",
+      { email: "EXACT.USER@PRIVACY.DEV" },
+      caller,
+      sid,
+    );
+
+    expect(status).toBe(200);
+    const users = parseToolSuccess(body).users as Array<
+      Record<string, unknown>
+    >;
+    expect(users.some((u) => u.user_id === outsider)).toBe(true);
+  });
+
+  it("partial lookup no longer reveals users globally", async () => {
+    const caller = uniqueUser("search-users-partial-caller");
+    const outsider = uniqueUser("search-users-partial-outsider");
+    const sid = await openSession(caller);
+    await openSession(outsider);
+    await neo4jClient.upsertUserProfile(
+      outsider,
+      "Partial Hidden",
+      "partial.hidden@privacy.dev",
+    );
+
+    const { status, body } = await callTool(
+      "knowledge_search_users",
+      { email: "partial" },
+      caller,
+      sid,
+    );
+
+    expect(status).toBe(200);
+    const users = parseToolSuccess(body).users as Array<
+      Record<string, unknown>
+    >;
+    expect(users.some((u) => u.user_id === outsider)).toBe(false);
+  });
+});
+
+// ── namespace auto-share config tools ─────────────────────────────────────────
+
+describe("namespace auto-share config", () => {
+  it("returns default config when none exists", async () => {
+    const sub = uniqueUser("ns-config-default");
+    const sid = await openSession(sub, "auto-share-ns");
+
+    const { status, body } = await callTool(
+      "knowledge_get_namespace_config",
+      {},
+      sub,
+      sid,
+    );
+
+    expect(status).toBe(200);
+    const data = parseToolSuccess(body);
+    expect(data.namespace).toBe("auto-share-ns");
+    expect(data.auto_share).toBe(false);
+    expect(data.auto_share_permission).toBe("read");
+    expect(data.auto_share_user_ids).toEqual([]);
+  });
+
+  it("create entry auto-shares to configured users and reports metadata", async () => {
+    const owner = uniqueUser("auto-share-owner");
+    const target = uniqueUser("auto-share-target");
+
+    await neo4jClient.upsertUserProfile(owner, "Owner", "owner@auto.dev");
+    await neo4jClient.upsertUserProfile(target, "Target", "target@auto.dev");
+
+    const ownerSid = await openSession(owner, "auto-share-enabled-ns");
+    const targetSid = await openSession(target, "auto-share-enabled-ns");
+
+    const { status: updateStatus } = await callTool(
+      "knowledge_update_namespace_config",
+      {
+        auto_share: true,
+        auto_share_permission: "read",
+        auto_share_user_ids: [target],
+      },
+      owner,
+      ownerSid,
+    );
+    expect(updateStatus).toBe(200);
+
+    const { status, body } = await callTool(
+      "knowledge_create_entry",
+      { entry_type: "note", title: "Auto Shared", content: "payload" },
+      owner,
+      ownerSid,
+    );
+    expect(status).toBe(200);
+
+    const created = parseToolSuccess(body);
+    const autoShare = created.auto_share as Record<string, unknown> | undefined;
+    expect(autoShare?.enabled).toBe(true);
+    expect(autoShare?.shared_with_count).toBe(1);
+    expect(autoShare?.shared_with).toEqual([target]);
+
+    const { body: getBody } = await callTool(
+      "knowledge_get_entry",
+      { entry_id: created.id as string },
+      target,
+      targetSid,
+    );
+    expect(parseToolSuccess(getBody).role).toBe("viewer");
   });
 });
 

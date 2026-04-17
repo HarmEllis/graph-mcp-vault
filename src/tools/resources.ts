@@ -122,9 +122,11 @@ async function handleCreate(
     source,
     last_verified_at,
   } = parsed.data;
-  return neo4jClient.createResource({
+  const effectiveNamespace = namespace ?? ctx.namespace;
+
+  const created = await neo4jClient.createResource({
     userId: ctx.userId,
-    namespace: namespace ?? ctx.namespace,
+    namespace: effectiveNamespace,
     entry_type,
     title,
     content,
@@ -134,6 +136,35 @@ async function handleCreate(
     ...(source !== undefined && { source }),
     ...(last_verified_at !== undefined && { last_verified_at }),
   });
+
+  const cfg = await neo4jClient.getNamespaceConfig(
+    ctx.userId,
+    effectiveNamespace,
+  );
+  if (!cfg.auto_share) return created;
+
+  const granted_role =
+    cfg.auto_share_permission === "write" ? "editor" : "viewer";
+  const shared_with: string[] = [];
+
+  for (const targetUserId of cfg.auto_share_user_ids) {
+    if (targetUserId === ctx.userId) continue;
+    const target = await neo4jClient.getUser(targetUserId);
+    if (!target) continue;
+    await neo4jClient.shareResource(created.id, targetUserId, granted_role);
+    shared_with.push(targetUserId);
+  }
+
+  return {
+    ...created,
+    auto_share: {
+      enabled: true,
+      permission: cfg.auto_share_permission,
+      granted_role,
+      shared_with_count: shared_with.length,
+      shared_with,
+    },
+  };
 }
 
 // ── knowledge_get_entry ───────────────────────────────────────────────────────

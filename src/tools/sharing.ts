@@ -74,6 +74,10 @@ async function handleShare(
   const { entry_id, target_user_id, role } = parsed.data;
 
   await requireOwner(neo4jClient, ctx.userId, entry_id);
+  const target = await neo4jClient.getUser(target_user_id);
+  if (!target) {
+    throw new ToolError(ErrorCode.RESOURCE_NOT_FOUND, "Target user not found");
+  }
   await neo4jClient.shareResource(entry_id, target_user_id, role);
   return {};
 }
