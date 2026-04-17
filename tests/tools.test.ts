@@ -2141,15 +2141,27 @@ describe("knowledge_find_paths", () => {
     expect(status).toBe(200);
     const data = parseToolSuccess(body);
     const paths = data.paths as Array<{
-      nodes: Array<{ id: string; title: string }>;
-      relations: Array<{ relation_type: string; label?: string }>;
+      nodes: Array<{ id: string; title: string; entry_type: string }>;
+      relations: Array<{
+        relation_type: string;
+        label?: string;
+        from_id: string;
+        to_id: string;
+      }>;
+      formatted: string;
     }>;
     expect(paths.length).toBeGreaterThanOrEqual(1);
-    const path = paths[0];
-    expect(path?.nodes[0]?.id).toBe(fromId);
-    expect(path?.nodes[path.nodes.length - 1]?.id).toBe(toId);
-    expect(path?.relations[0]?.relation_type).toBe("DEPENDS_ON");
-    expect(path?.relations[0]?.label).toBe("hard dep");
+    const path = paths[0]!;
+    expect(path.nodes[0]?.id).toBe(fromId);
+    expect(path.nodes[path.nodes.length - 1]?.id).toBe(toId);
+    expect(path.nodes[0]?.entry_type).toBe("note");
+    expect(path.relations[0]?.relation_type).toBe("DEPENDS_ON");
+    expect(path.relations[0]?.label).toBe("hard dep");
+    expect(path.relations[0]?.from_id).toBe(fromId);
+    expect(path.relations[0]?.to_id).toBe(toId);
+    expect(typeof path.formatted).toBe("string");
+    expect(path.formatted).toContain("From");
+    expect(path.formatted).toContain("To");
   });
 
   it("returns empty paths array when no directed path exists", async () => {
@@ -2350,6 +2362,80 @@ describe("knowledge_explain_relationship", () => {
     expect(data.connected).toBe(false);
     expect(data.direct_relations as unknown[]).toHaveLength(0);
     expect(data.paths as unknown[]).toHaveLength(0);
+  });
+
+  it("max_paths:1 returns exactly one path", async () => {
+    // topology: A←Mid→B creates exactly one 2-hop path between A and B
+    const sub = uniqueUser("explain-maxpaths");
+    const sid = await openSession(sub, "explain-maxpaths-ns");
+    const aId = await createEntry(sub, sid, { title: "AlphaNode" });
+    const midId = await createEntry(sub, sid, { title: "MidNode" });
+    const bId = await createEntry(sub, sid, { title: "BetaNode" });
+    await callTool("knowledge_create_relation", { from_id: midId, to_id: aId, relation_type: "CONNECTS_TO" }, sub, sid);
+    await callTool("knowledge_create_relation", { from_id: midId, to_id: bId, relation_type: "CONNECTS_TO" }, sub, sid);
+
+    const { status, body } = await callTool(
+      "knowledge_explain_relationship",
+      { entry_a_id: aId, entry_b_id: bId, max_paths: 1 },
+      sub,
+      sid,
+    );
+    expect(status).toBe(200);
+    const data = parseToolSuccess(body);
+    expect(data.paths as unknown[]).toHaveLength(1);
+  });
+
+  it("max_paths above cap returns INVALID_PARAMS", async () => {
+    const sub = uniqueUser("explain-maxpaths-cap");
+    const sid = await openSession(sub, "explain-maxpaths-cap-ns");
+    const aId = await createEntry(sub, sid, { title: "A" });
+    const bId = await createEntry(sub, sid, { title: "B" });
+
+    const { body } = await callTool(
+      "knowledge_explain_relationship",
+      { entry_a_id: aId, entry_b_id: bId, max_paths: 11 }, // cap is 10
+      sub,
+      sid,
+    );
+    expect(parseToolError(body).code).toBe(ErrorCode.INVALID_PARAMS);
+  });
+});
+
+// ── knowledge_get_entry relation_summary ──────────────────────────────────────
+
+describe("knowledge_get_entry relation_summary", () => {
+  it("returns relation_summary with correct outbound/inbound/total counts", async () => {
+    const sub = uniqueUser("get-relsummary");
+    const sid = await openSession(sub, "get-relsummary-ns");
+    const hubId = await createEntry(sub, sid, { title: "Hub" });
+    const out1Id = await createEntry(sub, sid, { title: "Out1" });
+    const out2Id = await createEntry(sub, sid, { title: "Out2" });
+    const in1Id = await createEntry(sub, sid, { title: "In1" });
+    await callTool("knowledge_create_relation", { from_id: hubId, to_id: out1Id, relation_type: "CONNECTS_TO" }, sub, sid);
+    await callTool("knowledge_create_relation", { from_id: hubId, to_id: out2Id, relation_type: "CONNECTS_TO" }, sub, sid);
+    await callTool("knowledge_create_relation", { from_id: in1Id, to_id: hubId, relation_type: "DEPENDS_ON" }, sub, sid);
+
+    const { status, body } = await callTool("knowledge_get_entry", { entry_id: hubId }, sub, sid);
+    expect(status).toBe(200);
+    const data = parseToolSuccess(body);
+    const rs = data.relation_summary as { outbound: number; inbound: number; total: number };
+    expect(rs.outbound).toBe(2);
+    expect(rs.inbound).toBe(1);
+    expect(rs.total).toBe(3);
+  });
+
+  it("returns relation_summary all zeros for an isolated entry", async () => {
+    const sub = uniqueUser("get-relsummary-isolated");
+    const sid = await openSession(sub, "get-relsummary-isolated-ns");
+    const entryId = await createEntry(sub, sid, { title: "Isolated" });
+
+    const { status, body } = await callTool("knowledge_get_entry", { entry_id: entryId }, sub, sid);
+    expect(status).toBe(200);
+    const data = parseToolSuccess(body);
+    const rs = data.relation_summary as { outbound: number; inbound: number; total: number };
+    expect(rs.outbound).toBe(0);
+    expect(rs.inbound).toBe(0);
+    expect(rs.total).toBe(0);
   });
 });
 

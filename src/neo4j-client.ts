@@ -64,8 +64,14 @@ export interface ExpandContextLayer {
 }
 
 export interface PathResult {
-  nodes: Array<{ id: string; title: string }>;
-  relations: Array<{ relation_type: string; label?: string }>;
+  nodes: Array<{ id: string; title: string; entry_type: string }>;
+  relations: Array<{
+    relation_type: string;
+    label?: string;
+    from_id: string;
+    to_id: string;
+  }>;
+  formatted: string;
 }
 
 export interface RelationshipPath {
@@ -1055,10 +1061,16 @@ export class Neo4jClient {
         MATCH path = ${pathPattern}
         WHERE ALL(n IN nodes(path) WHERE EXISTS { MATCH (:User {id: $userId})-[:OWNS|HAS_ACCESS]->(n) })
           AND ($relTypes IS NULL OR ALL(r IN relationships(path) WHERE r.relation_type IN $relTypes))
-        WITH path LIMIT $maxPaths
+        WITH path ORDER BY length(path), [n IN nodes(path) | n.id]
+        LIMIT $maxPaths
         RETURN
-          [n IN nodes(path) | { id: n.id, title: n.title }] AS pathNodes,
-          [r IN relationships(path) | { relation_type: r.relation_type, label: r.label }] AS pathRels
+          [n IN nodes(path) | { id: n.id, title: n.title, entry_type: n.entry_type }] AS pathNodes,
+          [r IN relationships(path) | {
+            relation_type: r.relation_type,
+            label: r.label,
+            from_id: startNode(r).id,
+            to_id: endNode(r).id
+          }] AS pathRels
         `,
         {
           userId: params.userId,
@@ -1068,22 +1080,45 @@ export class Neo4jClient {
           relTypes: params.relationTypes,
         },
       );
-      return result.records.map((record) => {
+      const mapped = result.records.map((record) => {
         const rawNodes = record.get("pathNodes") as Array<{
           id: string;
           title: string;
+          entry_type: string;
         }>;
         const rawRels = record.get("pathRels") as Array<{
           relation_type: string;
           label: string | null;
+          from_id: string;
+          to_id: string;
         }>;
+        const relations = rawRels.map((r) => ({
+          relation_type: r.relation_type,
+          ...(r.label !== null ? { label: r.label } : {}),
+          from_id: r.from_id,
+          to_id: r.to_id,
+        }));
         return {
           nodes: rawNodes,
-          relations: rawRels.map((r) => ({
-            relation_type: r.relation_type,
-            ...(r.label !== null ? { label: r.label } : {}),
-          })),
+          relations,
+          formatted: buildFormattedPath(rawNodes, relations),
         };
+      });
+
+      // Deduplicate by canonical path key (node-id sequence + relation sequence).
+      // Neo4j undirected traversal can return the same physical path twice;
+      // ORDER BY ensures deterministic ordering before we trim duplicates.
+      const seen = new Set<string>();
+      return mapped.filter((p) => {
+        const key =
+          p.nodes.map((n) => n.id).join(",") +
+          "|" +
+          p.relations
+            .map((r) => `${r.from_id}>${r.to_id}:${r.relation_type}`)
+            .join(",");
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
       });
     } finally {
       await session.close();
@@ -1105,6 +1140,7 @@ export class Neo4jClient {
     entryAId: string;
     entryBId: string;
     maxDepth: number;
+    maxPaths: number;
   }): Promise<ExplainRelationshipResult> {
     if (params.entryAId === params.entryBId) {
       throw new Neo4jClientError(
@@ -1174,7 +1210,7 @@ export class Neo4jClient {
         MATCH path = (a:Resource {id: $entryAId})-[:ENTRY_RELATION*1..${depthLiteral}]-(b:Resource {id: $entryBId})
         WHERE ALL(n IN nodes(path) WHERE EXISTS { MATCH (:User {id: $userId})-[:OWNS|HAS_ACCESS]->(n) })
         WITH path ORDER BY length(path), [n IN nodes(path) | n.id]
-        LIMIT 5
+        LIMIT $maxPaths
         RETURN
           [n IN nodes(path) | { id: n.id, title: n.title, entry_type: n.entry_type }] AS pathNodes,
           [r IN relationships(path) | {
@@ -1188,6 +1224,7 @@ export class Neo4jClient {
           userId: params.userId,
           entryAId: params.entryAId,
           entryBId: params.entryBId,
+          maxPaths: neo4j.int(params.maxPaths),
         },
       );
       const paths: RelationshipPath[] = pathResult.records.map((record) => {
@@ -1222,6 +1259,49 @@ export class Neo4jClient {
         paths,
         connected: direct_relations.length > 0 || paths.length > 0,
       };
+    } finally {
+      await session.close();
+    }
+  }
+
+  /**
+   * Returns the count of ENTRY_RELATION edges connected to `resourceId`,
+   * split by direction (outbound / inbound).
+   *
+   * Only edges where the opposite node is accessible to `userId` are counted,
+   * preventing degree-leak of inaccessible entries in multi-tenant graphs.
+   * Uses two isolated CALL subqueries to avoid Cartesian multiplication.
+   */
+  async getRelationSummary(
+    resourceId: string,
+    userId: string,
+  ): Promise<{ outbound: number; inbound: number }> {
+    const session = this.driver.session();
+    try {
+      const result = await session.run(
+        `
+        MATCH (r:Resource {id: $id})
+        CALL {
+          WITH r
+          OPTIONAL MATCH (r)-[out:ENTRY_RELATION]->(other)
+            WHERE EXISTS { MATCH (:User {id: $userId})-[:OWNS|HAS_ACCESS]->(other) }
+          RETURN count(DISTINCT out) AS outbound
+        }
+        CALL {
+          WITH r
+          OPTIONAL MATCH (other2)-[in:ENTRY_RELATION]->(r)
+            WHERE EXISTS { MATCH (:User {id: $userId})-[:OWNS|HAS_ACCESS]->(other2) }
+          RETURN count(DISTINCT in) AS inbound
+        }
+        RETURN outbound, inbound
+        `,
+        { id: resourceId, userId },
+      );
+      const record = result.records[0];
+      if (!record) return { outbound: 0, inbound: 0 };
+      const outbound = (record.get("outbound") as neo4j.Integer).toNumber();
+      const inbound = (record.get("inbound") as neo4j.Integer).toNumber();
+      return { outbound, inbound };
     } finally {
       await session.close();
     }

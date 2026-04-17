@@ -162,7 +162,15 @@ async function handleGet(
   if (role === null)
     throw new ToolError(ErrorCode.PERMISSION_DENIED, "Permission denied");
 
-  return { ...resource, role };
+  const { outbound, inbound } = await neo4jClient.getRelationSummary(
+    entry_id,
+    ctx.userId,
+  );
+  return {
+    ...resource,
+    role,
+    relation_summary: { outbound, inbound, total: outbound + inbound },
+  };
 }
 
 // ── knowledge_list_entries ────────────────────────────────────────────────────
@@ -563,6 +571,7 @@ const explainRelationshipSchema = z.object({
   entry_a_id: z.string().min(1),
   entry_b_id: z.string().min(1),
   max_depth: z.number().int().positive().max(MAX_DEPTH_CAP).optional(),
+  max_paths: z.number().int().positive().max(MAX_PATHS_CAP).optional(),
 });
 
 async function handleExplainRelationship(
@@ -577,7 +586,12 @@ async function handleExplainRelationship(
       `Invalid params: ${parsed.error.message}`,
     );
   }
-  const { entry_a_id, entry_b_id, max_depth: rawDepth } = parsed.data;
+  const {
+    entry_a_id,
+    entry_b_id,
+    max_depth: rawDepth,
+    max_paths: rawPaths,
+  } = parsed.data;
 
   if (entry_a_id === entry_b_id) {
     throw new ToolError(
@@ -587,6 +601,7 @@ async function handleExplainRelationship(
   }
 
   const maxDepth = rawDepth ?? DEFAULT_MAX_DEPTH;
+  const maxPaths = rawPaths ?? DEFAULT_MAX_PATHS;
 
   try {
     return await neo4jClient.explainRelationship({
@@ -594,6 +609,7 @@ async function handleExplainRelationship(
       entryAId: entry_a_id,
       entryBId: entry_b_id,
       maxDepth,
+      maxPaths,
     });
   } catch (error) {
     throwMappedClientError(error);
@@ -1039,6 +1055,10 @@ export function createResourceTools(
             max_depth: {
               type: "number",
               description: `Maximum path depth (default ${DEFAULT_MAX_DEPTH}, max ${MAX_DEPTH_CAP})`,
+            },
+            max_paths: {
+              type: "number",
+              description: `Maximum number of paths to return (default ${DEFAULT_MAX_PATHS}, max ${MAX_PATHS_CAP}). Pass 1 to get only the shortest path.`,
             },
           },
           required: ["entry_a_id", "entry_b_id"],
