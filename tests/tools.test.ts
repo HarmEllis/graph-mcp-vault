@@ -812,7 +812,7 @@ describe("knowledge_search_entries", () => {
     expect(parseToolError(body).code).toBe(ErrorCode.INVALID_PARAMS);
   });
 
-  it("namespace isolation: only returns resources in the session namespace by default", async () => {
+  it("explicit namespace scoping restricts results to that namespace", async () => {
     const sub = uniqueUser("search-ns");
     const sidA = await openSession(sub, "ns-search-x");
     const sidB = await openSession(sub, "ns-search-y");
@@ -833,7 +833,7 @@ describe("knowledge_search_entries", () => {
 
     const { body } = await callTool(
       "knowledge_search_entries",
-      { query: `Quark${tag}` },
+      { query: `Quark${tag}`, namespace: "ns-search-x" },
       sub,
       sidA,
     );
@@ -1115,12 +1115,12 @@ describe("knowledge_search_entries", () => {
     expect(namespaces).toContain("ns-all-b");
   });
 
-  it("default (no all_namespaces) is still restricted to the session namespace", async () => {
-    const sub = uniqueUser("search-default-ns-isolation");
+  it("default (no namespace param) searches all accessible namespaces", async () => {
+    const sub = uniqueUser("search-default-all-ns");
     const sidA = await openSession(sub, "ns-def-a");
     const sidB = await openSession(sub, "ns-def-b");
 
-    const tag = `DefaultNsTag${Date.now()}`;
+    const tag = `DefaultAllNsTag${Date.now()}`;
     await callTool(
       "knowledge_create_entry",
       { entry_type: "note", title: `${tag}-inA`, content: "" },
@@ -1143,7 +1143,9 @@ describe("knowledge_search_entries", () => {
     const resources = parseToolSuccess(body).resources as Array<
       Record<string, unknown>
     >;
-    expect(resources.every((r) => r.namespace === "ns-def-a")).toBe(true);
+    const namespaces = [...new Set(resources.map((r) => r.namespace))];
+    expect(namespaces).toContain("ns-def-a");
+    expect(namespaces).toContain("ns-def-b");
   });
 
   it("explicit namespace override still works when all_namespaces is omitted", async () => {
@@ -1172,17 +1174,36 @@ describe("knowledge_search_entries", () => {
     expect(resources.every((r) => r.namespace === "ns-exp-a")).toBe(true);
   });
 
-  it("namespace + all_namespaces:true returns INVALID_PARAMS", async () => {
-    const sub = uniqueUser("search-conflict");
-    const sid = await openSession(sub);
+  it("namespace + all_namespaces:true succeeds with namespace taking precedence", async () => {
+    const sub = uniqueUser("search-ns-wins");
+    const sidA = await openSession(sub, "ns-wins-a");
+    const sidB = await openSession(sub, "ns-wins-b");
+
+    const tag = `NsWinsTag${Date.now()}`;
+    await callTool(
+      "knowledge_create_entry",
+      { entry_type: "note", title: `${tag}-inA`, content: "" },
+      sub,
+      sidA,
+    );
+    await callTool(
+      "knowledge_create_entry",
+      { entry_type: "note", title: `${tag}-inB`, content: "" },
+      sub,
+      sidB,
+    );
 
     const { body } = await callTool(
       "knowledge_search_entries",
-      { query: "test", namespace: "some-ns", all_namespaces: true },
+      { query: tag, namespace: "ns-wins-a", all_namespaces: true },
       sub,
-      sid,
+      sidA,
     );
-    expect(parseToolError(body).code).toBe(ErrorCode.INVALID_PARAMS);
+    // No error — namespace wins, only ns-wins-a results returned
+    const resources = parseToolSuccess(body).resources as Array<
+      Record<string, unknown>
+    >;
+    expect(resources.every((r) => r.namespace === "ns-wins-a")).toBe(true);
   });
 
   it("permission filtering still applies in all_namespaces mode", async () => {
@@ -1282,7 +1303,7 @@ describe("knowledge_search_entries", () => {
     expect(resources.every((r) => r.namespace === "ns-false-a")).toBe(true);
   });
 
-  it("all_namespaces:false without namespace matches omitting the flag (session namespace only)", async () => {
+  it("all_namespaces:false without namespace is a no-op and searches all namespaces", async () => {
     const sub = uniqueUser("search-false-no-ns");
     const sidA = await openSession(sub, "ns-false-only-a");
     const sidB = await openSession(sub, "ns-false-only-b");
@@ -1310,9 +1331,96 @@ describe("knowledge_search_entries", () => {
     const resources = parseToolSuccess(body).resources as Array<
       Record<string, unknown>
     >;
-    expect(resources.every((r) => r.namespace === "ns-false-only-a")).toBe(
-      true,
+    const namespaces = [...new Set(resources.map((r) => r.namespace))];
+    expect(namespaces).toContain("ns-false-only-a");
+    expect(namespaces).toContain("ns-false-only-b");
+  });
+
+  it("results include a numeric score field", async () => {
+    const sub = uniqueUser("search-score-field");
+    const sid = await openSession(sub, "ns-score");
+    const tag = `ScoreTag${Date.now()}`;
+    await callTool(
+      "knowledge_create_entry",
+      { entry_type: "note", title: tag, content: tag },
+      sub,
+      sid,
     );
+
+    const { body } = await callTool(
+      "knowledge_search_entries",
+      { query: tag },
+      sub,
+      sid,
+    );
+    const resources = parseToolSuccess(body).resources as Array<
+      Record<string, unknown>
+    >;
+    expect(resources.length).toBeGreaterThan(0);
+    expect(typeof resources[0]?.score).toBe("number");
+    expect((resources[0]?.score as number) > 0).toBe(true);
+  });
+
+  it("returns a hint when querying structured tokens (IP) in fuzzy mode", async () => {
+    const sub = uniqueUser("search-hint-ip");
+    const sid = await openSession(sub, "ns-hint");
+    await callTool(
+      "knowledge_create_entry",
+      { entry_type: "note", title: "Router config 10.0.0.1", content: "gateway 10.0.0.1" },
+      sub,
+      sid,
+    );
+
+    const { body } = await callTool(
+      "knowledge_search_entries",
+      { query: "10.0.0.1", match_mode: "fuzzy" },
+      sub,
+      sid,
+    );
+    const result = parseToolSuccess(body) as Record<string, unknown>;
+    expect(typeof result.hint).toBe("string");
+    expect((result.hint as string).length).toBeGreaterThan(0);
+  });
+
+  it("does not return a hint when match_mode is fulltext", async () => {
+    const sub = uniqueUser("search-hint-fulltext");
+    const sid = await openSession(sub, "ns-hint-ft");
+    await callTool(
+      "knowledge_create_entry",
+      { entry_type: "note", title: "Router config 10.0.0.1", content: "gateway 10.0.0.1" },
+      sub,
+      sid,
+    );
+
+    const { body } = await callTool(
+      "knowledge_search_entries",
+      { query: "10.0.0.1", match_mode: "fulltext" },
+      sub,
+      sid,
+    );
+    const result = parseToolSuccess(body) as Record<string, unknown>;
+    expect(result.hint).toBeUndefined();
+  });
+
+  it("does not return a hint for plain natural-language queries", async () => {
+    const sub = uniqueUser("search-hint-plain");
+    const sid = await openSession(sub, "ns-hint-plain");
+    const tag = `PlainHintTag${Date.now()}`;
+    await callTool(
+      "knowledge_create_entry",
+      { entry_type: "note", title: tag, content: "some content" },
+      sub,
+      sid,
+    );
+
+    const { body } = await callTool(
+      "knowledge_search_entries",
+      { query: tag },
+      sub,
+      sid,
+    );
+    const result = parseToolSuccess(body) as Record<string, unknown>;
+    expect(result.hint).toBeUndefined();
   });
 });
 

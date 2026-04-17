@@ -538,3 +538,36 @@ The `Neo4jClient` instance is passed into `createMcpRouter` as a required parame
 **Rejected alternative**: `pnpm audit --audit-level=high` against the npm registry endpoint — retired; not usable from CI.
 
 **Follow-up (2026-04-15)**: The Trivy action was subsequently updated from v0.31.0 (`76071ef0d7ec797419534a183b498b4d6366cf37`) to v0.35.0 (`57a97c7e7821a5776cebc9bb87c984fa69cba8f1`) after CI bootstrap failures caused by default Trivy binary version drift. An explicit `version: v0.69.3` input is now required on all Trivy action steps; omitting it allows the action to download whatever Trivy binary version happens to be current at run time, which can break bootstrap silently when the upstream release changes.
+
+---
+
+## D-030 — Search: default namespace scope changed to all-namespaces (breaking)
+
+**Date**: 2026-04-17
+**Status**: Accepted
+
+**Decision**: `knowledge_search_entries` now searches all namespaces the caller can access by
+default. Previously, the default was the session namespace. Callers must explicitly pass
+`namespace` to restrict results to a single namespace. `all_namespaces: true` is retained as
+a no-op for backwards compatibility.
+
+**Rationale**:
+- LLMs operating through MCP sessions were silently scoped to their session namespace and
+  reported "nothing found" when the target data existed in another namespace. The default
+  produced a poor discovery experience with no indication of the actual cause.
+- Searching all namespaces is the safer default for an LLM agent: it maximises recall and
+  delegates scope narrowing to explicit caller intent.
+- The mutual-exclusivity guard (`namespace + all_namespaces:true → INVALID_PARAMS`) was
+  removed because `all_namespaces` is now a no-op; `namespace` takes precedence when provided.
+
+**Migration note for existing clients**:
+- Any client that relied on implicit session-namespace isolation should now pass `namespace`
+  explicitly to retain the previous behaviour.
+- Clients passing `all_namespaces: true` without `namespace` continue to work unchanged
+  (the flag is ignored; the behaviour is identical to the new default).
+- Clients passing both `namespace` and `all_namespaces: true` previously received
+  `INVALID_PARAMS`; they now silently receive namespace-scoped results (`namespace` wins).
+
+**Rejected alternative**: keep the session-namespace default and improve the tool description
+to guide LLMs toward `all_namespaces: true`. Rejected because the LLM guidance is purely
+advisory and the silent-empty-result failure mode remains until the LLM explicitly retries.

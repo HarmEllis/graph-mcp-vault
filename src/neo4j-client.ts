@@ -21,6 +21,7 @@ export interface Resource {
 
 export interface ResourceWithOwnership extends Resource {
   ownership: "owner" | "shared";
+  score: number;
 }
 
 export interface SharingEntry {
@@ -309,6 +310,7 @@ export class Neo4jClient {
       return result.records.map((record) => ({
         ...(record.get("r").properties as Resource),
         ownership: record.get("ownership") as "owner" | "shared",
+        score: 0,
       }));
     } finally {
       await session.close();
@@ -446,10 +448,21 @@ export class Neo4jClient {
           limit: neo4j.int(limit),
         },
       );
-      return result.records.map((record) => ({
-        ...(record.get("r").properties as Resource),
-        ownership: record.get("ownership") as "owner" | "shared",
-      }));
+      return result.records.map((record) => {
+        const r = record.get("r").properties as Resource;
+        const raw = Number(record.get("score"));
+        const score = Number.isFinite(raw) ? raw : 0;
+        if (!Number.isFinite(raw)) {
+          console.warn("[searchResources] non-finite score from driver", {
+            resourceId: r.id,
+          });
+        }
+        return {
+          ...r,
+          ownership: record.get("ownership") as "owner" | "shared",
+          score,
+        };
+      });
     } finally {
       await session.close();
     }

@@ -301,18 +301,13 @@ async function handleSearch(
       `Invalid params: ${parsed.error.message}`,
     );
   }
-  const { namespace, all_namespaces } = parsed.data;
+  const { namespace } = parsed.data;
 
-  if (all_namespaces === true && namespace !== undefined) {
-    throw new ToolError(
-      ErrorCode.INVALID_PARAMS,
-      "Cannot specify both namespace and all_namespaces:true",
-    );
-  }
-
-  // undefined → neo4j-client treats it as NULL, which matches all namespaces
-  const effectiveNamespace =
-    all_namespaces === true ? undefined : (namespace ?? ctx.namespace);
+  // Default: search all accessible namespaces (undefined → NULL in Neo4j = no namespace filter).
+  // Pass namespace explicitly to scope results to a single namespace.
+  // all_namespaces is kept for backwards compatibility but is a no-op — all namespaces are
+  // searched by default. When namespace is also provided, namespace takes precedence.
+  const effectiveNamespace = namespace ?? undefined;
 
   const resources = await neo4jClient.searchResources({
     userId: ctx.userId,
@@ -327,7 +322,18 @@ async function handleSearch(
       match_mode: parsed.data.match_mode as MatchMode,
     }),
   });
-  return { resources };
+
+  // Hint: when the query contains structured tokens (IPs, paths, versions, emails) and
+  // the caller is using fuzzy mode, suggest a more precise match mode.
+  const tokens = parsed.data.query.split(/\s+/).filter(Boolean);
+  const hasStructuredTokens = tokens.some((t) => /[./:@]/.test(t));
+  const hint =
+    hasStructuredTokens && (parsed.data.match_mode ?? "fuzzy") === "fuzzy"
+      ? "Query contains structured tokens (e.g. IP address, path, version). " +
+        "For precise matching retry with match_mode:'fulltext' (keyword) or match_mode:'exact' (phrase)."
+      : undefined;
+
+  return { resources, ...(hint !== undefined && { hint }) };
 }
 
 // ── knowledge_create_relation ─────────────────────────────────────────────────
@@ -835,7 +841,7 @@ export function createResourceTools(
       descriptor: {
         name: "knowledge_search_entries",
         description:
-          "Search the knowledge memory bank by keyword. Always call this before creating new entries to avoid duplicates. Only returns entries the caller can read.",
+          "Search the knowledge memory bank by keyword. Always call this before creating new entries to avoid duplicates. Only returns entries the caller can read.\n\nSearch strategy:\n- By default, searches ALL namespaces you can access. Use namespace to restrict to one namespace.\n- For structured data (IP addresses, version numbers, file paths, domain names) use match_mode:\"fulltext\" or match_mode:\"exact\" — fuzzy mode may return false matches for these.\n- Use match_mode:\"fuzzy\" (default) for natural-language keywords where typo tolerance helps.\n- Each result includes a score field (higher = stronger match); results with a very low score relative to others are weak matches.\n- If the response includes a hint field, it suggests a more precise search mode for your query.",
         inputSchema: {
           type: "object",
           properties: {
@@ -843,12 +849,12 @@ export function createResourceTools(
             namespace: {
               type: "string",
               description:
-                "Namespace to search in (defaults to session namespace). Mutually exclusive with all_namespaces:true.",
+                "Restrict results to this namespace. Omit to search all accessible namespaces.",
             },
             all_namespaces: {
               type: "boolean",
               description:
-                "If true, search across all namespaces readable by the caller. Mutually exclusive with namespace.",
+                "Deprecated no-op — all namespaces are searched by default. Kept for backwards compatibility.",
             },
             entry_type: { type: "string", description: "Filter by entry type" },
             limit: { type: "number", description: "Max results (default 20)" },
@@ -860,7 +866,7 @@ export function createResourceTools(
               type: "string",
               enum: ["exact", "fulltext", "fuzzy"],
               description:
-                'Search mode: "fuzzy" (default, tolerates typos), "fulltext" (exact keyword match), or "exact" (phrase match)',
+                'Search mode: "fuzzy" (default, tolerates typos), "fulltext" (exact keyword match, best for IPs/versions/paths), or "exact" (phrase match)',
             },
           },
           required: ["query"],

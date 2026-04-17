@@ -794,6 +794,26 @@ describe("Neo4jClient.searchResources", () => {
     });
     expect(results.some((r) => r.id === created.id)).toBe(true);
   });
+
+  it("returns a finite positive score for matching results", async () => {
+    const userId = "user-search-score";
+    const tag = `ScoreKeyword${Date.now()}`;
+    await client.createResource({
+      userId,
+      namespace: "default",
+      entry_type: "note",
+      title: tag,
+      content: `Content with ${tag}`,
+    });
+
+    const results = await client.searchResources({ userId, query: tag });
+
+    expect(results.length).toBeGreaterThan(0);
+    const score = results[0]?.score;
+    expect(typeof score).toBe("number");
+    expect(Number.isFinite(score)).toBe(true);
+    expect((score as number) > 0).toBe(true);
+  });
 });
 
 // ── listNamespaces ────────────────────────────────────────────────────────────
