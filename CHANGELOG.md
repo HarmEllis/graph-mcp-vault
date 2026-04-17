@@ -5,6 +5,29 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.9] - 2026-04-17
+
+Expands graph exploration with richer relationship tools, improves search behavior and guidance for LLM callers, and updates local development auth token defaults for longer sessions.
+
+### Added
+
+- New `knowledge_explain_relationship` tool to explain direct and indirect relationships between two entries, including formatted path strings and path ordering by shortest-first.
+- `knowledge_find_paths` and relationship explanations now include richer path details, including node `entry_type`, relation endpoints (`from_id`/`to_id`), and deterministic path formatting.
+- `knowledge_get_entry` now returns `relation_summary` with accessible outbound, inbound, and total relation counts.
+
+### Changed
+
+- `knowledge_search_entries` now searches all accessible namespaces by default. Use `namespace` to restrict scope; `all_namespaces` remains as a backwards-compatible no-op.
+- `knowledge_find_paths` now accepts `direction` with default `both` (undirected traversal), and returns a hint when directional filters produce no results.
+- Release runbook now includes an explicit `src/server-instructions.md` accuracy review before every release.
+
+### Fixed
+
+- Development Keycloak realm access tokens now default to a 24-hour lifespan to avoid frequent expiry during local sessions.
+- Path deduplication in graph traversal now removes duplicate path variants while keeping shortest-first ordering deterministic.
+
+**Full Changelog**: https://github.com/HarmEllis/graph-mcp-vault/compare/v0.0.8...v0.0.9
+
 ## [0.0.8] - 2026-04-16
 
 Fixes a container startup crash caused by the compiled `dist/` directory missing the `server-instructions.md` file.

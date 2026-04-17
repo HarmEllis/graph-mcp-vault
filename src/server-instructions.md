@@ -26,6 +26,6 @@ Connect entries with `knowledge_create_relation` using UPPER_SNAKE_CASE types
 ## Search workflow
 
 1. Always call `knowledge_search_entries` before creating a new entry to avoid duplicates.
-2. If the search returns no results in the current namespace, retry with
-   `all_namespaces: true` to check whether the entry exists in another namespace.
-3. Only create a new entry if both searches return no relevant results.
+2. By default, search runs across all namespaces you can access. Use `namespace`
+   only when you explicitly want to narrow results to one namespace.
+3. Only create a new entry if no relevant results are found in that global search.

@@ -194,9 +194,11 @@ function buildFormattedPath(
   return nodes
     .map((node, i) => {
       if (i === 0) return node.title;
-      const rel = relations[i - 1]!;
+      const rel = relations[i - 1];
+      const previousNode = nodes[i - 1];
+      if (!rel || !previousNode) return node.title;
       const arrow =
-        rel.from_id === nodes[i - 1]!.id
+        rel.from_id === previousNode.id
           ? `-[${rel.relation_type}]->`
           : `<-[${rel.relation_type}]-`;
       return `${arrow} ${node.title}`;
@@ -1110,12 +1112,9 @@ export class Neo4jClient {
       // ORDER BY ensures deterministic ordering before we trim duplicates.
       const seen = new Set<string>();
       return mapped.filter((p) => {
-        const key =
-          p.nodes.map((n) => n.id).join(",") +
-          "|" +
-          p.relations
-            .map((r) => `${r.from_id}>${r.to_id}:${r.relation_type}`)
-            .join(",");
+        const key = `${p.nodes.map((n) => n.id).join(",")}|${p.relations
+          .map((r) => `${r.from_id}>${r.to_id}:${r.relation_type}`)
+          .join(",")}`;
         if (seen.has(key)) return false;
         seen.add(key);
         return true;

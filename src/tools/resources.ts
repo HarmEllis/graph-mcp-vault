@@ -911,7 +911,7 @@ export function createResourceTools(
       descriptor: {
         name: "knowledge_search_entries",
         description:
-          "Search the knowledge memory bank by keyword. Always call this before creating new entries to avoid duplicates. Only returns entries the caller can read.\n\nSearch strategy:\n- By default, searches ALL namespaces you can access. Use namespace to restrict to one namespace.\n- For structured data (IP addresses, version numbers, file paths, domain names) use match_mode:\"fulltext\" or match_mode:\"exact\" — fuzzy mode may return false matches for these.\n- Use match_mode:\"fuzzy\" (default) for natural-language keywords where typo tolerance helps.\n- Each result includes a score field (higher = stronger match); results with a very low score relative to others are weak matches.\n- If the response includes a hint field, it suggests a more precise search mode for your query.",
+          'Search the knowledge memory bank by keyword. Always call this before creating new entries to avoid duplicates. Only returns entries the caller can read.\n\nSearch strategy:\n- By default, searches ALL namespaces you can access. Use namespace to restrict to one namespace.\n- For structured data (IP addresses, version numbers, file paths, domain names) use match_mode:"fulltext" or match_mode:"exact" — fuzzy mode may return false matches for these.\n- Use match_mode:"fuzzy" (default) for natural-language keywords where typo tolerance helps.\n- Each result includes a score field (higher = stronger match); results with a very low score relative to others are weak matches.\n- If the response includes a hint field, it suggests a more precise search mode for your query.',
         inputSchema: {
           type: "object",
           properties: {
@@ -1064,8 +1064,7 @@ export function createResourceTools(
           required: ["entry_a_id", "entry_b_id"],
         },
       },
-      handler: (args, ctx) =>
-        handleExplainRelationship(args, ctx, neo4jClient),
+      handler: (args, ctx) => handleExplainRelationship(args, ctx, neo4jClient),
     },
     {
       descriptor: {

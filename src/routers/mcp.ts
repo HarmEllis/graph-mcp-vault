@@ -28,7 +28,7 @@ const KNOWN_PROTOCOL_VERSIONS = new Set([
   "2024-10-07",
 ]);
 export const SERVER_NAME = "graph-mcp-vault";
-export const SERVER_VERSION = "0.0.8";
+export const SERVER_VERSION = "0.0.9";
 
 // ── JSON-RPC types ────────────────────────────────────────────────────────────
 

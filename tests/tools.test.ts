@@ -1366,7 +1366,11 @@ describe("knowledge_search_entries", () => {
     const sid = await openSession(sub, "ns-hint");
     await callTool(
       "knowledge_create_entry",
-      { entry_type: "note", title: "Router config 10.0.0.1", content: "gateway 10.0.0.1" },
+      {
+        entry_type: "note",
+        title: "Router config 10.0.0.1",
+        content: "gateway 10.0.0.1",
+      },
       sub,
       sid,
     );
@@ -1387,7 +1391,11 @@ describe("knowledge_search_entries", () => {
     const sid = await openSession(sub, "ns-hint-ft");
     await callTool(
       "knowledge_create_entry",
-      { entry_type: "note", title: "Router config 10.0.0.1", content: "gateway 10.0.0.1" },
+      {
+        entry_type: "note",
+        title: "Router config 10.0.0.1",
+        content: "gateway 10.0.0.1",
+      },
       sub,
       sid,
     );
@@ -2151,7 +2159,9 @@ describe("knowledge_find_paths", () => {
       formatted: string;
     }>;
     expect(paths.length).toBeGreaterThanOrEqual(1);
-    const path = paths[0]!;
+    const path = paths[0];
+    expect(path).toBeDefined();
+    if (!path) throw new Error("Expected a path");
     expect(path.nodes[0]?.id).toBe(fromId);
     expect(path.nodes[path.nodes.length - 1]?.id).toBe(toId);
     expect(path.nodes[0]?.entry_type).toBe("note");
@@ -2371,8 +2381,18 @@ describe("knowledge_explain_relationship", () => {
     const aId = await createEntry(sub, sid, { title: "AlphaNode" });
     const midId = await createEntry(sub, sid, { title: "MidNode" });
     const bId = await createEntry(sub, sid, { title: "BetaNode" });
-    await callTool("knowledge_create_relation", { from_id: midId, to_id: aId, relation_type: "CONNECTS_TO" }, sub, sid);
-    await callTool("knowledge_create_relation", { from_id: midId, to_id: bId, relation_type: "CONNECTS_TO" }, sub, sid);
+    await callTool(
+      "knowledge_create_relation",
+      { from_id: midId, to_id: aId, relation_type: "CONNECTS_TO" },
+      sub,
+      sid,
+    );
+    await callTool(
+      "knowledge_create_relation",
+      { from_id: midId, to_id: bId, relation_type: "CONNECTS_TO" },
+      sub,
+      sid,
+    );
 
     const { status, body } = await callTool(
       "knowledge_explain_relationship",
@@ -2411,14 +2431,38 @@ describe("knowledge_get_entry relation_summary", () => {
     const out1Id = await createEntry(sub, sid, { title: "Out1" });
     const out2Id = await createEntry(sub, sid, { title: "Out2" });
     const in1Id = await createEntry(sub, sid, { title: "In1" });
-    await callTool("knowledge_create_relation", { from_id: hubId, to_id: out1Id, relation_type: "CONNECTS_TO" }, sub, sid);
-    await callTool("knowledge_create_relation", { from_id: hubId, to_id: out2Id, relation_type: "CONNECTS_TO" }, sub, sid);
-    await callTool("knowledge_create_relation", { from_id: in1Id, to_id: hubId, relation_type: "DEPENDS_ON" }, sub, sid);
+    await callTool(
+      "knowledge_create_relation",
+      { from_id: hubId, to_id: out1Id, relation_type: "CONNECTS_TO" },
+      sub,
+      sid,
+    );
+    await callTool(
+      "knowledge_create_relation",
+      { from_id: hubId, to_id: out2Id, relation_type: "CONNECTS_TO" },
+      sub,
+      sid,
+    );
+    await callTool(
+      "knowledge_create_relation",
+      { from_id: in1Id, to_id: hubId, relation_type: "DEPENDS_ON" },
+      sub,
+      sid,
+    );
 
-    const { status, body } = await callTool("knowledge_get_entry", { entry_id: hubId }, sub, sid);
+    const { status, body } = await callTool(
+      "knowledge_get_entry",
+      { entry_id: hubId },
+      sub,
+      sid,
+    );
     expect(status).toBe(200);
     const data = parseToolSuccess(body);
-    const rs = data.relation_summary as { outbound: number; inbound: number; total: number };
+    const rs = data.relation_summary as {
+      outbound: number;
+      inbound: number;
+      total: number;
+    };
     expect(rs.outbound).toBe(2);
     expect(rs.inbound).toBe(1);
     expect(rs.total).toBe(3);
@@ -2429,10 +2473,19 @@ describe("knowledge_get_entry relation_summary", () => {
     const sid = await openSession(sub, "get-relsummary-isolated-ns");
     const entryId = await createEntry(sub, sid, { title: "Isolated" });
 
-    const { status, body } = await callTool("knowledge_get_entry", { entry_id: entryId }, sub, sid);
+    const { status, body } = await callTool(
+      "knowledge_get_entry",
+      { entry_id: entryId },
+      sub,
+      sid,
+    );
     expect(status).toBe(200);
     const data = parseToolSuccess(body);
-    const rs = data.relation_summary as { outbound: number; inbound: number; total: number };
+    const rs = data.relation_summary as {
+      outbound: number;
+      inbound: number;
+      total: number;
+    };
     expect(rs.outbound).toBe(0);
     expect(rs.inbound).toBe(0);
     expect(rs.total).toBe(0);

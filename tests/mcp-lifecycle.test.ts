@@ -408,7 +408,7 @@ describe("initialize", () => {
     const { res } = await doInitialize(app, token);
     const body = await res.json();
 
-    expect(body.result.serverInfo.version).toBe("0.0.8");
+    expect(body.result.serverInfo.version).toBe("0.0.9");
   });
 
   it("includes capabilities.tools in result", async () => {
