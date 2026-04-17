@@ -33,9 +33,8 @@ function resolveNameClaim(payload: Record<string, unknown>): string | null {
 }
 
 function resolveEmailClaim(payload: Record<string, unknown>): string | null {
-  const email = readStringClaim(payload, "email");
-  if (email) return email;
-  return null;
+  if (payload.email_verified === false) return null;
+  return readStringClaim(payload, "email");
 }
 
 // ── AuthError ─────────────────────────────────────────────────────────────────

@@ -6,7 +6,7 @@ import {
 } from "testcontainers";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Neo4jClient } from "../src/neo4j-client.js";
-import { initSchema } from "../src/schema.js";
+import { SCHEMA_VERSION, initSchema } from "../src/schema.js";
 
 // ── Container setup ───────────────────────────────────────────────────────────
 
@@ -58,7 +58,7 @@ describe("initSchema", () => {
       );
       expect(result.records.length).toBe(1);
       const version = neo4j.integer.toNumber(result.records[0]?.get("version"));
-      expect(version).toBe(4);
+      expect(version).toBe(SCHEMA_VERSION);
     } finally {
       await session.close();
     }
@@ -2551,5 +2551,33 @@ describe("Neo4jClient.impactAnalysis", () => {
     expect(allIds).not.toContain(middle.id);
     expect(allIds).not.toContain(top.id);
     expect(result.total_impacted).toBe(0);
+  });
+});
+
+// ── updateNamespaceConfig ─────────────────────────────────────────────────────
+
+describe("Neo4jClient.updateNamespaceConfig", () => {
+  it("preserves independent fields under concurrent partial updates", async () => {
+    const ownerId = `user-ns-race-owner-${Date.now()}`;
+    const targetId = `user-ns-race-target-${Date.now()}`;
+    const namespace = `ns-race-${Date.now()}`;
+
+    await client.upsertUserProfile(targetId, "Target", "target@race.dev");
+    await Promise.all([
+      client.updateNamespaceConfig({
+        ownerId,
+        namespace,
+        auto_share: true,
+      }),
+      client.updateNamespaceConfig({
+        ownerId,
+        namespace,
+        auto_share_user_ids: [targetId],
+      }),
+    ]);
+
+    const config = await client.getNamespaceConfig(ownerId, namespace);
+    expect(config.auto_share).toBe(true);
+    expect(config.auto_share_user_ids).toEqual([targetId]);
   });
 });

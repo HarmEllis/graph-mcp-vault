@@ -145,15 +145,14 @@ async function handleCreate(
 
   const granted_role =
     cfg.auto_share_permission === "write" ? "editor" : "viewer";
-  const shared_with: string[] = [];
-
-  for (const targetUserId of cfg.auto_share_user_ids) {
-    if (targetUserId === ctx.userId) continue;
-    const target = await neo4jClient.getUser(targetUserId);
-    if (!target) continue;
-    await neo4jClient.shareResource(created.id, targetUserId, granted_role);
-    shared_with.push(targetUserId);
-  }
+  const targetUserIds = cfg.auto_share_user_ids.filter(
+    (targetUserId) => targetUserId !== ctx.userId,
+  );
+  const shared_with = await neo4jClient.shareResourceWithUsers({
+    resourceId: created.id,
+    targetUserIds,
+    role: granted_role,
+  });
 
   return {
     ...created,

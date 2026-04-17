@@ -67,14 +67,12 @@ async function handleUpdateNamespaceConfig(
         );
 
   if (uniqueUserIds !== undefined) {
-    for (const userId of uniqueUserIds) {
-      const user = await neo4jClient.getUser(userId);
-      if (!user) {
-        throw new ToolError(
-          ErrorCode.RESOURCE_NOT_FOUND,
-          "Target user not found",
-        );
-      }
+    const existingUserIds = await neo4jClient.getExistingUserIds(uniqueUserIds);
+    if (existingUserIds.length !== uniqueUserIds.length) {
+      throw new ToolError(
+        ErrorCode.RESOURCE_NOT_FOUND,
+        "Target user not found",
+      );
     }
   }
 

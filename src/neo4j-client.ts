@@ -295,6 +295,29 @@ export class Neo4jClient {
     }
   }
 
+  async getExistingUserIds(userIds: string[]): Promise<string[]> {
+    const dedupedUserIds = [...new Set(userIds)];
+    if (dedupedUserIds.length === 0) return [];
+
+    const session = this.driver.session();
+    try {
+      const result = await session.run(
+        `
+        UNWIND $userIds AS userId
+        MATCH (u:User {id: userId})
+        RETURN DISTINCT u.id AS user_id
+        `,
+        { userIds: dedupedUserIds },
+      );
+      const existing = new Set(
+        result.records.map((record) => record.get("user_id") as string),
+      );
+      return dedupedUserIds.filter((id) => existing.has(id));
+    } finally {
+      await session.close();
+    }
+  }
+
   async searchUsers(params: {
     requesterUserId: string;
     name?: string;
@@ -328,6 +351,10 @@ export class Neo4jClient {
         }));
       }
 
+      // Intentional privacy trade-off:
+      // with an exact name/email filter we allow direct user lookup to enable
+      // explicit sharing workflows, while still preventing broad enumeration
+      // (no partial matching, no wildcard search, and caller excluded).
       const result = await session.run(
         `
         MATCH (u:User)
@@ -414,39 +441,57 @@ export class Neo4jClient {
     auto_share_permission?: AutoSharePermission;
     auto_share_user_ids?: string[];
   }): Promise<NamespaceConfig> {
-    const existing = await this.getNamespaceConfig(
-      params.ownerId,
-      params.namespace,
-    );
-    const next: NamespaceConfig = {
-      namespace: params.namespace,
-      auto_share: params.auto_share ?? existing.auto_share,
-      auto_share_permission:
-        params.auto_share_permission ?? existing.auto_share_permission,
-      auto_share_user_ids:
-        params.auto_share_user_ids ?? existing.auto_share_user_ids,
-    };
-
     const session = this.driver.session();
     try {
-      await session.run(
+      const result = await session.run(
         `
         MERGE (cfg:NamespaceConfig {owner_id: $ownerId, namespace: $namespace})
-        SET cfg.auto_share = $autoShare,
-            cfg.auto_share_permission = $autoSharePermission,
-            cfg.auto_share_user_ids = $autoShareUserIds,
+        SET cfg.auto_share = coalesce($autoShare, cfg.auto_share, false),
+            cfg.auto_share_permission = coalesce(
+              $autoSharePermission,
+              cfg.auto_share_permission,
+              'read'
+            ),
+            cfg.auto_share_user_ids = coalesce(
+              $autoShareUserIds,
+              cfg.auto_share_user_ids,
+              []
+            ),
             cfg.updated_at = $now
+        RETURN cfg.auto_share AS auto_share,
+               cfg.auto_share_permission AS auto_share_permission,
+               cfg.auto_share_user_ids AS auto_share_user_ids
         `,
         {
           ownerId: params.ownerId,
           namespace: params.namespace,
-          autoShare: next.auto_share,
-          autoSharePermission: next.auto_share_permission,
-          autoShareUserIds: next.auto_share_user_ids,
+          autoShare: params.auto_share ?? null,
+          autoSharePermission: params.auto_share_permission ?? null,
+          autoShareUserIds: params.auto_share_user_ids ?? null,
           now: new Date().toISOString(),
         },
       );
-      return next;
+      const record = result.records[0];
+      if (!record) {
+        return {
+          namespace: params.namespace,
+          auto_share: false,
+          auto_share_permission: "read",
+          auto_share_user_ids: [],
+        };
+      }
+
+      const permission =
+        (record.get("auto_share_permission") as AutoSharePermission | null) ??
+        "read";
+      const userIds = record.get("auto_share_user_ids") as string[] | null;
+      return {
+        namespace: params.namespace,
+        auto_share: (record.get("auto_share") as boolean | null) ?? false,
+        auto_share_permission:
+          permission === "write" || permission === "read" ? permission : "read",
+        auto_share_user_ids: Array.isArray(userIds) ? userIds : [],
+      };
     } finally {
       await session.close();
     }
@@ -792,6 +837,43 @@ export class Neo4jClient {
         `,
         { resourceId, targetUserId, role, now },
       );
+    } finally {
+      await session.close();
+    }
+  }
+
+  async shareResourceWithUsers(params: {
+    resourceId: string;
+    targetUserIds: string[];
+    role: "viewer" | "editor";
+  }): Promise<string[]> {
+    const dedupedTargetUserIds = [...new Set(params.targetUserIds)];
+    if (dedupedTargetUserIds.length === 0) return [];
+
+    const now = new Date().toISOString();
+    const session = this.driver.session();
+    try {
+      const result = await session.run(
+        `
+        MATCH (r:Resource {id: $resourceId})
+        WITH r, $targetUserIds AS targetUserIds
+        UNWIND targetUserIds AS targetUserId
+        MATCH (u:User {id: targetUserId})
+        MERGE (u)-[acc:HAS_ACCESS]->(r)
+        SET acc.role = $role, acc.granted_at = $now
+        RETURN DISTINCT u.id AS user_id
+        `,
+        {
+          resourceId: params.resourceId,
+          targetUserIds: dedupedTargetUserIds,
+          role: params.role,
+          now,
+        },
+      );
+      const sharedUserIds = new Set(
+        result.records.map((record) => record.get("user_id") as string),
+      );
+      return dedupedTargetUserIds.filter((id) => sharedUserIds.has(id));
     } finally {
       await session.close();
     }

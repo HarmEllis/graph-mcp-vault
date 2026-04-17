@@ -1963,6 +1963,102 @@ describe("namespace auto-share config", () => {
     );
     expect(parseToolSuccess(getBody).role).toBe("viewer");
   });
+
+  it("updates namespace config without per-user getUser lookups", async () => {
+    const owner = uniqueUser("ns-config-batch-owner");
+    const targetA = uniqueUser("ns-config-batch-target-a");
+    const targetB = uniqueUser("ns-config-batch-target-b");
+
+    await neo4jClient.upsertUserProfile(owner, "Owner", "owner@batch.dev");
+    await neo4jClient.upsertUserProfile(targetA, "Target A", "a@batch.dev");
+    await neo4jClient.upsertUserProfile(targetB, "Target B", "b@batch.dev");
+
+    const ownerSid = await openSession(owner, "batch-ns");
+    const getUserSpy = vi
+      .spyOn(neo4jClient, "getUser")
+      .mockRejectedValue(
+        new Error(
+          "knowledge_update_namespace_config must not call getUser per target",
+        ),
+      );
+
+    try {
+      const { status, body } = await callTool(
+        "knowledge_update_namespace_config",
+        {
+          auto_share: true,
+          auto_share_permission: "read",
+          auto_share_user_ids: [targetA, targetB],
+        },
+        owner,
+        ownerSid,
+      );
+
+      expect(status).toBe(200);
+      const data = parseToolSuccess(body);
+      expect(data.auto_share).toBe(true);
+      expect(data.auto_share_user_ids).toEqual([targetA, targetB]);
+      expect(getUserSpy).not.toHaveBeenCalled();
+    } finally {
+      getUserSpy.mockRestore();
+    }
+  });
+
+  it("auto-share on create does not perform per-user getUser lookups", async () => {
+    const owner = uniqueUser("auto-share-batch-owner");
+    const targetA = uniqueUser("auto-share-batch-target-a");
+    const targetB = uniqueUser("auto-share-batch-target-b");
+
+    await neo4jClient.upsertUserProfile(owner, "Owner", "owner@autobatch.dev");
+    await neo4jClient.upsertUserProfile(targetA, "Target A", "a@autobatch.dev");
+    await neo4jClient.upsertUserProfile(targetB, "Target B", "b@autobatch.dev");
+
+    const ownerSid = await openSession(owner, "auto-share-batch-ns");
+    const { status: updateStatus } = await callTool(
+      "knowledge_update_namespace_config",
+      {
+        auto_share: true,
+        auto_share_permission: "read",
+        auto_share_user_ids: [targetA, targetB],
+      },
+      owner,
+      ownerSid,
+    );
+    expect(updateStatus).toBe(200);
+
+    const getUserSpy = vi
+      .spyOn(neo4jClient, "getUser")
+      .mockRejectedValue(
+        new Error(
+          "knowledge_create_entry auto-share must not call getUser per target",
+        ),
+      );
+
+    try {
+      const { status, body } = await callTool(
+        "knowledge_create_entry",
+        {
+          entry_type: "note",
+          title: "Batched Auto Share",
+          content: "payload",
+        },
+        owner,
+        ownerSid,
+      );
+
+      expect(status).toBe(200);
+      const created = parseToolSuccess(body);
+      const autoShare = created.auto_share as
+        | Record<string, unknown>
+        | undefined;
+      expect(autoShare?.enabled).toBe(true);
+      expect(autoShare?.shared_with_count).toBe(2);
+      expect(autoShare?.shared_with).toEqual([targetA, targetB]);
+      expect(getUserSpy).not.toHaveBeenCalled();
+    } finally {
+      getUserSpy.mockRestore();
+    }
+  });
 });
 
 // ── Full lifecycle ────────────────────────────────────────────────────────────

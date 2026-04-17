@@ -89,6 +89,8 @@ async function makeToken(
     name?: string;
     /** Optional OIDC email claim */
     email?: string;
+    /** Optional OIDC email_verified claim */
+    email_verified?: boolean;
     /** Optional OIDC preferred_username claim */
     preferred_username?: string;
     /** Optional OIDC given_name claim */
@@ -101,6 +103,8 @@ async function makeToken(
   const extra: Record<string, unknown> = {};
   if (opts.name !== undefined) extra.name = opts.name;
   if (opts.email !== undefined) extra.email = opts.email;
+  if (opts.email_verified !== undefined)
+    extra.email_verified = opts.email_verified;
   if (opts.preferred_username !== undefined)
     extra.preferred_username = opts.preferred_username;
   if (opts.given_name !== undefined) extra.given_name = opts.given_name;
@@ -348,6 +352,26 @@ describe("validateBearerToken", () => {
 
     expect(result.name).toBe("Alice Smith");
     expect(result.email).toBe("alice@example.com");
+  });
+
+  it("returns null for email when email_verified is false", async () => {
+    const jwks = await buildJwks([{ key: publicKey1, kid: KID_1 }]);
+    stubFetch(jwks);
+    const client = freshClient();
+
+    const token = await makeToken({
+      name: "Alice Smith",
+      email: "alice@example.com",
+      email_verified: false,
+    });
+    const result = await validateBearerToken(
+      `Bearer ${token}`,
+      testConfig,
+      client,
+    );
+
+    expect(result.name).toBe("Alice Smith");
+    expect(result.email).toBeNull();
   });
 
   it("returns null for name and email when those claims are absent", async () => {

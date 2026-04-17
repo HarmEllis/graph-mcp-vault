@@ -2,7 +2,7 @@ import neo4j, { type Driver } from "neo4j-driver";
 
 // ── Current schema version ────────────────────────────────────────────────────
 
-const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 4;
 
 // ── Base schema statements (idempotent, version-independent) ──────────────────
 
@@ -160,6 +160,9 @@ export async function initSchema(driver: Driver): Promise<void> {
     version = 4;
   }
 
-  // Keep this assignment to make intent explicit and prevent accidental drift.
-  void SCHEMA_VERSION;
+  if (version !== SCHEMA_VERSION) {
+    throw new Error(
+      `Schema version mismatch: expected ${SCHEMA_VERSION}, got ${version}`,
+    );
+  }
 }
