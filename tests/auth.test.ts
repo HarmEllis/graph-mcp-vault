@@ -34,7 +34,6 @@ const testConfig: Config = {
   oidcDiscoveryUrl: undefined,
   publicUrl: "http://localhost:8000",
   scopesAllowlist: undefined,
-  injectMissingScope: false,
 };
 
 beforeAll(async () => {

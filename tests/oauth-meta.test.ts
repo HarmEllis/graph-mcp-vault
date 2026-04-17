@@ -117,7 +117,6 @@ function buildApp(
   ttlMs = 3_600_000,
   scopesAllowlist?: string[],
   discoveryUrl?: string,
-  injectMissingScope = false,
 ): { app: Hono; client: OidcMetadataClient } {
   const client = new OidcMetadataClient(ISSUER, ttlMs, discoveryUrl);
   const router = createOAuthMetaRouter(
@@ -126,7 +125,6 @@ function buildApp(
     ISSUER,
     CLIENT_ID,
     scopesAllowlist,
-    injectMissingScope,
   );
   const app = new Hono();
   app.route("/", router);
@@ -379,7 +377,11 @@ describe("scopes_supported behavior", () => {
     // This keeps scopes_supported consistent with the DCR scope field so
     // clients (e.g. Opencode) don't reject scopes that the upstream treats as
     // always-on defaults rather than requestable optional scopes.
-    expect(body.scopes_supported).toEqual(["openid", "email", "offline_access"]);
+    expect(body.scopes_supported).toEqual([
+      "openid",
+      "email",
+      "offline_access",
+    ]);
   });
 
   it("with allowlist: returns the full allowlist even for scopes absent from upstream", async () => {
@@ -537,111 +539,18 @@ describe("POST /clients", () => {
   });
 });
 
-// ── INJECT_MISSING_SCOPE — authorization proxy ────────────────────────────────
-
-describe("GET /authorize (scope injection proxy)", () => {
-  it("returns 404 when injectMissingScope is disabled (default)", async () => {
-    const { app } = buildApp(); // injectMissingScope defaults to false
+describe("GET /authorize", () => {
+  it("returns 404 (scope-injection proxy removed)", async () => {
+    const { app } = buildApp();
 
     const res = await app.request("/authorize?response_type=code&client_id=x");
 
     expect(res.status).toBe(404);
   });
 
-  it("redirects to the upstream authorization_endpoint when enabled", async () => {
+  it("keeps the upstream authorization_endpoint in AS metadata", async () => {
     stubFetch(UPSTREAM_METADATA);
-    const { app } = buildApp(3_600_000, undefined, undefined, true);
-
-    const res = await app.request(
-      "/authorize?response_type=code&client_id=x&scope=openid",
-    );
-
-    expect(res.status).toBe(302);
-    const location = res.headers.get("location") ?? "";
-    expect(location.startsWith(UPSTREAM_METADATA.authorization_endpoint)).toBe(
-      true,
-    );
-  });
-
-  it("injects 'openid' scope when the client omits scope and no allowlist is set", async () => {
-    stubFetch(UPSTREAM_METADATA);
-    const { app } = buildApp(3_600_000, undefined, undefined, true);
-
-    const res = await app.request("/authorize?response_type=code&client_id=x");
-
-    const location = new URL(res.headers.get("location") ?? "http://x");
-    expect(location.searchParams.get("scope")).toBe("openid");
-  });
-
-  it("injects the allowlist as scope when the client omits scope", async () => {
-    stubFetch(UPSTREAM_METADATA);
-    const { app } = buildApp(
-      3_600_000,
-      ["openid", "profile", "email"],
-      undefined,
-      true,
-    );
-
-    const res = await app.request("/authorize?response_type=code&client_id=x");
-
-    const location = new URL(res.headers.get("location") ?? "http://x");
-    expect(location.searchParams.get("scope")).toBe("openid profile email");
-  });
-
-  it("preserves an existing scope when the client already includes it", async () => {
-    stubFetch(UPSTREAM_METADATA);
-    const { app } = buildApp(
-      3_600_000,
-      ["openid", "profile", "email"],
-      undefined,
-      true,
-    );
-
-    const res = await app.request(
-      "/authorize?response_type=code&client_id=x&scope=openid+offline_access",
-    );
-
-    const location = new URL(res.headers.get("location") ?? "http://x");
-    expect(location.searchParams.get("scope")).toBe("openid offline_access");
-  });
-
-  it("forwards all original query parameters to the upstream", async () => {
-    stubFetch(UPSTREAM_METADATA);
-    const { app } = buildApp(3_600_000, undefined, undefined, true);
-
-    const res = await app.request(
-      "/authorize?response_type=code&client_id=x&state=abc&code_challenge=xyz&code_challenge_method=S256",
-    );
-
-    const location = new URL(res.headers.get("location") ?? "http://x");
-    expect(location.searchParams.get("response_type")).toBe("code");
-    expect(location.searchParams.get("client_id")).toBe("x");
-    expect(location.searchParams.get("state")).toBe("abc");
-    expect(location.searchParams.get("code_challenge")).toBe("xyz");
-  });
-
-  it("returns 502 when upstream metadata is unavailable", async () => {
-    stubFetch({}, { ok: false, status: 503 });
-    const { app } = buildApp(3_600_000, undefined, undefined, true);
-
-    const res = await app.request("/authorize?response_type=code&client_id=x");
-
-    expect(res.status).toBe(502);
-  });
-
-  it("overrides authorization_endpoint in AS metadata when enabled", async () => {
-    stubFetch(UPSTREAM_METADATA);
-    const { app } = buildApp(3_600_000, undefined, undefined, true);
-
-    const res = await app.request("/.well-known/oauth-authorization-server");
-    const body = await res.json();
-
-    expect(body.authorization_endpoint).toBe(`${PUBLIC_URL}/authorize`);
-  });
-
-  it("keeps the upstream authorization_endpoint in AS metadata when disabled", async () => {
-    stubFetch(UPSTREAM_METADATA);
-    const { app } = buildApp(); // disabled
+    const { app } = buildApp();
 
     const res = await app.request("/.well-known/oauth-authorization-server");
     const body = await res.json();

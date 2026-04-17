@@ -51,7 +51,6 @@ const BASE_CONFIG: Config = {
   oidcDiscoveryUrl: undefined,
   publicUrl: "http://localhost:8000",
   scopesAllowlist: undefined,
-  injectMissingScope: false,
 };
 
 let container: StartedTestContainer;

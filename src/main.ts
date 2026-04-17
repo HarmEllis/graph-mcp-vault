@@ -89,7 +89,6 @@ app.route(
     config.oidcIssuer,
     config.oidcAudience,
     config.scopesAllowlist,
-    config.injectMissingScope,
   ),
 );
 const tools = [
