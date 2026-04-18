@@ -139,4 +139,17 @@ describe("parseConfig", () => {
       parseConfig({ ...required, PUBLIC_URL: "not-a-url" }),
     ).toThrow();
   });
+
+  // ── DEFAULT_NAMESPACE format ────────────────────────────────────────────────
+
+  it("throws when DEFAULT_NAMESPACE does not match the strict format", () => {
+    expect(() =>
+      parseConfig({ ...required, DEFAULT_NAMESPACE: "My_NS" }),
+    ).toThrow();
+  });
+
+  it("accepts a hyphenated DEFAULT_NAMESPACE", () => {
+    const config = parseConfig({ ...required, DEFAULT_NAMESPACE: "foo-bar" });
+    expect(config.defaultNamespace).toBe("foo-bar");
+  });
 });

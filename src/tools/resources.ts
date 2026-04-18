@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { ErrorCode } from "../errors.js";
+import { zNamespace } from "../namespace.js";
 import {
   ENTRY_RELATION_TYPE_REGEX,
   type EntryRelationDirection,
@@ -95,7 +96,7 @@ const createSchema = z
     entry_type: z.string().min(1),
     title: z.string().min(1),
     content: z.string(),
-    namespace: z.string().optional(),
+    namespace: zNamespace.optional(),
   })
   .merge(metadataSchema);
 
@@ -206,7 +207,7 @@ async function handleGet(
 // ── knowledge_list_entries ────────────────────────────────────────────────────
 
 const listSchema = z.object({
-  namespace: z.string().optional(),
+  namespace: zNamespace.optional(),
   entry_type: z.string().optional(),
   limit: z.number().int().positive().optional(),
   skip: z.number().int().min(0).optional(),
@@ -244,7 +245,7 @@ const updateSchema = z
     title: z.string().min(1).optional(),
     content: z.string().optional(),
     entry_type: z.string().min(1).optional(),
-    namespace: z.string().min(1).optional(),
+    namespace: zNamespace.optional(),
   })
   .merge(metadataSchema);
 
@@ -319,7 +320,7 @@ async function handleDelete(
 
 const searchSchema = z.object({
   query: z.string().min(1),
-  namespace: z.string().optional(),
+  namespace: zNamespace.optional(),
   all_namespaces: z.boolean().optional(),
   entry_type: z.string().optional(),
   limit: z.number().int().positive().optional(),

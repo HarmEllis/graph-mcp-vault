@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { NAMESPACE_ERROR_MESSAGE, NAMESPACE_REGEX } from "./namespace.js";
 
 const envSchema = z.object({
   OIDC_ISSUER: z.string().url(),
@@ -12,7 +13,10 @@ const envSchema = z.object({
   NEO4J_PASSWORD: z.string().min(1),
   HOST: z.string().default("0.0.0.0"),
   PORT: z.coerce.number().int().positive().default(8000),
-  DEFAULT_NAMESPACE: z.string().default("default"),
+  DEFAULT_NAMESPACE: z
+    .string()
+    .regex(NAMESPACE_REGEX, NAMESPACE_ERROR_MESSAGE)
+    .default("default"),
   LOG_LEVEL: z
     .enum(["trace", "debug", "info", "warn", "error"])
     .default("info"),

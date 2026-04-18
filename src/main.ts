@@ -45,7 +45,7 @@ const driver = neo4j.driver(
   config.neo4jUri,
   neo4j.auth.basic(config.neo4jUser, config.neo4jPassword),
 );
-await initSchema(driver);
+await initSchema(driver, logger);
 const _neo4jClient = new Neo4jClient(driver);
 
 // ── Auth + sessions ───────────────────────────────────────────────────────────

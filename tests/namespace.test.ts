@@ -436,3 +436,77 @@ describe("SESSION_NAMESPACE_CONFLICT", () => {
     expect(status).toBe(200);
   });
 });
+
+// ── strict namespace format ───────────────────────────────────────────────────
+
+describe("strict namespace format", () => {
+  it("rejects POST /mcp/My_NS with HTTP 400 invalid_namespace", async () => {
+    const token = await makeToken(uid("bad-url"));
+    const res = await app.request("/mcp/My_NS", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-03-26",
+          capabilities: {},
+          clientInfo: { name: "t", version: "1" },
+        },
+      }),
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body.error).toBe("invalid_namespace");
+  });
+
+  it("rejects an invalid _meta.namespace with INVALID_PARAMS", async () => {
+    const token = await makeToken(uid("bad-meta"));
+    const res = await app.request("/mcp", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-03-26",
+          capabilities: {},
+          clientInfo: { name: "t", version: "1" },
+          meta: { namespace: "Bad NS" },
+        },
+      }),
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect((body.error as Record<string, unknown>).code).toBe(
+      ErrorCode.INVALID_PARAMS,
+    );
+  });
+
+  it("rejects a tool call with a non-conforming namespace arg", async () => {
+    const sub = uid("bad-tool-arg");
+    const sid = await openSession(sub);
+    const { body } = await callTool(
+      "knowledge_list_entries",
+      { namespace: "Bad_NS" },
+      sub,
+      sid,
+    );
+    const result = body.result as Record<string, unknown>;
+    expect(result.isError).toBe(true);
+    const content = result.content as Array<{ type: string; text: string }>;
+    const parsed = JSON.parse(content[0]?.text ?? "") as {
+      code: number;
+      message: string;
+    };
+    expect(parsed.code).toBe(ErrorCode.INVALID_PARAMS);
+  });
+});

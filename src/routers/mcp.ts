@@ -5,6 +5,7 @@ import { type JwksClient, validateBearerToken } from "../auth.js";
 import type { Config } from "../config.js";
 import { ErrorCode, makeJsonRpcError } from "../errors.js";
 import { type Logger, noopLogger } from "../logger.js";
+import { NAMESPACE_ERROR_MESSAGE, NAMESPACE_REGEX } from "../namespace.js";
 import type { Neo4jClient } from "../neo4j-client.js";
 import type { SessionStore } from "../session.js";
 import {
@@ -214,6 +215,18 @@ export function createMcpRouter(
       });
       return withCorsHeaders(
         c.json({ error: "forbidden" }, 403),
+        cors.allowOrigin,
+      );
+    }
+
+    // 1b. Validate URL namespace format (path-level reject before auth/parse)
+    if (urlNamespace !== undefined && !NAMESPACE_REGEX.test(urlNamespace)) {
+      logger.warn("invalid_namespace", { requestId, urlNamespace });
+      return withCorsHeaders(
+        c.json(
+          { error: "invalid_namespace", message: NAMESPACE_ERROR_MESSAGE },
+          400,
+        ),
         cors.allowOrigin,
       );
     }
@@ -671,6 +684,23 @@ export function createMcpRouter(
     })();
 
     const namespace = metaNamespace ?? urlNamespace ?? config.defaultNamespace;
+    if (!NAMESPACE_REGEX.test(namespace)) {
+      logger.warn("invalid_namespace", {
+        requestId,
+        userId,
+        namespace,
+        source: metaNamespace !== undefined ? "meta" : "default",
+      });
+      return {
+        response: makeJsonRpcError(
+          id,
+          ErrorCode.INVALID_PARAMS,
+          NAMESPACE_ERROR_MESSAGE,
+        ),
+        sessionId: null,
+        httpStatus: 400,
+      };
+    }
     const sessionId = sessionStore.create(userId, namespace);
 
     await neo4jClient.upsertUserProfile(userId, name, email);

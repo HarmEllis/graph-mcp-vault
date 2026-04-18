@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { ErrorCode } from "../errors.js";
+import { zNamespace } from "../namespace.js";
 import type { AutoSharePermission, Neo4jClient } from "../neo4j-client.js";
 import {
   type RegisteredTool,
@@ -8,7 +9,7 @@ import {
 } from "./registry.js";
 
 const getNamespaceConfigSchema = z.object({
-  namespace: z.string().min(1).optional(),
+  namespace: zNamespace.optional(),
 });
 
 async function handleGetNamespaceConfig(
@@ -29,7 +30,7 @@ async function handleGetNamespaceConfig(
 
 const updateNamespaceConfigSchema = z
   .object({
-    namespace: z.string().min(1).optional(),
+    namespace: zNamespace.optional(),
     auto_share: z.boolean().optional(),
     auto_share_permission: z.enum(["read", "write"]).optional(),
     auto_share_user_ids: z.array(z.string().min(1)).max(500).optional(),
