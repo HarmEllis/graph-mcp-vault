@@ -5,6 +5,20 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.11] - 2026-04-18
+
+Patches multiple CVEs in npm transitive dependencies and Docker OS packages.
+
+### Security
+
+- Override `tar` to `>=7.5.11` to fix CVE-2026-31802 (HIGH) and CVE-2026-29786 (HIGH): symlink/hardlink path traversal during tar extraction.
+- Override `minimatch` to `>=9.0.7` to fix CVE-2026-27904 (HIGH) and CVE-2026-27903 (HIGH): catastrophic backtracking / unbounded recursion DoS.
+- Override `picomatch` to `>=4.0.4` to fix CVE-2026-33671 (HIGH, ReDoS) and CVE-2026-33672 (MEDIUM, method injection).
+- Override `brace-expansion` to `>=2.0.3` to fix CVE-2026-33750 (MEDIUM): DoS via zero step value.
+- Add `apt-get upgrade` to both Dockerfile stages so OS packages (zlib, util-linux, etc.) receive available security patches on every image rebuild.
+
+**Full Changelog**: https://github.com/HarmEllis/graph-mcp-vault/compare/v0.0.10...v0.0.11
+
 ## [0.0.10] - 2026-04-18
 
 Hardens security across the board with JWKS throttling, a UTF-8 body guard, isolated Docker networks, and a dev/prod stack split. Enforces a strict namespace format with auto-migration, adds user-lookup and namespace auto-share capabilities, and patches a critical CVE in a transitive dependency.
