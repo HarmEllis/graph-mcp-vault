@@ -38,6 +38,11 @@ const BASE_CONFIG: Config = {
   oidcIssuer: ISSUER,
   oidcAudience: AUDIENCE,
   jwksCacheTtl: 3600,
+  jwksForceRefreshMinIntervalMs: 30_000,
+  jwksFetchTimeoutMs: 5_000,
+  jwksAllowStaleOnError: false,
+  maxTokenLifetimeSeconds: 3600,
+  maxRequestBodyBytes: 262144,
   metadataCacheTtl: 3600,
   neo4jUri: "bolt://localhost:7687",
   neo4jUser: "neo4j",
@@ -220,6 +225,98 @@ describe("authentication", () => {
         Authorization: `Bearer ${expiredToken}`,
       },
     );
+    expect(res.status).toBe(401);
+  });
+});
+
+// ── Content-Type enforcement ──────────────────────────────────────────────────
+
+describe("Content-Type enforcement", () => {
+  it("returns 415 when Content-Type is missing", async () => {
+    const { app } = buildApp();
+    const res = await app.request("/mcp", {
+      method: "POST",
+      body: '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}',
+    });
+    expect(res.status).toBe(415);
+  });
+
+  it("returns 415 when Content-Type is text/plain", async () => {
+    const { app } = buildApp();
+    const res = await app.request("/mcp", {
+      method: "POST",
+      headers: { "Content-Type": "text/plain" },
+      body: '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}',
+    });
+    expect(res.status).toBe(415);
+  });
+
+  it("returns 415 when Content-Type is application/x-www-form-urlencoded", async () => {
+    const { app } = buildApp();
+    const res = await app.request("/mcp", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: "jsonrpc=2.0&method=initialize",
+    });
+    expect(res.status).toBe(415);
+  });
+});
+
+// ── Request body size limit ───────────────────────────────────────────────────
+
+describe("request body size limit", () => {
+  it("returns 413 when body exceeds MAX_REQUEST_BODY_BYTES", async () => {
+    stubJwks();
+    const token = await makeToken();
+    const { app } = buildApp({ maxRequestBodyBytes: 100 });
+
+    const res = await app.request("/mcp", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ping", params: { padding: "x".repeat(200) } }),
+    });
+
+    expect(res.status).toBe(413);
+  });
+
+  it("returns 413 when UTF-8 bytes exceed limit but string length does not", async () => {
+    stubJwks();
+    const token = await makeToken();
+    const payload = {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "ping",
+      params: { padding: "€".repeat(100) },
+    };
+    const rawBody = JSON.stringify(payload);
+    const stringLengthLimit = rawBody.length + 5;
+    expect(Buffer.byteLength(rawBody, "utf8")).toBeGreaterThan(stringLengthLimit);
+
+    const { app } = buildApp({ maxRequestBodyBytes: stringLengthLimit });
+    const res = await app.request("/mcp", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: rawBody,
+    });
+
+    expect(res.status).toBe(413);
+  });
+
+  it("returns 401, not 413, when token is missing even with an oversized body", async () => {
+    const { app } = buildApp({ maxRequestBodyBytes: 10 });
+
+    const res = await app.request("/mcp", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "x".repeat(200),
+    });
+
     expect(res.status).toBe(401);
   });
 });
