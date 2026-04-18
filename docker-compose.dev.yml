@@ -1,0 +1,53 @@
+services:
+  neo4j:
+    image: neo4j:5-community
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD}
+    volumes:
+      - neo4j_data:/data
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    healthcheck:
+      # Use wget — neo4j:5-community includes wget but not curl
+      test: ["CMD", "sh", "-c", "wget -q --spider http://localhost:7474 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.1
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
+    volumes:
+      - ./docker/keycloak/realm-dev.json:/opt/keycloak/data/import/realm-dev.json:ro
+    ports:
+      - "8081:8080"
+    restart: unless-stopped
+
+  graph-mcp-vault:
+    build: .
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # Hardcoded to the bundled Keycloak dev realm — not overridable via .env
+      OIDC_ISSUER: "http://localhost:8081/realms/graph-mcp-vault"
+      OIDC_AUDIENCE: "graph-mcp-vault"
+      # Internal URL used by the server to fetch JWKS within the Docker network
+      OIDC_DISCOVERY_URL: "http://keycloak:8080/realms/graph-mcp-vault/.well-known/openid-configuration"
+      SCOPES_ALLOWLIST: "openid,profile,email"
+    ports:
+      - "8000:8000"
+    depends_on:
+      neo4j:
+        condition: service_healthy
+      keycloak:
+        condition: service_started
+    restart: unless-stopped
+
+volumes:
+  neo4j_data:

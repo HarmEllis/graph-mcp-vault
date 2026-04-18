@@ -60,11 +60,18 @@ export class AuthError extends Error {
 export class JwksClient {
   private keys: Map<string, KeyLike> = new Map();
   private fetchedAt = 0;
+  private lastForceRefreshAt = 0;
 
   constructor(
     private readonly jwksUri: string,
     /** Cache TTL in milliseconds. */
     private readonly ttlMs: number,
+    /** Minimum milliseconds between forced refreshes (flood protection). */
+    private readonly forceRefreshMinIntervalMs = 30_000,
+    /** Timeout in milliseconds for JWKS fetch requests. */
+    private readonly fetchTimeoutMs = 5_000,
+    /** When true, a stale cache is served on fetch error instead of throwing. */
+    private readonly allowStaleOnError = false,
   ) {}
 
   /** Returns the key for the given `kid`, fetching JWKS if the cache is stale. */
@@ -75,9 +82,17 @@ export class JwksClient {
     return this.keys.get(kid) ?? null;
   }
 
-  /** Forces an unconditional JWKS re-fetch, replacing the current cache. */
+  /**
+   * Forces a JWKS re-fetch, throttled to at most once per `forceRefreshMinIntervalMs`.
+   * A no-op if called again within the throttle window.
+   */
   async forceRefresh(): Promise<void> {
+    const now = Date.now();
+    if (now - this.lastForceRefreshAt < this.forceRefreshMinIntervalMs) return;
     await this.refresh();
+    // Record timestamp only after a successful fetch so a transient JWKS error
+    // does not lock out legitimate retries for the full throttle window.
+    this.lastForceRefreshAt = now;
   }
 
   private isCacheValid(): boolean {
@@ -85,8 +100,19 @@ export class JwksClient {
   }
 
   private async refresh(): Promise<void> {
-    const resp = await fetch(this.jwksUri);
+    let resp: Response;
+    try {
+      resp = await fetch(this.jwksUri, {
+        signal: AbortSignal.timeout(this.fetchTimeoutMs),
+      });
+    } catch (err) {
+      if (this.allowStaleOnError && this.keys.size > 0) return;
+      throw new AuthError(
+        `JWKS fetch failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
     if (!resp.ok) {
+      if (this.allowStaleOnError && this.keys.size > 0) return;
       throw new AuthError(`JWKS fetch failed with HTTP ${resp.status}`);
     }
     const doc = (await resp.json()) as JwksDocument;
@@ -153,6 +179,15 @@ export async function validateBearerToken(
     });
 
     if (!payload.sub) throw new AuthError("JWT is missing the sub claim");
+
+    if (
+      typeof payload.exp === "number" &&
+      typeof payload.iat === "number" &&
+      payload.exp - payload.iat > config.maxTokenLifetimeSeconds
+    ) {
+      throw new AuthError("Token lifetime exceeds maximum allowed");
+    }
+
     const payloadRecord = payload as Record<string, unknown>;
     const name = resolveNameClaim(payloadRecord);
     const email = resolveEmailClaim(payloadRecord);

@@ -152,4 +152,57 @@ describe("parseConfig", () => {
     const config = parseConfig({ ...required, DEFAULT_NAMESPACE: "foo-bar" });
     expect(config.defaultNamespace).toBe("foo-bar");
   });
+
+  // ── New hardening fields ────────────────────────────────────────────────────
+
+  it("maxRequestBodyBytes defaults to 262144", () => {
+    const config = parseConfig(required);
+    expect(config.maxRequestBodyBytes).toBe(262144);
+  });
+
+  it("accepts a custom MAX_REQUEST_BODY_BYTES", () => {
+    const config = parseConfig({ ...required, MAX_REQUEST_BODY_BYTES: "1048576" });
+    expect(config.maxRequestBodyBytes).toBe(1048576);
+  });
+
+  it("jwksForceRefreshMinIntervalMs defaults to 30000 ms", () => {
+    const config = parseConfig(required);
+    expect(config.jwksForceRefreshMinIntervalMs).toBe(30_000);
+  });
+
+  it("jwksForceRefreshMinIntervalMs converts seconds to ms", () => {
+    const config = parseConfig({ ...required, JWKS_FORCE_REFRESH_MIN_INTERVAL_SECONDS: "60" });
+    expect(config.jwksForceRefreshMinIntervalMs).toBe(60_000);
+  });
+
+  it("jwksFetchTimeoutMs defaults to 5000", () => {
+    const config = parseConfig(required);
+    expect(config.jwksFetchTimeoutMs).toBe(5000);
+  });
+
+  it("jwksAllowStaleOnError defaults to false", () => {
+    const config = parseConfig(required);
+    expect(config.jwksAllowStaleOnError).toBe(false);
+  });
+
+  it("jwksAllowStaleOnError is true when JWKS_ALLOW_STALE_ON_ERROR=true", () => {
+    const config = parseConfig({ ...required, JWKS_ALLOW_STALE_ON_ERROR: "true" });
+    expect(config.jwksAllowStaleOnError).toBe(true);
+  });
+
+  it("maxTokenLifetimeSeconds defaults to 3600", () => {
+    const config = parseConfig(required);
+    expect(config.maxTokenLifetimeSeconds).toBe(3600);
+  });
+
+  it("accepts a custom MAX_TOKEN_LIFETIME_SECONDS", () => {
+    const config = parseConfig({ ...required, MAX_TOKEN_LIFETIME_SECONDS: "7200" });
+    expect(config.maxTokenLifetimeSeconds).toBe(7200);
+  });
+
+  it("throws when JWKS_ALLOW_STALE_ON_ERROR is not true or false", () => {
+    expect(() =>
+      parseConfig({ ...required, JWKS_ALLOW_STALE_ON_ERROR: "yes" }),
+    ).toThrow();
+  });
 });

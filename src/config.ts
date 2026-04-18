@@ -7,6 +7,15 @@ const envSchema = z.object({
   OIDC_DISCOVERY_URL: z.string().url().optional(),
   PUBLIC_URL: z.string().url().optional(),
   JWKS_CACHE_TTL: z.coerce.number().int().positive().default(3600),
+  JWKS_FORCE_REFRESH_MIN_INTERVAL_SECONDS: z.coerce
+    .number()
+    .int()
+    .nonnegative()
+    .default(30),
+  JWKS_FETCH_TIMEOUT_MS: z.coerce.number().int().positive().default(5000),
+  JWKS_ALLOW_STALE_ON_ERROR: z.enum(["true", "false"]).default("false"),
+  MAX_TOKEN_LIFETIME_SECONDS: z.coerce.number().int().positive().default(3600),
+  MAX_REQUEST_BODY_BYTES: z.coerce.number().int().positive().default(262144),
   METADATA_CACHE_TTL: z.coerce.number().int().positive().default(3600),
   NEO4J_URI: z.string().min(1),
   NEO4J_USER: z.string().min(1),
@@ -30,6 +39,12 @@ export interface Config {
   oidcDiscoveryUrl: string | undefined;
   publicUrl: string;
   jwksCacheTtl: number;
+  /** Minimum milliseconds between forced JWKS refreshes (flood protection). */
+  jwksForceRefreshMinIntervalMs: number;
+  jwksFetchTimeoutMs: number;
+  jwksAllowStaleOnError: boolean;
+  maxTokenLifetimeSeconds: number;
+  maxRequestBodyBytes: number;
   metadataCacheTtl: number;
   neo4jUri: string;
   neo4jUser: string;
@@ -56,6 +71,12 @@ export function parseConfig(env: Record<string, string | undefined>): Config {
     oidcDiscoveryUrl: parsed.OIDC_DISCOVERY_URL,
     publicUrl: parsed.PUBLIC_URL ?? `http://localhost:${parsed.PORT}`,
     jwksCacheTtl: parsed.JWKS_CACHE_TTL,
+    jwksForceRefreshMinIntervalMs:
+      parsed.JWKS_FORCE_REFRESH_MIN_INTERVAL_SECONDS * 1000,
+    jwksFetchTimeoutMs: parsed.JWKS_FETCH_TIMEOUT_MS,
+    jwksAllowStaleOnError: parsed.JWKS_ALLOW_STALE_ON_ERROR === "true",
+    maxTokenLifetimeSeconds: parsed.MAX_TOKEN_LIFETIME_SECONDS,
+    maxRequestBodyBytes: parsed.MAX_REQUEST_BODY_BYTES,
     metadataCacheTtl: parsed.METADATA_CACHE_TTL,
     neo4jUri: parsed.NEO4J_URI,
     neo4jUser: parsed.NEO4J_USER,

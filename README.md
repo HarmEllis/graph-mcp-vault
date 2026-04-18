@@ -11,7 +11,8 @@ MCP transport: **Streamable HTTP 2025-03-26** — JSON-only responses, no SSE.
 
 ## Contents
 
-- [Quick start](#quick-start)
+- [Quick start (development)](#quick-start-development)
+- [Production deployment](#production-deployment)
 - [Environment variables](#environment-variables)
 - [Authentication](#authentication)
 - [Namespaces](#namespaces)
@@ -25,15 +26,17 @@ MCP transport: **Streamable HTTP 2025-03-26** — JSON-only responses, no SSE.
 
 ---
 
-## Quick start
+## Quick start (development)
+
+Uses `docker-compose.dev.yml` which builds the server locally and includes a Keycloak dev realm for testing.
 
 ```bash
 # 1. Copy and fill in your environment
 cp .env.example .env
 $EDITOR .env          # set at least NEO4J_PASSWORD
 
-# 2. Start Neo4j + Keycloak + the server
-docker compose up -d
+# 2. Start Neo4j + Keycloak + the server (local build)
+docker compose -f docker-compose.dev.yml up -d
 
 # 3. Verify the OAuth metadata endpoint
 curl http://localhost:8000/.well-known/oauth-authorization-server
@@ -57,6 +60,33 @@ curl -i -X POST http://localhost:8000/mcp \
 
 On first boot the server runs schema initialisation and migrations against Neo4j (idempotent, safe to restart).
 
+> **Migrating from an older version?** The development stack file was renamed from `docker-compose.yml` to `docker-compose.dev.yml`. Replace `docker compose up -d` with `docker compose -f docker-compose.dev.yml up -d` in your scripts.
+
+---
+
+## Production deployment
+
+`docker-compose.yml` is the production stack. It requires a Bring-Your-Own OIDC provider (Pocket ID, Auth0, Keycloak, etc.) and creates isolated Docker networks so Neo4j is not reachable from outside the app.
+
+```bash
+cp .env.example .env
+$EDITOR .env   # set OIDC_ISSUER, OIDC_AUDIENCE, PUBLIC_URL, NEO4J_PASSWORD, ALLOWED_ORIGINS
+docker compose up -d
+```
+
+See `docker-compose.yml` for the full service definition and `docker-compose.dev.yml` for the development stack.
+
+### Minimum hardening checklist (Bunkerweb / reverse proxy)
+
+- [ ] TLS + HSTS enabled on the reverse proxy
+- [ ] Rate limit configured on `/mcp` (e.g. 60 req/min per IP)
+- [ ] Body size cap enforced at proxy level (align with `MAX_REQUEST_BODY_BYTES`)
+- [ ] Neo4j port not exposed to the host (`internal: true` network in `docker-compose.yml`)
+
+### Deployment notes
+
+- **In-memory sessions**: sessions are stored in-memory and are lost on restart. This is acceptable for single-instance deployments. No sticky sessions or shared session store are required.
+
 ---
 
 ## Environment variables
@@ -68,24 +98,22 @@ Copy `.env.example` to `.env` before running.
 | `OIDC_ISSUER` | yes | — | Base URL of your OIDC provider (e.g. `https://idp.example.com`) |
 | `OIDC_AUDIENCE` | yes | — | Expected `aud` claim in incoming JWTs (e.g. `graph-mcp-vault`) |
 | `JWKS_CACHE_TTL` | no | `3600` | Seconds to cache the provider's JWKS response |
+| `JWKS_FORCE_REFRESH_MIN_INTERVAL_SECONDS` | no | `30` | Minimum seconds between forced JWKS refreshes (flood protection) |
+| `JWKS_FETCH_TIMEOUT_MS` | no | `5000` | Timeout in milliseconds for JWKS fetch requests |
+| `JWKS_ALLOW_STALE_ON_ERROR` | no | `false` | Serve stale JWKS cache on fetch error instead of failing |
+| `MAX_TOKEN_LIFETIME_SECONDS` | no | `3600` | Maximum allowed token lifetime (`exp - iat`); longer tokens are rejected |
+| `MAX_REQUEST_BODY_BYTES` | no | `262144` | Maximum request body size in bytes (256 KiB); larger bodies return 413 |
 | `METADATA_CACHE_TTL` | no | `3600` | Seconds to cache the OpenID Connect discovery document |
 | `NEO4J_URI` | no | `bolt://neo4j:7687` | Bolt URI for Neo4j (use `bolt://localhost:7687` outside Docker) |
 | `NEO4J_USER` | no | `neo4j` | Neo4j username |
 | `NEO4J_PASSWORD` | yes | — | Neo4j password; also used to configure the neo4j Docker service |
-| `KEYCLOAK_ADMIN` | no | `admin` | Admin username for the bundled Keycloak dev container (Docker Compose only) |
-| `KEYCLOAK_ADMIN_PASSWORD` | no | `admin` | Admin password for the bundled Keycloak dev container (Docker Compose only) |
 | `HOST` | no | `0.0.0.0` | Bind address |
 | `PORT` | no | `8000` | Listen port |
+| `PUBLIC_URL` | no | `http://localhost:PORT` | Public URL of this server, used in OAuth metadata and `WWW-Authenticate` headers |
 | `DEFAULT_NAMESPACE` | no | `default` | Namespace used when none is specified at session open |
-| `LOG_LEVEL` | no | `info` | Log verbosity (`debug`, `info`, `warn`, `error`) |
+| `LOG_LEVEL` | no | `info` | Log verbosity (`trace`, `debug`, `info`, `warn`, `error`) |
 | `ALLOWED_ORIGINS` | no | `""` | Comma-separated CORS origins; `*` for any; empty = no cross-origin requests |
-| `SCOPES_ALLOWLIST` | no | provider scopes (fallback `openid`) | Comma-separated scopes exposed in OAuth metadata and DCR proxy (recommended: `openid,profile,email`) |
-
-When running with `docker compose`, if `OIDC_ISSUER` and `OIDC_AUDIENCE` are unset,
-the stack defaults to the bundled Keycloak development realm:
-
-- `OIDC_ISSUER=http://keycloak:8080/realms/graph-mcp-vault`
-- `OIDC_AUDIENCE=graph-mcp-vault`
+| `SCOPES_ALLOWLIST` | no | provider scopes (fallback `openid`) | Comma-separated scopes exposed in OAuth metadata (recommended: `openid,profile,email`) |
 
 ---
 
@@ -100,11 +128,12 @@ Authorization: Bearer <jwt>
 The server:
 
 1. Extracts the `kid` from the JWT header.
-2. Fetches the provider's JWKS from `{OIDC_ISSUER}/.well-known/jwks.json` (cached).
+2. Fetches the provider's JWKS from `{OIDC_ISSUER}/.well-known/jwks.json` (cached, TTL controlled by `JWKS_CACHE_TTL`).
 3. Verifies the RS256 signature, `iss`, `aud`, `exp`, and `nbf` (30 s clock tolerance).
-4. Uses the `sub` claim as the persistent user identity in Neo4j.
+4. Rejects tokens whose lifetime (`exp - iat`) exceeds `MAX_TOKEN_LIFETIME_SECONDS`.
+5. Uses the `sub` claim as the persistent user identity in Neo4j.
 
-An unknown `kid` triggers a one-time JWKS cache refresh before failing.
+An unknown `kid` triggers a one-time JWKS cache refresh before failing. Repeated unknown-`kid` requests are throttled via `JWKS_FORCE_REFRESH_MIN_INTERVAL_SECONDS` to prevent JWKS endpoint flooding.
 
 ---
 

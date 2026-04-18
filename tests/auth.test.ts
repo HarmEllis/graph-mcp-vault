@@ -22,6 +22,11 @@ const testConfig: Config = {
   oidcIssuer: ISSUER,
   oidcAudience: AUDIENCE,
   jwksCacheTtl: 3600,
+  jwksForceRefreshMinIntervalMs: 30_000,
+  jwksFetchTimeoutMs: 5_000,
+  jwksAllowStaleOnError: false,
+  maxTokenLifetimeSeconds: 3600,
+  maxRequestBodyBytes: 262144,
   metadataCacheTtl: 3600,
   neo4jUri: "bolt://localhost:7687",
   neo4jUser: "neo4j",
@@ -447,5 +452,173 @@ describe("validateBearerToken", () => {
     );
 
     expect(result.name).toBe("Alice Dev");
+  });
+});
+
+// ── JwksClient throttle tests ─────────────────────────────────────────────────
+
+describe("JwksClient force-refresh throttling", () => {
+  it("triggers at most one forced refresh per throttle window", async () => {
+    const jwks = await buildJwks([{ key: publicKey1, kid: KID_1 }]);
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, json: async () => jwks });
+    vi.stubGlobal("fetch", fetchMock);
+
+    // Throttle window of 30s — both force-refreshes happen immediately after one another
+    const client = new JwksClient(JWKS_URI, TTL_MS, 30_000);
+    await client.getKey(KID_1); // initial fetch (1)
+    await client.forceRefresh(); // first force-refresh → allowed (2)
+    await client.forceRefresh(); // second force-refresh → throttled, no-op
+    await client.forceRefresh(); // third → still throttled, no-op
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("allows a second force-refresh after the throttle window expires", async () => {
+    const jwks = await buildJwks([{ key: publicKey1, kid: KID_1 }]);
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, json: async () => jwks });
+    vi.stubGlobal("fetch", fetchMock);
+
+    // Throttle window of 0 ms → every force-refresh is allowed immediately
+    const client = new JwksClient(JWKS_URI, TTL_MS, 0);
+    await client.getKey(KID_1); // initial fetch (1)
+    await client.forceRefresh(); // (2)
+    await client.forceRefresh(); // (3)
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("repeated unknown kid within throttle window does not flood upstream", async () => {
+    const jwks = await buildJwks([{ key: publicKey1, kid: KID_1 }]);
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, json: async () => jwks });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new JwksClient(JWKS_URI, TTL_MS, 30_000);
+    const token2 = await makeToken({ key: privateKey2, kid: KID_2 });
+
+    // All three calls encounter unknown kid-2 and attempt force-refresh,
+    // but only the first succeeds — the rest are throttled.
+    await validateBearerToken(`Bearer ${token2}`, testConfig, client).catch(
+      () => {},
+    );
+    await validateBearerToken(`Bearer ${token2}`, testConfig, client).catch(
+      () => {},
+    );
+    await validateBearerToken(`Bearer ${token2}`, testConfig, client).catch(
+      () => {},
+    );
+
+    // First call: initial fetch + one force-refresh = 2
+    // Second and third calls: force-refresh is throttled, no additional fetches
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("a failed force-refresh does not consume the throttle window", async () => {
+    const jwks = await buildJwks([{ key: publicKey1, kid: KID_1 }]);
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => jwks }) // initial
+      .mockResolvedValueOnce({ ok: false, status: 503, json: async () => ({}) }) // error
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => jwks }); // retry
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new JwksClient(JWKS_URI, TTL_MS, 30_000);
+    await client.getKey(KID_1); // warms cache (1)
+    await client.forceRefresh().catch(() => {}); // fails → should NOT start throttle (2)
+    await client.forceRefresh(); // should be allowed immediately, not throttled (3)
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+});
+
+// ── JwksClient fetch error handling ──────────────────────────────────────────
+
+describe("JwksClient fetch error handling", () => {
+  it("throws AuthError on HTTP error when no stale cache is available", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue({ ok: false, status: 503, json: async () => ({}) });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new JwksClient(JWKS_URI, TTL_MS);
+    await expect(client.getKey(KID_1)).rejects.toThrow(AuthError);
+  });
+
+  it("serves stale cache on HTTP error when allowStaleOnError is true", async () => {
+    const jwks = await buildJwks([{ key: publicKey1, kid: KID_1 }]);
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => jwks })
+      .mockResolvedValueOnce({ ok: false, status: 503, json: async () => ({}) });
+    vi.stubGlobal("fetch", fetchMock);
+
+    // TTL of 0 → always re-fetches; allowStaleOnError → serves stale on failure
+    const client = new JwksClient(JWKS_URI, 0, 0, 5_000, true);
+    await client.getKey(KID_1); // first fetch succeeds, populates cache
+    const key = await client.getKey(KID_1); // second fetch fails, serves stale
+
+    expect(key).not.toBeNull();
+  });
+
+  it("throws AuthError on HTTP error when allowStaleOnError is false (default)", async () => {
+    const jwks = await buildJwks([{ key: publicKey1, kid: KID_1 }]);
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => jwks })
+      .mockResolvedValueOnce({ ok: false, status: 503, json: async () => ({}) });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new JwksClient(JWKS_URI, 0);
+    await client.getKey(KID_1); // populates cache
+    await expect(client.getKey(KID_1)).rejects.toThrow(AuthError);
+  });
+});
+
+// ── validateBearerToken max token lifetime ────────────────────────────────────
+
+describe("validateBearerToken max token lifetime", () => {
+  it("throws AuthError when exp - iat exceeds maxTokenLifetimeSeconds", async () => {
+    const jwks = await buildJwks([{ key: publicKey1, kid: KID_1 }]);
+    stubFetch(jwks);
+    const client = freshClient();
+
+    const nowSec = Math.floor(Date.now() / 1000);
+    // Token with 2-hour lifetime; config allows max 1 hour
+    const longLivedToken = await makeToken({ exp: nowSec + 7200 });
+    const shortLimitConfig: Config = { ...testConfig, maxTokenLifetimeSeconds: 3600 };
+
+    await expect(
+      validateBearerToken(`Bearer ${longLivedToken}`, shortLimitConfig, client),
+    ).rejects.toThrow(AuthError);
+  });
+
+  it("accepts a token whose lifetime exactly equals maxTokenLifetimeSeconds", async () => {
+    const jwks = await buildJwks([{ key: publicKey1, kid: KID_1 }]);
+    stubFetch(jwks);
+    const client = freshClient();
+
+    const nowSec = Math.floor(Date.now() / 1000);
+    // Token with exactly 1-hour lifetime; config allows max 1 hour
+    const token = await makeToken({ exp: nowSec + 3600 });
+    const result = await validateBearerToken(`Bearer ${token}`, testConfig, client);
+
+    expect(result.userId).toBe("user-123");
+  });
+
+  it("accepts a token whose lifetime is under maxTokenLifetimeSeconds", async () => {
+    const jwks = await buildJwks([{ key: publicKey1, kid: KID_1 }]);
+    stubFetch(jwks);
+    const client = freshClient();
+
+    const nowSec = Math.floor(Date.now() / 1000);
+    const token = await makeToken({ exp: nowSec + 900 }); // 15 minutes
+    const result = await validateBearerToken(`Bearer ${token}`, testConfig, client);
+
+    expect(result.userId).toBe("user-123");
   });
 });

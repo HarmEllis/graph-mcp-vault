@@ -65,7 +65,13 @@ const { jwks_uri } = z
   .parse(discoveryDoc);
 logger.debug("oidc_discovery_ok", { jwksUri: jwks_uri });
 
-const jwksClient = new JwksClient(jwks_uri, config.jwksCacheTtl * 1000);
+const jwksClient = new JwksClient(
+  jwks_uri,
+  config.jwksCacheTtl * 1000,
+  config.jwksForceRefreshMinIntervalMs,
+  config.jwksFetchTimeoutMs,
+  config.jwksAllowStaleOnError,
+);
 
 const sessionStore = new SessionStore();
 sessionStore.startCleanup();

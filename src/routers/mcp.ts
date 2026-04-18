@@ -231,21 +231,16 @@ export function createMcpRouter(
       );
     }
 
-    // 2. Parse JSON body
-    let rawBody: unknown;
-    try {
-      rawBody = await c.req.json();
-    } catch {
+    // 1c. Enforce Content-Type before touching the body or running auth
+    const contentType = c.req.header("content-type") ?? "";
+    if (!contentType.toLowerCase().startsWith("application/json")) {
       return withCorsHeaders(
-        c.json(
-          makeJsonRpcError(null, ErrorCode.PARSE_ERROR, "Parse error"),
-          400,
-        ),
+        c.json({ error: "unsupported_media_type" }, 415),
         cors.allowOrigin,
       );
     }
 
-    // 3. Authenticate
+    // 2. Authenticate before reading the body — prevents unauthenticated large-body parsing
     let userId: string;
     let name: string | null;
     let email: string | null;
@@ -265,6 +260,27 @@ export function createMcpRouter(
         `Bearer resource_metadata="${config.publicUrl}/.well-known/oauth-protected-resource", scope="${wwwScope}"`,
       );
       return withCorsHeaders(response, cors.allowOrigin);
+    }
+
+    // 3. Read body with size limit, then parse JSON
+    let rawBody: unknown;
+    try {
+      const rawText = await c.req.text();
+      if (Buffer.byteLength(rawText, "utf8") > config.maxRequestBodyBytes) {
+        return withCorsHeaders(
+          c.json({ error: "payload_too_large" }, 413),
+          cors.allowOrigin,
+        );
+      }
+      rawBody = JSON.parse(rawText);
+    } catch {
+      return withCorsHeaders(
+        c.json(
+          makeJsonRpcError(null, ErrorCode.PARSE_ERROR, "Parse error"),
+          400,
+        ),
+        cors.allowOrigin,
+      );
     }
 
     // 4. Batch vs single

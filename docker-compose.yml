@@ -5,9 +5,8 @@ services:
       NEO4J_AUTH: neo4j/${NEO4J_PASSWORD}
     volumes:
       - neo4j_data:/data
-    ports:
-      - "7474:7474"
-      - "7687:7687"
+    networks:
+      - backend
     healthcheck:
       # Use wget — neo4j:5-community includes wget but not curl
       test: ["CMD", "sh", "-c", "wget -q --spider http://localhost:7474 || exit 1"]
@@ -15,17 +14,6 @@ services:
       timeout: 5s
       retries: 12
       start_period: 30s
-
-  keycloak:
-    image: quay.io/keycloak/keycloak:26.1
-    command: ["start-dev", "--import-realm"]
-    environment:
-      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
-      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
-    volumes:
-      - ./docker/keycloak/realm-dev.json:/opt/keycloak/data/import/realm-dev.json:ro
-    ports:
-      - "8081:8080"
     restart: unless-stopped
 
   graph-mcp-vault:
@@ -34,21 +22,28 @@ services:
       - path: .env
         required: false
     environment:
-      # External URL — must match the `iss` claim in tokens obtained by clients via localhost:8081
-      OIDC_ISSUER: ${OIDC_ISSUER:-http://localhost:8081/realms/graph-mcp-vault}
-      OIDC_AUDIENCE: ${OIDC_AUDIENCE:-graph-mcp-vault}
-      # Internal URL — used by the server to fetch JWKS/discovery within the Docker network
-      OIDC_DISCOVERY_URL: ${OIDC_DISCOVERY_URL:-http://keycloak:8080/realms/graph-mcp-vault/.well-known/openid-configuration}
-      # Dev-friendly defaults to ensure profile claims are requested by MCP clients.
+      OIDC_ISSUER: ${OIDC_ISSUER}
+      OIDC_AUDIENCE: ${OIDC_AUDIENCE}
+      PUBLIC_URL: ${PUBLIC_URL}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS}
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USER: ${NEO4J_USER:-neo4j}
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD}
       SCOPES_ALLOWLIST: ${SCOPES_ALLOWLIST:-openid,profile,email}
     ports:
       - "8000:8000"
+    networks:
+      - backend
+      - frontend
     depends_on:
       neo4j:
         condition: service_healthy
-      keycloak:
-        condition: service_started
     restart: unless-stopped
+
+networks:
+  backend:
+    internal: true
+  frontend:
 
 volumes:
   neo4j_data:
