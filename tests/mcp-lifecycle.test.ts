@@ -276,7 +276,12 @@ describe("request body size limit", () => {
         "Content-Type": "application/json",
         Authorization: `Bearer ${token}`,
       },
-      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ping", params: { padding: "x".repeat(200) } }),
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "ping",
+        params: { padding: "x".repeat(200) },
+      }),
     });
 
     expect(res.status).toBe(413);
@@ -293,7 +298,9 @@ describe("request body size limit", () => {
     };
     const rawBody = JSON.stringify(payload);
     const stringLengthLimit = rawBody.length + 5;
-    expect(Buffer.byteLength(rawBody, "utf8")).toBeGreaterThan(stringLengthLimit);
+    expect(Buffer.byteLength(rawBody, "utf8")).toBeGreaterThan(
+      stringLengthLimit,
+    );
 
     const { app } = buildApp({ maxRequestBodyBytes: stringLengthLimit });
     const res = await app.request("/mcp", {
@@ -504,7 +511,7 @@ describe("initialize", () => {
     const { res } = await doInitialize(app, token);
     const body = await res.json();
 
-    expect(body.result.serverInfo.version).toBe("0.0.9");
+    expect(body.result.serverInfo.version).toBe("0.0.10");
   });
 
   it("includes capabilities.tools in result", async () => {

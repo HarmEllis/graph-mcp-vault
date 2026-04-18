@@ -554,7 +554,11 @@ describe("JwksClient fetch error handling", () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce({ ok: true, status: 200, json: async () => jwks })
-      .mockResolvedValueOnce({ ok: false, status: 503, json: async () => ({}) });
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 503,
+        json: async () => ({}),
+      });
     vi.stubGlobal("fetch", fetchMock);
 
     // TTL of 0 → always re-fetches; allowStaleOnError → serves stale on failure
@@ -570,7 +574,11 @@ describe("JwksClient fetch error handling", () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce({ ok: true, status: 200, json: async () => jwks })
-      .mockResolvedValueOnce({ ok: false, status: 503, json: async () => ({}) });
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 503,
+        json: async () => ({}),
+      });
     vi.stubGlobal("fetch", fetchMock);
 
     const client = new JwksClient(JWKS_URI, 0);
@@ -590,7 +598,10 @@ describe("validateBearerToken max token lifetime", () => {
     const nowSec = Math.floor(Date.now() / 1000);
     // Token with 2-hour lifetime; config allows max 1 hour
     const longLivedToken = await makeToken({ exp: nowSec + 7200 });
-    const shortLimitConfig: Config = { ...testConfig, maxTokenLifetimeSeconds: 3600 };
+    const shortLimitConfig: Config = {
+      ...testConfig,
+      maxTokenLifetimeSeconds: 3600,
+    };
 
     await expect(
       validateBearerToken(`Bearer ${longLivedToken}`, shortLimitConfig, client),
@@ -605,7 +616,11 @@ describe("validateBearerToken max token lifetime", () => {
     const nowSec = Math.floor(Date.now() / 1000);
     // Token with exactly 1-hour lifetime; config allows max 1 hour
     const token = await makeToken({ exp: nowSec + 3600 });
-    const result = await validateBearerToken(`Bearer ${token}`, testConfig, client);
+    const result = await validateBearerToken(
+      `Bearer ${token}`,
+      testConfig,
+      client,
+    );
 
     expect(result.userId).toBe("user-123");
   });
@@ -617,7 +632,11 @@ describe("validateBearerToken max token lifetime", () => {
 
     const nowSec = Math.floor(Date.now() / 1000);
     const token = await makeToken({ exp: nowSec + 900 }); // 15 minutes
-    const result = await validateBearerToken(`Bearer ${token}`, testConfig, client);
+    const result = await validateBearerToken(
+      `Bearer ${token}`,
+      testConfig,
+      client,
+    );
 
     expect(result.userId).toBe("user-123");
   });

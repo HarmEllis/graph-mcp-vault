@@ -1,6 +1,6 @@
 {
   "name": "graph-mcp-vault",
-  "version": "0.0.9",
+  "version": "0.0.10",
   "type": "module",
   "engines": {
     "node": ">=24"

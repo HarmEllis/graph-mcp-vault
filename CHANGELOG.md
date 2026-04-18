@@ -5,6 +5,41 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.10] - 2026-04-18
+
+Hardens security across the board with JWKS throttling, a UTF-8 body guard, isolated Docker networks, and a dev/prod stack split. Enforces a strict namespace format with auto-migration, adds user-lookup and namespace auto-share capabilities, and patches a critical CVE in a transitive dependency.
+
+### Added
+
+- `knowledge_lookup_user` tool for finding users by email address.
+- Namespace auto-share: entries can be automatically shared with users during creation.
+- Strict share target validation to prevent sharing with invalid or non-existent users.
+- Dev/prod Docker Compose split: `docker-compose.dev.yml` for local development with Keycloak; `docker-compose.yml` for production deployments.
+- Dedicated Keycloak dev realm (`docker/keycloak/realm-dev.json`) for reproducible local auth.
+- JWKS endpoint throttle and timeout to limit blast radius of a misconfigured or slow IdP.
+- MCP body guard: enforces a configurable UTF-8 byte limit on incoming request bodies to prevent oversized payload attacks.
+- Isolated Docker networks separating internal services from external access.
+- Renovate config for automated dependency update PRs.
+- CodeQL analysis workflow for continuous static security analysis.
+
+### Changed
+
+- Namespace format is now strictly validated; existing namespaces are auto-migrated to the v5 UUID-based format on startup.
+- OIDC profile claim handling hardened for compatibility with Keycloak, Pocket ID, and other providers.
+- Dev scope defaults updated to allow faster local iteration without re-configuring the IdP.
+- `INJECT_MISSING_SCOPE` env var and the authorization proxy removed; authorization is now handled entirely by the upstream IdP.
+
+### Fixed
+
+- Keycloak rejecting tokens that include the `profile` and `email` scopes in the `scope` claim.
+- OIDC claims handling edge cases surfaced by batching and atomic namespace config review.
+
+### Security
+
+- `protobufjs` overridden to `>=7.5.5` to patch a critical CVE in the transitive dependency chain.
+
+**Full Changelog**: https://github.com/HarmEllis/graph-mcp-vault/compare/v0.0.9...v0.0.10
+
 ## [0.0.9] - 2026-04-17
 
 Expands graph exploration with richer relationship tools, improves search behavior and guidance for LLM callers, and updates local development auth token defaults for longer sessions.

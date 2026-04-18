@@ -161,7 +161,10 @@ describe("parseConfig", () => {
   });
 
   it("accepts a custom MAX_REQUEST_BODY_BYTES", () => {
-    const config = parseConfig({ ...required, MAX_REQUEST_BODY_BYTES: "1048576" });
+    const config = parseConfig({
+      ...required,
+      MAX_REQUEST_BODY_BYTES: "1048576",
+    });
     expect(config.maxRequestBodyBytes).toBe(1048576);
   });
 
@@ -171,7 +174,10 @@ describe("parseConfig", () => {
   });
 
   it("jwksForceRefreshMinIntervalMs converts seconds to ms", () => {
-    const config = parseConfig({ ...required, JWKS_FORCE_REFRESH_MIN_INTERVAL_SECONDS: "60" });
+    const config = parseConfig({
+      ...required,
+      JWKS_FORCE_REFRESH_MIN_INTERVAL_SECONDS: "60",
+    });
     expect(config.jwksForceRefreshMinIntervalMs).toBe(60_000);
   });
 
@@ -186,7 +192,10 @@ describe("parseConfig", () => {
   });
 
   it("jwksAllowStaleOnError is true when JWKS_ALLOW_STALE_ON_ERROR=true", () => {
-    const config = parseConfig({ ...required, JWKS_ALLOW_STALE_ON_ERROR: "true" });
+    const config = parseConfig({
+      ...required,
+      JWKS_ALLOW_STALE_ON_ERROR: "true",
+    });
     expect(config.jwksAllowStaleOnError).toBe(true);
   });
 
@@ -196,7 +205,10 @@ describe("parseConfig", () => {
   });
 
   it("accepts a custom MAX_TOKEN_LIFETIME_SECONDS", () => {
-    const config = parseConfig({ ...required, MAX_TOKEN_LIFETIME_SECONDS: "7200" });
+    const config = parseConfig({
+      ...required,
+      MAX_TOKEN_LIFETIME_SECONDS: "7200",
+    });
     expect(config.maxTokenLifetimeSeconds).toBe(7200);
   });
 
