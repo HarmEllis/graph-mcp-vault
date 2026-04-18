@@ -1,6 +1,8 @@
 # ── Build stage ───────────────────────────────────────────────────────────────
 FROM node:24-slim AS build
 
+RUN apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/*
+
 RUN corepack enable && corepack prepare pnpm@latest --activate
 
 WORKDIR /app
@@ -14,6 +16,8 @@ RUN pnpm build && cp src/server-instructions.md dist/src/server-instructions.md
 
 # ── Production stage ──────────────────────────────────────────────────────────
 FROM node:24-slim AS final
+
+RUN apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/*
 
 RUN corepack enable && corepack prepare pnpm@latest --activate
 

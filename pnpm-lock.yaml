@@ -6,6 +6,10 @@ settings:
 
 overrides:
   protobufjs: '>=7.5.5'
+  tar: '>=7.5.11'
+  minimatch: '>=9.0.7'
+  picomatch: '>=4.0.4'
+  brace-expansion: '>=2.0.3'
 
 importers:
 
@@ -1074,7 +1078,7 @@ packages:
     resolution: {integrity: sha512-tIbYtZbucOs0BRGqPJkshJUYdL+SDH7dVM8gjy+ERp3WAUjLEFJE+02kanyHtwjWOnwrKYBiwAmM0p4kLJAnXg==}
     engines: {node: '>=12.0.0'}
     peerDependencies:
-      picomatch: ^3 || ^4
+      picomatch: '>=4.0.4'
     peerDependenciesMeta:
       picomatch:
         optional: true
@@ -1245,10 +1249,6 @@ packages:
   mime-types@3.0.2:
     resolution: {integrity: sha512-Lbgzdk0h4juoQ9fCKXW4by0UJqj+nOOrI9MJ1sSj4nI8aI2eo1qmvQEie4VD1glsS250n15LsWsYtCugiStS5A==}
     engines: {node: '>=18'}
-
-  minimatch@5.1.9:
-    resolution: {integrity: sha512-7o1wEA2RyMP7Iu7GNba9vc0RWWGACJOCZBJX2GJWip0ikV+wcOsgVuY9uE8CPiyQhkGFSlhuSkZPavN7u1c2Fw==}
-    engines: {node: '>=10'}
 
   minimatch@9.0.9:
     resolution: {integrity: sha512-OBwBN9AL4dqmETlpS2zasx+vTeWclWzkblfZk7KTA5j3jeOONz/tRCnZomUyvNg83wL5Zv9Ss6HMJXAgL8R2Yg==}
@@ -2764,10 +2764,6 @@ snapshots:
     dependencies:
       mime-db: 1.54.0
 
-  minimatch@5.1.9:
-    dependencies:
-      brace-expansion: 2.1.0
-
   minimatch@9.0.9:
     dependencies:
       brace-expansion: 2.1.0
@@ -2925,7 +2921,7 @@ snapshots:
 
   readdir-glob@1.1.3:
     dependencies:
-      minimatch: 5.1.9
+      minimatch: 9.0.9
 
   require-directory@2.1.1: {}
 

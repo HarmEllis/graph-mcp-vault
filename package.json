@@ -25,7 +25,11 @@
   },
   "pnpm": {
     "overrides": {
-      "protobufjs": ">=7.5.5"
+      "protobufjs": ">=7.5.5",
+      "tar": ">=7.5.11",
+      "minimatch": ">=9.0.7",
+      "picomatch": ">=4.0.4",
+      "brace-expansion": ">=2.0.3"
     }
   },
   "devDependencies": {
