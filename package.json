@@ -23,6 +23,11 @@
     "neo4j-driver": "^5.28.0",
     "zod": "^3.23.0"
   },
+  "pnpm": {
+    "overrides": {
+      "protobufjs": ">=7.5.5"
+    }
+  },
   "devDependencies": {
     "@biomejs/biome": "^1.9.0",
     "@types/js-yaml": "^4.0.0",
