@@ -121,6 +121,7 @@ const createSchema = z
     title: z.string().min(1),
     content: z.string(),
     namespace: zNamespace.optional(),
+    versioned: z.boolean().optional(),
   })
   .merge(metadataSchema);
 
@@ -146,6 +147,7 @@ async function handleCreate(
     summary,
     source,
     last_verified_at,
+    versioned,
   } = parsed.data;
   const effectiveNamespace = namespace ?? ctx.namespace;
 
@@ -160,6 +162,7 @@ async function handleCreate(
     ...(summary !== undefined && { summary }),
     ...(source !== undefined && { source }),
     ...(last_verified_at !== undefined && { last_verified_at }),
+    ...(versioned !== undefined && { versioned }),
   });
 
   const cfg = await neo4jClient.getNamespaceConfig(
@@ -274,6 +277,7 @@ const updateSchema = z
     content: z.string().optional(),
     entry_type: z.string().min(1).optional(),
     namespace: zNamespace.optional(),
+    versioned: z.boolean().optional(),
   })
   .merge(metadataSchema);
 
@@ -281,6 +285,7 @@ async function handleUpdate(
   args: Record<string, unknown>,
   ctx: ToolContext,
   neo4jClient: Neo4jClient,
+  maxVersionsLimit: number,
 ): Promise<unknown> {
   const parsed = updateSchema.safeParse(args);
   if (!parsed.success) {
@@ -300,21 +305,48 @@ async function handleUpdate(
     summary,
     source,
     last_verified_at,
+    versioned,
   } = parsed.data;
 
   await requirePermission(neo4jClient, ctx, entry_id, "write");
+
+  let versioningArg: { changedBy: string; maxVersions: number } | undefined;
+  if (maxVersionsLimit > 0) {
+    const resource = await neo4jClient.getResource(entry_id);
+    const namespaceCfg = await neo4jClient.getNamespaceConfig(
+      resource?.user_id ?? ctx.userId,
+      resource?.namespace ?? ctx.namespace,
+    );
+    const effectiveVersioned =
+      (versioned ?? resource?.versioned) ??
+      namespaceCfg.versioning_enabled ??
+      false;
+    if (effectiveVersioned) {
+      const nsMax = namespaceCfg.max_versions ?? maxVersionsLimit;
+      versioningArg = {
+        changedBy: ctx.userId,
+        maxVersions: Math.min(nsMax, maxVersionsLimit),
+      };
+    }
+  }
+
   try {
-    await neo4jClient.updateResource(entry_id, {
-      ...(title !== undefined && { title }),
-      ...(content !== undefined && { content }),
-      ...(entry_type !== undefined && { entry_type }),
-      ...(namespace !== undefined && { namespace }),
-      ...(topic !== undefined && { topic }),
-      ...(tags !== undefined && { tags }),
-      ...(summary !== undefined && { summary }),
-      ...(source !== undefined && { source }),
-      ...(last_verified_at !== undefined && { last_verified_at }),
-    });
+    await neo4jClient.updateResource(
+      entry_id,
+      {
+        ...(title !== undefined && { title }),
+        ...(content !== undefined && { content }),
+        ...(entry_type !== undefined && { entry_type }),
+        ...(namespace !== undefined && { namespace }),
+        ...(topic !== undefined && { topic }),
+        ...(tags !== undefined && { tags }),
+        ...(summary !== undefined && { summary }),
+        ...(source !== undefined && { source }),
+        ...(last_verified_at !== undefined && { last_verified_at }),
+        ...(versioned !== undefined && { versioned }),
+      },
+      versioningArg,
+    );
   } catch (error) {
     throwMappedClientError(error);
   }
@@ -759,6 +791,98 @@ async function handleListNamespaces(
   return { namespaces };
 }
 
+// ── knowledge_list_versions ───────────────────────────────────────────────────
+
+const listVersionsSchema = z.object({ entry_id: z.string().min(1) });
+
+async function handleListVersions(
+  args: Record<string, unknown>,
+  ctx: ToolContext,
+  neo4jClient: Neo4jClient,
+): Promise<unknown> {
+  const parsed = listVersionsSchema.safeParse(args);
+  if (!parsed.success) {
+    throw new ToolError(
+      ErrorCode.INVALID_PARAMS,
+      `Invalid params: ${parsed.error.message}`,
+    );
+  }
+  await requirePermission(neo4jClient, ctx, parsed.data.entry_id, "read");
+  const versions = await neo4jClient.listVersions(parsed.data.entry_id);
+  return { versions };
+}
+
+// ── knowledge_get_version ─────────────────────────────────────────────────────
+
+const getVersionSchema = z.object({
+  entry_id: z.string().min(1),
+  version: z.number().int().positive(),
+});
+
+async function handleGetVersion(
+  args: Record<string, unknown>,
+  ctx: ToolContext,
+  neo4jClient: Neo4jClient,
+): Promise<unknown> {
+  const parsed = getVersionSchema.safeParse(args);
+  if (!parsed.success) {
+    throw new ToolError(
+      ErrorCode.INVALID_PARAMS,
+      `Invalid params: ${parsed.error.message}`,
+    );
+  }
+  await requirePermission(neo4jClient, ctx, parsed.data.entry_id, "read");
+  const version = await neo4jClient.getVersion(
+    parsed.data.entry_id,
+    parsed.data.version,
+  );
+  if (!version) {
+    throw new ToolError(ErrorCode.RESOURCE_NOT_FOUND, "Version not found");
+  }
+  return version;
+}
+
+// ── knowledge_restore_version ─────────────────────────────────────────────────
+
+const restoreVersionSchema = z.object({
+  entry_id: z.string().min(1),
+  version: z.number().int().positive(),
+});
+
+async function handleRestoreVersion(
+  args: Record<string, unknown>,
+  ctx: ToolContext,
+  neo4jClient: Neo4jClient,
+  maxVersionsLimit: number,
+): Promise<unknown> {
+  const parsed = restoreVersionSchema.safeParse(args);
+  if (!parsed.success) {
+    throw new ToolError(
+      ErrorCode.INVALID_PARAMS,
+      `Invalid params: ${parsed.error.message}`,
+    );
+  }
+  const { entry_id, version } = parsed.data;
+  await requirePermission(neo4jClient, ctx, entry_id, "write");
+
+  const existing = await neo4jClient.getVersion(entry_id, version);
+  if (!existing) {
+    throw new ToolError(ErrorCode.RESOURCE_NOT_FOUND, "Version not found");
+  }
+
+  const resource = await neo4jClient.getResource(entry_id);
+  const namespaceCfg = await neo4jClient.getNamespaceConfig(
+    resource?.user_id ?? ctx.userId,
+    resource?.namespace ?? ctx.namespace,
+  );
+  const nsMax = namespaceCfg.max_versions ?? maxVersionsLimit;
+  const maxVersions =
+    maxVersionsLimit > 0 ? Math.min(nsMax, maxVersionsLimit) : 0;
+
+  await neo4jClient.restoreVersion(entry_id, version, ctx.userId, maxVersions);
+  return { restored_version: version };
+}
+
 // ── Factory ───────────────────────────────────────────────────────────────────
 
 /**
@@ -766,6 +890,7 @@ async function handleListNamespaces(
  */
 export function createResourceTools(
   neo4jClient: Neo4jClient,
+  maxVersionsLimit: number,
 ): RegisteredTool[] {
   return [
     {
@@ -812,6 +937,11 @@ export function createResourceTools(
               type: "string",
               description:
                 "ISO 8601 datetime when this entry was last verified (optional)",
+            },
+            versioned: {
+              type: "boolean",
+              description:
+                "Enable version history for this entry. Overrides namespace default. When true, every update to title or content is snapshotted.",
             },
           },
           required: ["entry_type", "title", "content"],
@@ -890,11 +1020,16 @@ export function createResourceTools(
             summary: { type: "string" },
             source: { type: "string" },
             last_verified_at: { type: "string" },
+            versioned: {
+              type: "boolean",
+              description:
+                "Enable or disable version history for this entry. Overrides namespace default.",
+            },
           },
           required: ["entry_id"],
         },
       },
-      handler: (args, ctx) => handleUpdate(args, ctx, neo4jClient),
+      handler: (args, ctx) => handleUpdate(args, ctx, neo4jClient, maxVersionsLimit),
     },
     {
       descriptor: {
@@ -1174,6 +1309,54 @@ export function createResourceTools(
         },
       },
       handler: (args, ctx) => handleImpactAnalysis(args, ctx, neo4jClient),
+    },
+    {
+      descriptor: {
+        name: "knowledge_list_versions",
+        description:
+          "List all stored versions of a knowledge entry, ordered newest first. Requires read access. Only entries with versioning enabled accumulate versions.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            entry_id: { type: "string", description: "UUID of the entry" },
+          },
+          required: ["entry_id"],
+        },
+      },
+      handler: (args, ctx) => handleListVersions(args, ctx, neo4jClient),
+    },
+    {
+      descriptor: {
+        name: "knowledge_get_version",
+        description:
+          "Retrieve the full content of a specific historical version of a knowledge entry. Requires read access.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            entry_id: { type: "string", description: "UUID of the entry" },
+            version: { type: "number", description: "Version number to retrieve" },
+          },
+          required: ["entry_id", "version"],
+        },
+      },
+      handler: (args, ctx) => handleGetVersion(args, ctx, neo4jClient),
+    },
+    {
+      descriptor: {
+        name: "knowledge_restore_version",
+        description:
+          "Restore a knowledge entry to a previous version. The current state is automatically snapshotted before restoring. Requires write access.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            entry_id: { type: "string", description: "UUID of the entry" },
+            version: { type: "number", description: "Version number to restore" },
+          },
+          required: ["entry_id", "version"],
+        },
+      },
+      handler: (args, ctx) =>
+        handleRestoreVersion(args, ctx, neo4jClient, maxVersionsLimit),
     },
   ];
 }

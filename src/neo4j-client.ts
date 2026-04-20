@@ -17,6 +17,17 @@ export interface Resource {
   summary?: string;
   source?: string;
   last_verified_at?: string;
+  versioned?: boolean;
+}
+
+export interface ResourceVersion {
+  id: string;
+  resource_id: string;
+  version: number;
+  title: string;
+  content: string;
+  created_at: string;
+  changed_by: string;
 }
 
 export interface ResourceWithOwnership extends Resource {
@@ -53,6 +64,8 @@ export interface NamespaceConfig {
   auto_share_permission: AutoSharePermission;
   auto_share_user_ids: string[];
   structure_template?: string;
+  versioning_enabled?: boolean;
+  max_versions?: number;
 }
 
 export type MatchMode = "exact" | "fulltext" | "fuzzy";
@@ -126,6 +139,18 @@ export class Neo4jClientError extends Error {
     super(message);
     this.name = "Neo4jClientError";
   }
+}
+
+// ── Version snapshot helpers ──────────────────────────────────────────────────
+
+function isConstraintViolation(err: unknown): boolean {
+  return (
+    err != null &&
+    typeof err === "object" &&
+    "code" in err &&
+    (err as { code: string }).code ===
+      "Neo.ClientError.Schema.ConstraintValidationFailed"
+  );
 }
 
 // ── Lucene helpers ────────────────────────────────────────────────────────────
@@ -400,7 +425,9 @@ export class Neo4jClient {
         RETURN cfg.auto_share AS auto_share,
                cfg.auto_share_permission AS auto_share_permission,
                cfg.auto_share_user_ids AS auto_share_user_ids,
-               cfg.structure_template AS structure_template
+               cfg.structure_template AS structure_template,
+               cfg.versioning_enabled AS versioning_enabled,
+               cfg.max_versions AS max_versions
         `,
         { ownerId, namespace },
       );
@@ -437,6 +464,12 @@ export class Neo4jClient {
         ...(structureTemplate !== null
           ? { structure_template: structureTemplate }
           : {}),
+        ...(record.get("versioning_enabled") !== null
+          ? { versioning_enabled: record.get("versioning_enabled") as boolean }
+          : {}),
+        ...(record.get("max_versions") !== null
+          ? { max_versions: neo4j.integer.toNumber(record.get("max_versions")) }
+          : {}),
       };
     } finally {
       await session.close();
@@ -450,6 +483,8 @@ export class Neo4jClient {
     auto_share_permission?: AutoSharePermission;
     auto_share_user_ids?: string[];
     structure_template?: string;
+    versioning_enabled?: boolean;
+    max_versions?: number | null;
   }): Promise<NamespaceConfig> {
     const session = this.driver.session();
     try {
@@ -471,11 +506,22 @@ export class Neo4jClient {
               $structureTemplate,
               cfg.structure_template
             ),
+            cfg.versioning_enabled = CASE
+              WHEN $versioningEnabled IS NOT NULL THEN $versioningEnabled
+              ELSE cfg.versioning_enabled
+            END,
+            cfg.max_versions = CASE
+              WHEN $clearMaxVersions THEN null
+              WHEN $maxVersions IS NOT NULL THEN $maxVersions
+              ELSE cfg.max_versions
+            END,
             cfg.updated_at = $now
         RETURN cfg.auto_share AS auto_share,
                cfg.auto_share_permission AS auto_share_permission,
                cfg.auto_share_user_ids AS auto_share_user_ids,
-               cfg.structure_template AS structure_template
+               cfg.structure_template AS structure_template,
+               cfg.versioning_enabled AS versioning_enabled,
+               cfg.max_versions AS max_versions
         `,
         {
           ownerId: params.ownerId,
@@ -484,6 +530,12 @@ export class Neo4jClient {
           autoSharePermission: params.auto_share_permission ?? null,
           autoShareUserIds: params.auto_share_user_ids ?? null,
           structureTemplate: params.structure_template ?? null,
+          versioningEnabled: params.versioning_enabled ?? null,
+          clearMaxVersions: params.max_versions === null,
+          maxVersions:
+            params.max_versions != null
+              ? neo4j.int(params.max_versions)
+              : null,
           now: new Date().toISOString(),
         },
       );
@@ -513,6 +565,12 @@ export class Neo4jClient {
         ...(structureTemplate !== null
           ? { structure_template: structureTemplate }
           : {}),
+        ...(record.get("versioning_enabled") !== null
+          ? { versioning_enabled: record.get("versioning_enabled") as boolean }
+          : {}),
+        ...(record.get("max_versions") !== null
+          ? { max_versions: neo4j.integer.toNumber(record.get("max_versions")) }
+          : {}),
       };
     } finally {
       await session.close();
@@ -536,6 +594,7 @@ export class Neo4jClient {
     summary?: string;
     source?: string;
     last_verified_at?: string;
+    versioned?: boolean;
   }): Promise<{ id: string; created_at: string }> {
     const id = randomUUID();
     const now = new Date().toISOString();
@@ -547,6 +606,7 @@ export class Neo4jClient {
     if (params.source !== undefined) optionalProps.source = params.source;
     if (params.last_verified_at !== undefined)
       optionalProps.last_verified_at = params.last_verified_at;
+    if (params.versioned !== undefined) optionalProps.versioned = params.versioned;
 
     const session = this.driver.session();
     try {
@@ -659,7 +719,9 @@ export class Neo4jClient {
       summary?: string;
       source?: string;
       last_verified_at?: string;
+      versioned?: boolean;
     },
+    versioning?: { changedBy: string; maxVersions: number },
   ): Promise<void> {
     if (params.namespace !== undefined) {
       const current = await this.getResource(resourceId);
@@ -696,13 +758,81 @@ export class Neo4jClient {
     if (params.source !== undefined) patch.source = params.source;
     if (params.last_verified_at !== undefined)
       patch.last_verified_at = params.last_verified_at;
+    if (params.versioned !== undefined) patch.versioned = params.versioned;
+
+    const needsSnapshot =
+      versioning != null &&
+      (params.title !== undefined || params.content !== undefined);
 
     const session = this.driver.session();
     try {
-      await session.run("MATCH (r:Resource {id: $id}) SET r += $patch", {
-        id: resourceId,
-        patch,
-      });
+      if (needsSnapshot) {
+        const now2 = new Date().toISOString();
+        const MAX_VERSION_RETRIES = 3;
+        let lastErr: unknown;
+        for (let attempt = 0; attempt < MAX_VERSION_RETRIES; attempt++) {
+          try {
+            const versionId = randomUUID();
+            await session.executeWrite(async (tx) => {
+              await tx.run(
+            `
+            MATCH (r:Resource {id: $resourceId})
+            OPTIONAL MATCH (r)-[:HAS_VERSION]->(existing:ResourceVersion)
+            WITH r, coalesce(max(existing.version), 0) + 1 AS nextVer
+            CREATE (v:ResourceVersion {
+              id: $versionId,
+              resource_id: $resourceId,
+              version: nextVer,
+              title: r.title,
+              content: r.content,
+              created_at: $now,
+              changed_by: $changedBy
+            })
+            CREATE (r)-[:HAS_VERSION]->(v)
+            `,
+            {
+              resourceId,
+              versionId,
+              now: now2,
+              changedBy: versioning!.changedBy,
+            },
+          );
+              await tx.run("MATCH (r:Resource {id: $id}) SET r += $patch", {
+                id: resourceId,
+                patch,
+              });
+              if (versioning!.maxVersions > 0) {
+                await tx.run(
+                  `
+                  MATCH (r:Resource {id: $resourceId})-[:HAS_VERSION]->(v:ResourceVersion)
+                  WITH v ORDER BY v.version ASC
+                  WITH collect(v) AS versions
+                  WHERE size(versions) > $maxVersions
+                  UNWIND versions[0..size(versions) - $maxVersions] AS toDelete
+                  DETACH DELETE toDelete
+                  `,
+                  {
+                    resourceId,
+                    maxVersions: neo4j.int(versioning!.maxVersions),
+                  },
+                );
+              }
+            });
+            lastErr = undefined;
+            break;
+          } catch (err) {
+            lastErr = err;
+            if (!isConstraintViolation(err)) throw err;
+            // Concurrent write grabbed the same version number — retry
+          }
+        }
+        if (lastErr != null) throw lastErr;
+      } else {
+        await session.run("MATCH (r:Resource {id: $id}) SET r += $patch", {
+          id: resourceId,
+          patch,
+        });
+      }
     } finally {
       await session.close();
     }
@@ -715,6 +845,142 @@ export class Neo4jClient {
       await session.run("MATCH (r:Resource {id: $id}) DETACH DELETE r", {
         id: resourceId,
       });
+    } finally {
+      await session.close();
+    }
+  }
+
+  // ── Versioning ───────────────────────────────────────────────────────────────
+
+  async listVersions(resourceId: string): Promise<ResourceVersion[]> {
+    const session = this.driver.session();
+    try {
+      const result = await session.run(
+        `
+        MATCH (r:Resource {id: $resourceId})-[:HAS_VERSION]->(v:ResourceVersion)
+        RETURN v ORDER BY v.version DESC
+        `,
+        { resourceId },
+      );
+      return result.records.map((record) => {
+        const props = record.get("v").properties as Record<string, unknown>;
+        return {
+          id: props.id as string,
+          resource_id: props.resource_id as string,
+          version: neo4j.integer.toNumber(props.version as Parameters<typeof neo4j.integer.toNumber>[0]),
+          title: props.title as string,
+          content: props.content as string,
+          created_at: props.created_at as string,
+          changed_by: props.changed_by as string,
+        };
+      });
+    } finally {
+      await session.close();
+    }
+  }
+
+  async getVersion(
+    resourceId: string,
+    version: number,
+  ): Promise<ResourceVersion | null> {
+    const session = this.driver.session();
+    try {
+      const result = await session.run(
+        `
+        MATCH (r:Resource {id: $resourceId})-[:HAS_VERSION]->(v:ResourceVersion {version: $version})
+        RETURN v
+        `,
+        { resourceId, version: neo4j.int(version) },
+      );
+      if (result.records.length === 0) return null;
+      const record = result.records[0];
+      if (!record) return null;
+      const props = record.get("v").properties as Record<string, unknown>;
+      return {
+        id: props.id as string,
+        resource_id: props.resource_id as string,
+        version: neo4j.integer.toNumber(props.version as Parameters<typeof neo4j.integer.toNumber>[0]),
+        title: props.title as string,
+        content: props.content as string,
+        created_at: props.created_at as string,
+        changed_by: props.changed_by as string,
+      };
+    } finally {
+      await session.close();
+    }
+  }
+
+  async restoreVersion(
+    resourceId: string,
+    version: number,
+    changedBy: string,
+    maxVersions: number,
+  ): Promise<void> {
+    const now = new Date().toISOString();
+    const MAX_VERSION_RETRIES = 3;
+    let lastErr: unknown;
+    const session = this.driver.session();
+    try {
+      for (let attempt = 0; attempt < MAX_VERSION_RETRIES; attempt++) {
+        try {
+          await session.executeWrite(async (tx) => {
+            // Only snapshot current content when versioning is active
+            if (maxVersions > 0) {
+              const versionId = randomUUID();
+              await tx.run(
+                `
+                MATCH (r:Resource {id: $resourceId})
+                OPTIONAL MATCH (r)-[:HAS_VERSION]->(existing:ResourceVersion)
+                WITH r, coalesce(max(existing.version), 0) + 1 AS nextVer
+                CREATE (v:ResourceVersion {
+                  id: $versionId,
+                  resource_id: $resourceId,
+                  version: nextVer,
+                  title: r.title,
+                  content: r.content,
+                  created_at: $now,
+                  changed_by: $changedBy
+                })
+                CREATE (r)-[:HAS_VERSION]->(v)
+                `,
+                { resourceId, versionId, now, changedBy },
+              );
+            }
+
+            await tx.run(
+              `
+              MATCH (r:Resource {id: $resourceId})
+              MATCH (r)-[:HAS_VERSION]->(v:ResourceVersion {version: $version})
+              SET r.title = v.title,
+                  r.content = v.content,
+                  r.updated_at = $now
+              `,
+              { resourceId, version: neo4j.int(version), now },
+            );
+
+            if (maxVersions > 0) {
+              await tx.run(
+                `
+                MATCH (r:Resource {id: $resourceId})-[:HAS_VERSION]->(v:ResourceVersion)
+                WITH v ORDER BY v.version ASC
+                WITH collect(v) AS versions
+                WHERE size(versions) > $maxVersions
+                UNWIND versions[0..size(versions) - $maxVersions] AS toDelete
+                DETACH DELETE toDelete
+                `,
+                { resourceId, maxVersions: neo4j.int(maxVersions) },
+              );
+            }
+          });
+          lastErr = undefined;
+          break;
+        } catch (err) {
+          lastErr = err;
+          if (!isConstraintViolation(err)) throw err;
+          // Concurrent write grabbed the same version number — retry
+        }
+      }
+      if (lastErr != null) throw lastErr;
     } finally {
       await session.close();
     }

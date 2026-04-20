@@ -31,6 +31,7 @@ const envSchema = z.object({
     .default("info"),
   ALLOWED_ORIGINS: z.string().default(""),
   SCOPES_ALLOWLIST: z.string().optional(),
+  MAX_VERSIONS_LIMIT: z.coerce.number().int().min(0).default(10),
 });
 
 export interface Config {
@@ -55,6 +56,8 @@ export interface Config {
   logLevel: "trace" | "debug" | "info" | "warn" | "error";
   allowedOrigins: string;
   scopesAllowlist: string[] | undefined;
+  /** Hard ceiling on stored versions per entry. 0 = versioning disabled globally. */
+  maxVersionsLimit: number;
 }
 
 export function parseConfig(env: Record<string, string | undefined>): Config {
@@ -87,5 +90,6 @@ export function parseConfig(env: Record<string, string | undefined>): Config {
     logLevel: parsed.LOG_LEVEL,
     allowedOrigins: parsed.ALLOWED_ORIGINS,
     scopesAllowlist,
+    maxVersionsLimit: parsed.MAX_VERSIONS_LIMIT,
   };
 }

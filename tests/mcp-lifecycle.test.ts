@@ -55,6 +55,7 @@ const BASE_CONFIG: Config = {
   oidcDiscoveryUrl: undefined,
   publicUrl: "http://localhost:8000",
   scopesAllowlist: undefined,
+  maxVersionsLimit: 10,
 };
 
 beforeAll(async () => {
@@ -728,7 +729,7 @@ describe("tools/list", () => {
     const token = await makeToken();
 
     // Use a stub Neo4jClient — handlers are closures and won't be called for tools/list
-    const tools = createResourceTools({} as Neo4jClient);
+    const tools = createResourceTools({} as Neo4jClient, 10);
     const config = { ...BASE_CONFIG };
     const sessionStore = new SessionStore();
     const jwksClient = new JwksClient(JWKS_URI, config.jwksCacheTtl * 1000);

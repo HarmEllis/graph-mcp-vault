@@ -39,6 +39,7 @@ const testConfig: Config = {
   oidcDiscoveryUrl: undefined,
   publicUrl: "http://localhost:8000",
   scopesAllowlist: undefined,
+  maxVersionsLimit: 10,
 };
 
 beforeAll(async () => {

@@ -35,16 +35,20 @@ const updateNamespaceConfigSchema = z
     auto_share_permission: z.enum(["read", "write"]).optional(),
     auto_share_user_ids: z.array(z.string().min(1)).max(500).optional(),
     structure_template: z.string().max(10000).optional(),
+    versioning_enabled: z.boolean().optional(),
+    max_versions: z.number().int().min(1).nullable().optional(),
   })
   .refine(
     (value) =>
       value.auto_share !== undefined ||
       value.auto_share_permission !== undefined ||
       value.auto_share_user_ids !== undefined ||
-      value.structure_template !== undefined,
+      value.structure_template !== undefined ||
+      value.versioning_enabled !== undefined ||
+      value.max_versions !== undefined,
     {
       message:
-        "At least one of auto_share, auto_share_permission, auto_share_user_ids, structure_template is required",
+        "At least one of auto_share, auto_share_permission, auto_share_user_ids, structure_template, versioning_enabled, max_versions is required",
     },
   );
 
@@ -97,6 +101,12 @@ async function handleUpdateNamespaceConfig(
     ...(parsed.data.structure_template !== undefined
       ? { structure_template: parsed.data.structure_template }
       : {}),
+    ...(parsed.data.versioning_enabled !== undefined
+      ? { versioning_enabled: parsed.data.versioning_enabled }
+      : {}),
+    ...(parsed.data.max_versions !== undefined
+      ? { max_versions: parsed.data.max_versions }
+      : {}),
   });
 }
 
@@ -122,7 +132,7 @@ export function createNamespaceConfigTools(
       descriptor: {
         name: "knowledge_update_namespace_config",
         description:
-          "Update namespace settings for the current user: auto-share config and/or a Markdown structure_template that describes the intended organisation of this namespace.",
+          "Update namespace settings for the current user: auto-share config, a Markdown structure_template, and versioning settings.",
         inputSchema: {
           type: "object",
           properties: {
@@ -134,6 +144,16 @@ export function createNamespaceConfigTools(
               type: "string",
               description:
                 "Markdown text describing the intended structure of this namespace (entry types, tags, relation types, conventions). Shown in knowledge_list_namespaces so every session sees it automatically.",
+            },
+            versioning_enabled: {
+              type: "boolean",
+              description:
+                "Default versioning setting for new entries in this namespace. Individual entries can override this with their own versioned flag.",
+            },
+            max_versions: {
+              type: ["number", "null"],
+              description:
+                "Maximum versions to keep per entry in this namespace. null = use server default. Cannot exceed the server-wide MAX_VERSIONS_LIMIT.",
             },
           },
         },

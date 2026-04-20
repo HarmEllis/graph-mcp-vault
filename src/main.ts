@@ -98,7 +98,7 @@ app.route(
   ),
 );
 const tools = [
-  ...createResourceTools(_neo4jClient),
+  ...createResourceTools(_neo4jClient, config.maxVersionsLimit),
   ...createSharingTools(_neo4jClient),
   ...createUserTools(_neo4jClient),
   ...createNamespaceConfigTools(_neo4jClient),

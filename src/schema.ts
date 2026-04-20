@@ -7,7 +7,7 @@ import {
 
 // ── Current schema version ────────────────────────────────────────────────────
 
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 7;
 
 // ── Base schema statements (idempotent, version-independent) ──────────────────
 
@@ -380,6 +380,81 @@ async function migrate_v5(driver: Driver, logger: Logger): Promise<void> {
   });
 }
 
+// ── Migration v6 ──────────────────────────────────────────────────────────────
+//
+// Changes introduced in v6:
+//   1. Add unique constraint on ResourceVersion.id.
+
+async function migrate_v6(driver: Driver): Promise<void> {
+  const session = driver.session();
+  try {
+    await session.run(
+      "CREATE CONSTRAINT resource_version_id_unique IF NOT EXISTS FOR (v:ResourceVersion) REQUIRE v.id IS UNIQUE",
+    );
+  } finally {
+    await session.close();
+  }
+}
+
+// ── Migration v7 ──────────────────────────────────────────────────────────────
+//
+// Changes introduced in v7:
+//   1. Deduplicate any (resource_id, version) pairs that arose from the race
+//      window before the uniqueness constraint existed (keep latest created_at).
+//   2. Add composite uniqueness constraint on (resource_id, version) to prevent
+//      duplicate version numbers under concurrent writes.
+
+async function migrate_v7(driver: Driver): Promise<void> {
+  // Phase 1: dedup — keep the latest snapshot per (resource_id, version) pair
+  const discoverSession = driver.session();
+  let toDeleteIds: string[] = [];
+  try {
+    const dupsResult = await discoverSession.run(`
+      MATCH (v:ResourceVersion)
+      WITH v.resource_id AS rid, v.version AS ver, collect(v) AS group
+      WHERE size(group) > 1
+      RETURN rid, ver, group
+    `);
+    for (const record of dupsResult.records) {
+      const group = record.get("group") as Array<{
+        properties: { created_at: string; id: string };
+      }>;
+      const sorted = [...group].sort((a, b) => {
+        const byDate = b.properties.created_at.localeCompare(
+          a.properties.created_at,
+        );
+        return byDate !== 0 ? byDate : b.properties.id.localeCompare(a.properties.id);
+      });
+      for (const v of sorted.slice(1)) {
+        toDeleteIds.push(v.properties.id);
+      }
+    }
+  } finally {
+    await discoverSession.close();
+  }
+  if (toDeleteIds.length > 0) {
+    const deleteSession = driver.session();
+    try {
+      await deleteSession.run(
+        `UNWIND $ids AS id MATCH (v:ResourceVersion {id: id}) DETACH DELETE v`,
+        { ids: toDeleteIds },
+      );
+    } finally {
+      await deleteSession.close();
+    }
+  }
+
+  // Phase 2: add uniqueness constraint
+  const constraintSession = driver.session();
+  try {
+    await constraintSession.run(
+      "CREATE CONSTRAINT resource_version_unique IF NOT EXISTS FOR (v:ResourceVersion) REQUIRE (v.resource_id, v.version) IS UNIQUE",
+    );
+  } finally {
+    await constraintSession.close();
+  }
+}
+
 // ── initSchema ────────────────────────────────────────────────────────────────
 
 /**
@@ -431,6 +506,18 @@ export async function initSchema(
     await migrate_v5(driver, logger);
     await setSchemaVersion(driver, 5);
     version = 5;
+  }
+
+  if (version < 6) {
+    await migrate_v6(driver);
+    await setSchemaVersion(driver, 6);
+    version = 6;
+  }
+
+  if (version < 7) {
+    await migrate_v7(driver);
+    await setSchemaVersion(driver, 7);
+    version = 7;
   }
 
   if (version !== SCHEMA_VERSION) {

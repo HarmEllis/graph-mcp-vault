@@ -46,6 +46,7 @@ const BASE_CONFIG: Config = {
   oidcDiscoveryUrl: undefined,
   publicUrl: "http://localhost:8000",
   scopesAllowlist: undefined,
+  maxVersionsLimit: 10,
 };
 
 let container: StartedTestContainer;
@@ -92,7 +93,7 @@ beforeAll(async () => {
       BASE_CONFIG,
       sessionStore,
       jwksClient,
-      createResourceTools(neo4jClient),
+      createResourceTools(neo4jClient, 10),
       neo4jClient,
       "",
     ),
