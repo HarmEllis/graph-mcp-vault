@@ -103,16 +103,16 @@ describe("SessionStore.get", () => {
     expect(store.size()).toBe(0);
   });
 
-  it("refreshes lastActiveAt on every successful get", async () => {
-    // TTL = 60 ms. Sleep 40 ms, get (resets timer), sleep 40 ms again.
-    // Without the refresh the second get would expire; with it, it should pass.
+  it("refreshes lastActiveAt on every successful get", () => {
+    // Use fake time to avoid CI jitter around short TTL windows.
+    vi.useFakeTimers();
     const store = new SessionStore(60);
     const id = store.create("user-refresh", "ns");
 
-    await new Promise((r) => setTimeout(r, 40));
+    vi.advanceTimersByTime(40);
     expect(store.get(id)).not.toBeNull(); // resets TTL
 
-    await new Promise((r) => setTimeout(r, 40));
+    vi.advanceTimersByTime(40);
     expect(store.get(id)).not.toBeNull(); // still alive thanks to refresh
   });
 
