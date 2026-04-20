@@ -1,6 +1,6 @@
 {
   "mcpServers": {
-    "graph-mcp-vault": {
+    "graph-mcp-vault-dev": {
       "type": "http",
       "url": "http://localhost:8000/mcp",
       "oauth": {
