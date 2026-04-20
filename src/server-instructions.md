@@ -4,19 +4,20 @@ and connected via typed relations.
 ## Data model
 
 - **namespace**: logical workspace (e.g. "homelab", "work"). Each session is bound
-  to one namespace via the URL (e.g. `/mcp/homelab`). Individual tool calls can
-  override the namespace using the optional `namespace` parameter — use this to
-  read or write entries in a different namespace than the session default.
-- **entry_type**: category of the entry (e.g. "note", "decision", "fact", "reference").
-- **title**: short descriptive name.
-- **content**: full body of the entry. ALWAYS write content in Markdown. Use
-  headings, lists, and code blocks where appropriate. Markdown improves
-  readability, full-text search quality, and rendering in clients.
-- **topic**: broad subject area (optional, single string).
-- **tags**: keyword list for filtering (optional, max 50).
-- **summary**: one-sentence description for quick scanning (optional).
-- **source**: origin URL or citation (optional).
-- **last_verified_at**: ISO 8601 datetime when the entry was last verified (optional).
+  to one namespace via the URL. Individual tool calls can override the namespace
+  using the optional `namespace` parameter — use this to read or write entries in
+  a different namespace than the session default.
+- **content**: ALWAYS write in Markdown. Use headings, lists, and code blocks where
+  appropriate. This improves readability, search quality, and rendering in clients.
+- **tags**: keyword list for filtering (max 50).
+
+## Namespace structure template
+
+Each namespace can have a `structure_template`: a Markdown description of its
+intended organisation (entry types, tags, relation types, conventions). It is
+returned by `knowledge_list_namespaces` — read it at the start of a session to
+understand how the namespace is structured and follow its conventions when
+creating or updating entries.
 
 ## Relations
 
