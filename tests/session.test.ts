@@ -41,6 +41,33 @@ describe("SessionStore.create", () => {
     expect(session?.userId).toBe("user-xyz");
     expect(session?.namespace).toBe("workspace-1");
   });
+
+  it("defaults readonly and lockedNamespace to false when flags are omitted", () => {
+    const store = freshStore();
+    const id = store.create("user-a", "default");
+    const session = store.get(id);
+    expect(session?.readonly).toBe(false);
+    expect(session?.lockedNamespace).toBe(false);
+  });
+
+  it("stores readonly and lockedNamespace flags when provided", () => {
+    const store = freshStore();
+    const id = store.create("user-a", "default", {
+      readonly: true,
+      lockedNamespace: true,
+    });
+    const session = store.get(id);
+    expect(session?.readonly).toBe(true);
+    expect(session?.lockedNamespace).toBe(true);
+  });
+
+  it("allows partial flags (only readonly)", () => {
+    const store = freshStore();
+    const id = store.create("user-a", "default", { readonly: true });
+    const session = store.get(id);
+    expect(session?.readonly).toBe(true);
+    expect(session?.lockedNamespace).toBe(false);
+  });
 });
 
 // ── get ───────────────────────────────────────────────────────────────────────

@@ -49,7 +49,7 @@ function hasPermission(
  */
 async function requirePermission(
   neo4jClient: Neo4jClient,
-  userId: string,
+  ctx: ToolContext,
   entryId: string,
   permission: Permission,
 ): Promise<"owner" | "editor" | "viewer"> {
@@ -57,11 +57,35 @@ async function requirePermission(
   if (!resource)
     throw new ToolError(ErrorCode.RESOURCE_NOT_FOUND, "Resource not found");
 
-  const role = await neo4jClient.getEffectiveRole(userId, entryId);
+  if (ctx.lockedNamespace && resource.namespace !== ctx.namespace) {
+    throw new ToolError(
+      ErrorCode.PERMISSION_DENIED,
+      `Entry namespace does not match locked namespace: ${ctx.namespace}`,
+    );
+  }
+
+  const role = await neo4jClient.getEffectiveRole(ctx.userId, entryId);
   if (role === null || !hasPermission(role, permission)) {
     throw new ToolError(ErrorCode.PERMISSION_DENIED, "Permission denied");
   }
   return role;
+}
+
+async function assertLockedNamespace(
+  neo4jClient: Neo4jClient,
+  ctx: ToolContext,
+  entryId: string,
+): Promise<void> {
+  if (!ctx.lockedNamespace) return;
+  const resource = await neo4jClient.getResource(entryId);
+  if (!resource)
+    throw new ToolError(ErrorCode.RESOURCE_NOT_FOUND, "Resource not found");
+  if (resource.namespace !== ctx.namespace) {
+    throw new ToolError(
+      ErrorCode.PERMISSION_DENIED,
+      `Entry namespace does not match locked namespace: ${ctx.namespace}`,
+    );
+  }
 }
 
 function throwMappedClientError(error: unknown): never {
@@ -189,6 +213,10 @@ async function handleGet(
   if (!resource)
     throw new ToolError(ErrorCode.RESOURCE_NOT_FOUND, "Resource not found");
 
+  if (ctx.lockedNamespace && resource.namespace !== ctx.namespace) {
+    throw new ToolError(ErrorCode.PERMISSION_DENIED, `Entry namespace does not match locked namespace: ${ctx.namespace}`);
+  }
+
   const role = await neo4jClient.getEffectiveRole(ctx.userId, entry_id);
   if (role === null)
     throw new ToolError(ErrorCode.PERMISSION_DENIED, "Permission denied");
@@ -274,7 +302,7 @@ async function handleUpdate(
     last_verified_at,
   } = parsed.data;
 
-  await requirePermission(neo4jClient, ctx.userId, entry_id, "write");
+  await requirePermission(neo4jClient, ctx, entry_id, "write");
   try {
     await neo4jClient.updateResource(entry_id, {
       ...(title !== undefined && { title }),
@@ -311,7 +339,7 @@ async function handleDelete(
   }
   const { entry_id } = parsed.data;
 
-  await requirePermission(neo4jClient, ctx.userId, entry_id, "delete");
+  await requirePermission(neo4jClient, ctx, entry_id, "delete");
   await neo4jClient.deleteResource(entry_id);
   return {};
 }
@@ -402,6 +430,9 @@ async function handleCreateRelation(
   }
   const { from_id, to_id, relation_type, label } = parsed.data;
 
+  await assertLockedNamespace(neo4jClient, ctx, from_id);
+  await assertLockedNamespace(neo4jClient, ctx, to_id);
+
   try {
     await neo4jClient.createEntryRelation(
       ctx.userId,
@@ -438,6 +469,9 @@ async function handleDeleteRelation(
   }
   const { from_id, to_id, relation_type } = parsed.data;
 
+  await assertLockedNamespace(neo4jClient, ctx, from_id);
+  await assertLockedNamespace(neo4jClient, ctx, to_id);
+
   try {
     await neo4jClient.deleteEntryRelation(
       ctx.userId,
@@ -473,6 +507,8 @@ async function handleListRelations(
   }
   const { entry_id, direction, limit: rawLimit } = parsed.data;
   const limit = rawLimit ?? DEFAULT_LIST_RELATIONS_LIMIT;
+
+  await assertLockedNamespace(neo4jClient, ctx, entry_id);
 
   try {
     const relations = await neo4jClient.listEntryRelations(
@@ -523,6 +559,8 @@ async function handleExpandContext(
   const maxHops = rawHops ?? DEFAULT_MAX_HOPS;
   const limit = rawLimit ?? DEFAULT_EXPAND_CONTEXT_LIMIT;
 
+  await assertLockedNamespace(neo4jClient, ctx, entry_id);
+
   try {
     const layers = await neo4jClient.expandContext({
       userId: ctx.userId,
@@ -572,6 +610,9 @@ async function handleFindPaths(
   const maxDepth = rawDepth ?? DEFAULT_MAX_DEPTH;
   const maxPaths = rawPaths ?? DEFAULT_MAX_PATHS;
   const dir = direction ?? "both";
+
+  await assertLockedNamespace(neo4jClient, ctx, from_id);
+  await assertLockedNamespace(neo4jClient, ctx, to_id);
 
   try {
     const paths = await neo4jClient.findPaths({
@@ -634,6 +675,9 @@ async function handleExplainRelationship(
   const maxDepth = rawDepth ?? DEFAULT_MAX_DEPTH;
   const maxPaths = rawPaths ?? DEFAULT_MAX_PATHS;
 
+  await assertLockedNamespace(neo4jClient, ctx, entry_a_id);
+  await assertLockedNamespace(neo4jClient, ctx, entry_b_id);
+
   try {
     return await neo4jClient.explainRelationship({
       userId: ctx.userId,
@@ -676,6 +720,8 @@ async function handleImpactAnalysis(
   } = parsed.data;
   const maxDepth = rawDepth ?? DEFAULT_MAX_DEPTH;
   const limit = rawLimit ?? DEFAULT_IMPACT_LIMIT;
+
+  await assertLockedNamespace(neo4jClient, ctx, entry_id);
 
   try {
     const result = await neo4jClient.impactAnalysis({

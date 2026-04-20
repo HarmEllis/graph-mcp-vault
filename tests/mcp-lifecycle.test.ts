@@ -1165,3 +1165,250 @@ describe("user profile upsert on initialize", () => {
     expect(stub.upsertUserProfileSpy).not.toHaveBeenCalled();
   });
 });
+
+// ── parseQueryFlag / ?readonly / ?lock_namespace ──────────────────────────────
+
+// Helper: build an app with one read tool and one write tool for testing
+// session-level enforcement without needing a real Neo4j connection.
+function buildAppWithStubTools() {
+  const config = { ...BASE_CONFIG };
+  const sessionStore = new SessionStore();
+  const jwksClient = new JwksClient(JWKS_URI, config.jwksCacheTtl * 1000);
+  const readTool = {
+    descriptor: {
+      name: "knowledge_list_entries",
+      description: "list",
+      inputSchema: {
+        type: "object" as const,
+        properties: { namespace: { type: "string" } },
+      },
+    },
+    handler: vi.fn().mockResolvedValue({ resources: [] }),
+  };
+  const searchTool = {
+    descriptor: {
+      name: "knowledge_search_entries",
+      description: "search",
+      inputSchema: {
+        type: "object" as const,
+        properties: { query: { type: "string" }, namespace: { type: "string" } },
+        required: ["query"],
+      },
+    },
+    handler: vi.fn().mockResolvedValue({ resources: [] }),
+  };
+  const writeTool = {
+    descriptor: {
+      name: "knowledge_create_entry",
+      description: "create",
+      inputSchema: {
+        type: "object" as const,
+        properties: { namespace: { type: "string" }, title: { type: "string" } },
+      },
+    },
+    handler: vi.fn().mockResolvedValue({ id: "new-id" }),
+  };
+  const app = new Hono();
+  app.route(
+    "/",
+    createMcpRouter(
+      config,
+      sessionStore,
+      jwksClient,
+      [readTool, searchTool, writeTool],
+      makeStubNeo4j(),
+      "",
+    ),
+  );
+  return { app, sessionStore, readTool, searchTool, writeTool };
+}
+
+async function callTool(
+  app: Hono,
+  token: string,
+  sessionId: string,
+  toolName: string,
+  args: Record<string, unknown> = {},
+  urlPath = "/mcp",
+) {
+  return post(
+    app,
+    urlPath,
+    {
+      jsonrpc: "2.0",
+      id: 3,
+      method: "tools/call",
+      params: { name: toolName, arguments: args },
+    },
+    { Authorization: `Bearer ${token}`, "Mcp-Session-Id": sessionId },
+  );
+}
+
+describe("?readonly query flag", () => {
+  it("blocks write tools with PERMISSION_DENIED when ?readonly is set", async () => {
+    stubJwks();
+    const token = await makeToken();
+    const { app, writeTool } = buildAppWithStubTools();
+
+    const { sessionId } = await doInitialize(app, token, {
+      urlPath: "/mcp/default?readonly",
+    });
+    const res = await callTool(app, token, sessionId, "knowledge_create_entry");
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.error.code).toBe(ErrorCode.PERMISSION_DENIED);
+    expect(writeTool.handler).not.toHaveBeenCalled();
+  });
+
+  it("allows read tools when ?readonly is set", async () => {
+    stubJwks();
+    const token = await makeToken();
+    const { app, readTool } = buildAppWithStubTools();
+
+    const { sessionId } = await doInitialize(app, token, {
+      urlPath: "/mcp/default?readonly",
+    });
+    const res = await callTool(app, token, sessionId, "knowledge_list_entries");
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.result.isError).toBe(false);
+    expect(readTool.handler).toHaveBeenCalled();
+  });
+
+  it("does NOT activate readonly when ?readonly=false", async () => {
+    stubJwks();
+    const token = await makeToken();
+    const { app, writeTool } = buildAppWithStubTools();
+
+    const { sessionId } = await doInitialize(app, token, {
+      urlPath: "/mcp/default?readonly=false",
+    });
+    const res = await callTool(app, token, sessionId, "knowledge_create_entry");
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.result.isError).toBe(false);
+    expect(writeTool.handler).toHaveBeenCalled();
+  });
+
+  it("activates readonly when ?readonly=true", async () => {
+    stubJwks();
+    const token = await makeToken();
+    const { app, writeTool } = buildAppWithStubTools();
+
+    const { sessionId } = await doInitialize(app, token, {
+      urlPath: "/mcp/default?readonly=true",
+    });
+    const res = await callTool(app, token, sessionId, "knowledge_create_entry");
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.error.code).toBe(ErrorCode.PERMISSION_DENIED);
+    expect(writeTool.handler).not.toHaveBeenCalled();
+  });
+});
+
+describe("?lock_namespace query flag", () => {
+  it("blocks tool calls with a different namespace arg", async () => {
+    stubJwks();
+    const token = await makeToken();
+    const { app } = buildAppWithStubTools();
+
+    const { sessionId } = await doInitialize(app, token, {
+      urlPath: "/mcp/homelab?lock_namespace",
+    });
+    const res = await callTool(app, token, sessionId, "knowledge_list_entries", {
+      namespace: "other",
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.error.code).toBe(ErrorCode.PERMISSION_DENIED);
+  });
+
+  it("allows tool calls that omit namespace (injects session namespace)", async () => {
+    stubJwks();
+    const token = await makeToken();
+    const { app, readTool } = buildAppWithStubTools();
+
+    const { sessionId } = await doInitialize(app, token, {
+      urlPath: "/mcp/homelab?lock_namespace",
+    });
+    const res = await callTool(app, token, sessionId, "knowledge_list_entries");
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.result.isError).toBe(false);
+    // knowledge_list_entries is not in NAMESPACE_INJECT_TOOLS; args pass through unchanged
+    expect(readTool.handler).toHaveBeenCalledWith(
+      expect.not.objectContaining({ namespace: expect.anything() }),
+      expect.anything(),
+    );
+  });
+
+  it("allows tool calls that explicitly pass the locked namespace", async () => {
+    stubJwks();
+    const token = await makeToken();
+    const { app, readTool } = buildAppWithStubTools();
+
+    const { sessionId } = await doInitialize(app, token, {
+      urlPath: "/mcp/homelab?lock_namespace",
+    });
+    const res = await callTool(app, token, sessionId, "knowledge_list_entries", {
+      namespace: "homelab",
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.result.isError).toBe(false);
+    expect(readTool.handler).toHaveBeenCalled();
+  });
+
+  it("does NOT activate lock when ?lock_namespace=false", async () => {
+    stubJwks();
+    const token = await makeToken();
+    const { app, readTool } = buildAppWithStubTools();
+
+    const { sessionId } = await doInitialize(app, token, {
+      urlPath: "/mcp/homelab?lock_namespace=false",
+    });
+    const res = await callTool(app, token, sessionId, "knowledge_list_entries", {
+      namespace: "other",
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.result.isError).toBe(false);
+    expect(readTool.handler).toHaveBeenCalledWith(
+      expect.objectContaining({ namespace: "other" }),
+      expect.anything(),
+    );
+  });
+
+  it("injects session namespace into knowledge_search_entries when omitted (NAMESPACE_INJECT_TOOLS)", async () => {
+    stubJwks();
+    const token = await makeToken();
+    const { app, searchTool } = buildAppWithStubTools();
+
+    const { sessionId } = await doInitialize(app, token, {
+      urlPath: "/mcp/homelab?lock_namespace",
+    });
+    const res = await callTool(
+      app,
+      token,
+      sessionId,
+      "knowledge_search_entries",
+      { query: "test" },
+    );
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.result.isError).toBe(false);
+    expect(searchTool.handler).toHaveBeenCalledWith(
+      expect.objectContaining({ namespace: "homelab", query: "test" }),
+      expect.anything(),
+    );
+  });
+});

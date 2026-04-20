@@ -20,14 +20,21 @@ import {
  */
 async function requireOwner(
   neo4jClient: Neo4jClient,
-  userId: string,
+  ctx: ToolContext,
   entryId: string,
 ): Promise<void> {
   const resource = await neo4jClient.getResource(entryId);
   if (!resource)
     throw new ToolError(ErrorCode.RESOURCE_NOT_FOUND, "Resource not found");
 
-  const role = await neo4jClient.getEffectiveRole(userId, entryId);
+  if (ctx.lockedNamespace && resource.namespace !== ctx.namespace) {
+    throw new ToolError(
+      ErrorCode.PERMISSION_DENIED,
+      `Entry namespace does not match locked namespace: ${ctx.namespace}`,
+    );
+  }
+
+  const role = await neo4jClient.getEffectiveRole(ctx.userId, entryId);
   if (role !== "owner") {
     throw new ToolError(ErrorCode.PERMISSION_DENIED, "Permission denied");
   }
@@ -39,14 +46,21 @@ async function requireOwner(
  */
 async function requireRead(
   neo4jClient: Neo4jClient,
-  userId: string,
+  ctx: ToolContext,
   entryId: string,
 ): Promise<void> {
   const resource = await neo4jClient.getResource(entryId);
   if (!resource)
     throw new ToolError(ErrorCode.RESOURCE_NOT_FOUND, "Resource not found");
 
-  const role = await neo4jClient.getEffectiveRole(userId, entryId);
+  if (ctx.lockedNamespace && resource.namespace !== ctx.namespace) {
+    throw new ToolError(
+      ErrorCode.PERMISSION_DENIED,
+      `Entry namespace does not match locked namespace: ${ctx.namespace}`,
+    );
+  }
+
+  const role = await neo4jClient.getEffectiveRole(ctx.userId, entryId);
   if (role === null)
     throw new ToolError(ErrorCode.PERMISSION_DENIED, "Permission denied");
 }
@@ -73,7 +87,7 @@ async function handleShare(
   }
   const { entry_id, target_user_id, role } = parsed.data;
 
-  await requireOwner(neo4jClient, ctx.userId, entry_id);
+  await requireOwner(neo4jClient, ctx, entry_id);
   const target = await neo4jClient.getUser(target_user_id);
   if (!target) {
     throw new ToolError(ErrorCode.RESOURCE_NOT_FOUND, "Target user not found");
@@ -107,6 +121,13 @@ async function handleRevoke(
   const resource = await neo4jClient.getResource(entry_id);
   if (!resource)
     throw new ToolError(ErrorCode.RESOURCE_NOT_FOUND, "Resource not found");
+
+  if (ctx.lockedNamespace && resource.namespace !== ctx.namespace) {
+    throw new ToolError(
+      ErrorCode.PERMISSION_DENIED,
+      `Entry namespace does not match locked namespace: ${ctx.namespace}`,
+    );
+  }
 
   // Prevent revoking own access
   if (target_user_id === ctx.userId) {
@@ -148,7 +169,7 @@ async function handleListAccess(
   const { entry_id, limit: rawLimit } = parsed.data;
   const limit = rawLimit ?? DEFAULT_LIST_ACCESS_LIMIT;
 
-  await requireRead(neo4jClient, ctx.userId, entry_id);
+  await requireRead(neo4jClient, ctx, entry_id);
   const sharing = await neo4jClient.listSharing(entry_id, limit);
   return { sharing };
 }

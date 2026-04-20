@@ -2,10 +2,10 @@ import { z } from "zod";
 import { ErrorCode } from "./errors.js";
 import { ToolError } from "./tools/registry.js";
 
-export const NAMESPACE_REGEX = /^[a-z]+(-[a-z]+)*$/;
+export const NAMESPACE_REGEX = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
 export const NAMESPACE_ERROR_MESSAGE =
-  "namespace must match ^[a-z]+(-[a-z]+)*$";
+  "namespace must match ^[a-z0-9]+(-[a-z0-9]+)*$";
 
 export const zNamespace = z
   .string()
@@ -22,7 +22,7 @@ export function normalizeNamespaceForMigration(
   fallback = "default",
 ): string {
   let s = input.toLowerCase();
-  s = s.replace(/[^a-z]+/g, "-");
+  s = s.replace(/[^a-z0-9]+/g, "-");
   s = s.replace(/-+/g, "-");
   s = s.replace(/^-+|-+$/g, "");
   return s.length === 0 ? fallback : s;

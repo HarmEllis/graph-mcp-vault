@@ -36,6 +36,7 @@ export interface NamespaceSummary {
   namespace: string;
   owned_count: number;
   shared_count: number;
+  structure_template?: string;
 }
 
 export interface UserProfile {
@@ -51,6 +52,7 @@ export interface NamespaceConfig {
   auto_share: boolean;
   auto_share_permission: AutoSharePermission;
   auto_share_user_ids: string[];
+  structure_template?: string;
 }
 
 export type MatchMode = "exact" | "fulltext" | "fuzzy";
@@ -397,7 +399,8 @@ export class Neo4jClient {
         MATCH (cfg:NamespaceConfig {owner_id: $ownerId, namespace: $namespace})
         RETURN cfg.auto_share AS auto_share,
                cfg.auto_share_permission AS auto_share_permission,
-               cfg.auto_share_user_ids AS auto_share_user_ids
+               cfg.auto_share_user_ids AS auto_share_user_ids,
+               cfg.structure_template AS structure_template
         `,
         { ownerId, namespace },
       );
@@ -422,12 +425,18 @@ export class Neo4jClient {
         (record.get("auto_share_permission") as AutoSharePermission | null) ??
         "read";
       const userIds = record.get("auto_share_user_ids") as string[] | null;
+      const structureTemplate = record.get("structure_template") as
+        | string
+        | null;
       return {
         namespace,
         auto_share: (record.get("auto_share") as boolean | null) ?? false,
         auto_share_permission:
           permission === "write" || permission === "read" ? permission : "read",
         auto_share_user_ids: Array.isArray(userIds) ? userIds : [],
+        ...(structureTemplate !== null
+          ? { structure_template: structureTemplate }
+          : {}),
       };
     } finally {
       await session.close();
@@ -440,6 +449,7 @@ export class Neo4jClient {
     auto_share?: boolean;
     auto_share_permission?: AutoSharePermission;
     auto_share_user_ids?: string[];
+    structure_template?: string;
   }): Promise<NamespaceConfig> {
     const session = this.driver.session();
     try {
@@ -457,10 +467,15 @@ export class Neo4jClient {
               cfg.auto_share_user_ids,
               []
             ),
+            cfg.structure_template = coalesce(
+              $structureTemplate,
+              cfg.structure_template
+            ),
             cfg.updated_at = $now
         RETURN cfg.auto_share AS auto_share,
                cfg.auto_share_permission AS auto_share_permission,
-               cfg.auto_share_user_ids AS auto_share_user_ids
+               cfg.auto_share_user_ids AS auto_share_user_ids,
+               cfg.structure_template AS structure_template
         `,
         {
           ownerId: params.ownerId,
@@ -468,6 +483,7 @@ export class Neo4jClient {
           autoShare: params.auto_share ?? null,
           autoSharePermission: params.auto_share_permission ?? null,
           autoShareUserIds: params.auto_share_user_ids ?? null,
+          structureTemplate: params.structure_template ?? null,
           now: new Date().toISOString(),
         },
       );
@@ -485,12 +501,18 @@ export class Neo4jClient {
         (record.get("auto_share_permission") as AutoSharePermission | null) ??
         "read";
       const userIds = record.get("auto_share_user_ids") as string[] | null;
+      const structureTemplate = record.get("structure_template") as
+        | string
+        | null;
       return {
         namespace: params.namespace,
         auto_share: (record.get("auto_share") as boolean | null) ?? false,
         auto_share_permission:
           permission === "write" || permission === "read" ? permission : "read",
         auto_share_user_ids: Array.isArray(userIds) ? userIds : [],
+        ...(structureTemplate !== null
+          ? { structure_template: structureTemplate }
+          : {}),
       };
     } finally {
       await session.close();
@@ -930,6 +952,16 @@ export class Neo4jClient {
         { userId: params.userId },
       );
 
+      const templateResult = await session.run(
+        `
+        MATCH (cfg:NamespaceConfig {owner_id: $userId})
+        WHERE cfg.structure_template IS NOT NULL
+        RETURN cfg.namespace AS namespace,
+               cfg.structure_template AS structure_template
+        `,
+        { userId: params.userId },
+      );
+
       const map = new Map<string, NamespaceSummary>();
 
       for (const record of ownedResult.records) {
@@ -946,6 +978,22 @@ export class Neo4jClient {
           existing.shared_count = shared_count;
         } else {
           map.set(namespace, { namespace, owned_count: 0, shared_count });
+        }
+      }
+
+      for (const record of templateResult.records) {
+        const namespace = record.get("namespace") as string;
+        const structure_template = record.get("structure_template") as string;
+        const existing = map.get(namespace);
+        if (existing) {
+          existing.structure_template = structure_template;
+        } else {
+          map.set(namespace, {
+            namespace,
+            owned_count: 0,
+            shared_count: 0,
+            structure_template,
+          });
         }
       }
 

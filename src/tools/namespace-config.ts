@@ -34,15 +34,17 @@ const updateNamespaceConfigSchema = z
     auto_share: z.boolean().optional(),
     auto_share_permission: z.enum(["read", "write"]).optional(),
     auto_share_user_ids: z.array(z.string().min(1)).max(500).optional(),
+    structure_template: z.string().max(10000).optional(),
   })
   .refine(
     (value) =>
       value.auto_share !== undefined ||
       value.auto_share_permission !== undefined ||
-      value.auto_share_user_ids !== undefined,
+      value.auto_share_user_ids !== undefined ||
+      value.structure_template !== undefined,
     {
       message:
-        "At least one of auto_share, auto_share_permission, auto_share_user_ids is required",
+        "At least one of auto_share, auto_share_permission, auto_share_user_ids, structure_template is required",
     },
   );
 
@@ -92,6 +94,9 @@ async function handleUpdateNamespaceConfig(
     ...(uniqueUserIds !== undefined
       ? { auto_share_user_ids: uniqueUserIds }
       : {}),
+    ...(parsed.data.structure_template !== undefined
+      ? { structure_template: parsed.data.structure_template }
+      : {}),
   });
 }
 
@@ -103,7 +108,7 @@ export function createNamespaceConfigTools(
       descriptor: {
         name: "knowledge_get_namespace_config",
         description:
-          "Get namespace auto-share settings for the current user (or explicit namespace).",
+          "Get namespace settings for the current user (or explicit namespace), including auto-share config and structure_template.",
         inputSchema: {
           type: "object",
           properties: {
@@ -117,7 +122,7 @@ export function createNamespaceConfigTools(
       descriptor: {
         name: "knowledge_update_namespace_config",
         description:
-          "Update namespace auto-share settings for the current user.",
+          "Update namespace settings for the current user: auto-share config and/or a Markdown structure_template that describes the intended organisation of this namespace.",
         inputSchema: {
           type: "object",
           properties: {
@@ -125,6 +130,11 @@ export function createNamespaceConfigTools(
             auto_share: { type: "boolean" },
             auto_share_permission: { type: "string", enum: ["read", "write"] },
             auto_share_user_ids: { type: "array", items: { type: "string" } },
+            structure_template: {
+              type: "string",
+              description:
+                "Markdown text describing the intended structure of this namespace (entry types, tags, relation types, conventions). Shown in knowledge_list_namespaces so every session sees it automatically.",
+            },
           },
         },
       },

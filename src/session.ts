@@ -8,6 +8,8 @@ export interface Session {
   namespace: string;
   createdAt: number;
   lastActiveAt: number;
+  readonly: boolean;
+  lockedNamespace: boolean;
 }
 
 // ── SessionStore ──────────────────────────────────────────────────────────────
@@ -41,7 +43,11 @@ export class SessionStore {
    * Creates a new session for the given user and namespace.
    * Returns the UUID4 session ID.
    */
-  create(userId: string, namespace: string): string {
+  create(
+    userId: string,
+    namespace: string,
+    flags?: { readonly?: boolean; lockedNamespace?: boolean },
+  ): string {
     const id = randomUUID();
     const now = Date.now();
     this.sessions.set(id, {
@@ -50,6 +56,8 @@ export class SessionStore {
       namespace,
       createdAt: now,
       lastActiveAt: now,
+      readonly: flags?.readonly ?? false,
+      lockedNamespace: flags?.lockedNamespace ?? false,
     });
     return id;
   }

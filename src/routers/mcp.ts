@@ -7,11 +7,13 @@ import { ErrorCode, makeJsonRpcError } from "../errors.js";
 import { type Logger, noopLogger } from "../logger.js";
 import { NAMESPACE_ERROR_MESSAGE, NAMESPACE_REGEX } from "../namespace.js";
 import type { Neo4jClient } from "../neo4j-client.js";
-import type { SessionStore } from "../session.js";
+import type { Session, SessionStore } from "../session.js";
 import {
   type RegisteredTool,
   type ToolContext,
   ToolError,
+  NAMESPACE_INJECT_TOOLS,
+  WRITE_TOOLS,
 } from "../tools/registry.js";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -147,6 +149,16 @@ function makePreflightResponse(
   return new Response(null, { status, headers });
 }
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+// Returns true when the query param is present with no value, "true", or "1".
+// Explicitly passing "false" or "0" leaves the flag disabled.
+function parseQueryFlag(value: string | undefined): boolean {
+  if (value === undefined) return false;
+  if (value === "false" || value === "0") return false;
+  return true;
+}
+
 // ── createMcpRouter ───────────────────────────────────────────────────────────
 
 export function createMcpRouter(
@@ -185,10 +197,14 @@ export function createMcpRouter(
     const requestId = randomUUID();
     const startMs = Date.now();
     const urlNamespace = c.req.param("namespace") as string | undefined;
+    const queryFlags = {
+      readonly: parseQueryFlag(c.req.query("readonly")),
+      lockedNamespace: parseQueryFlag(c.req.query("lock_namespace")),
+    };
 
     logger.debug("request_start", { requestId, urlNamespace });
 
-    const response = await resolvePost(c, requestId, urlNamespace);
+    const response = await resolvePost(c, requestId, urlNamespace, queryFlags);
 
     logger.debug("request_end", {
       requestId,
@@ -202,6 +218,7 @@ export function createMcpRouter(
     c: Context,
     requestId: string,
     urlNamespace: string | undefined,
+    queryFlags: { readonly: boolean; lockedNamespace: boolean },
   ): Promise<Response> {
     // 1. CORS origin check
     const cors = resolveCorsOrigin(
@@ -294,6 +311,7 @@ export function createMcpRouter(
           urlNamespace,
           c.req.header("mcp-session-id"),
           requestId,
+          queryFlags,
         ),
         cors.allowOrigin,
       );
@@ -307,6 +325,7 @@ export function createMcpRouter(
         urlNamespace,
         c.req.header("mcp-session-id"),
         requestId,
+        queryFlags,
       ),
       cors.allowOrigin,
     );
@@ -322,6 +341,7 @@ export function createMcpRouter(
     urlNamespace: string | undefined,
     sessionHeader: string | undefined,
     requestId: string,
+    queryFlags: { readonly: boolean; lockedNamespace: boolean },
   ): Promise<Response> {
     const msg = parseMessage(raw);
     if (!msg) {
@@ -347,6 +367,7 @@ export function createMcpRouter(
       urlNamespace,
       sessionHeader,
       requestId,
+      queryFlags,
     );
     const headers: Record<string, string> = {};
     if (result.sessionId !== null) headers["Mcp-Session-Id"] = result.sessionId;
@@ -366,6 +387,7 @@ export function createMcpRouter(
     urlNamespace: string | undefined,
     sessionHeader: string | undefined,
     requestId: string,
+    queryFlags: { readonly: boolean; lockedNamespace: boolean },
   ): Promise<Response> {
     const responses: unknown[] = [];
     let newSessionId: string | null = null;
@@ -392,6 +414,7 @@ export function createMcpRouter(
         urlNamespace,
         sessionHeader,
         requestId,
+        queryFlags,
       );
       if (result.sessionId !== null) newSessionId = result.sessionId;
       responses.push(result.response);
@@ -416,6 +439,7 @@ export function createMcpRouter(
     urlNamespace: string | undefined,
     sessionHeader: string | undefined,
     requestId: string,
+    queryFlags: { readonly: boolean; lockedNamespace: boolean },
   ): Promise<DispatchResult> {
     const { id, method } = req;
 
@@ -427,6 +451,7 @@ export function createMcpRouter(
         email,
         urlNamespace,
         requestId,
+        queryFlags,
       );
     }
 
@@ -501,6 +526,7 @@ export function createMcpRouter(
     const ctx: ToolContext = {
       userId: session.userId,
       namespace: session.namespace,
+      lockedNamespace: session.lockedNamespace,
     };
 
     switch (method) {
@@ -521,7 +547,7 @@ export function createMcpRouter(
         };
 
       case "tools/call":
-        return handleToolCall(req, ctx, requestId);
+        return handleToolCall(req, ctx, session, requestId);
 
       default:
         return {
@@ -541,6 +567,7 @@ export function createMcpRouter(
   async function handleToolCall(
     req: JsonRpcRequest,
     ctx: ToolContext,
+    session: Session,
     requestId: string,
   ): Promise<DispatchResult> {
     const { id } = req;
@@ -572,9 +599,44 @@ export function createMcpRouter(
       };
     }
 
-    const args = (params?.arguments ?? {}) as Record<string, unknown>;
+    let args = (params?.arguments ?? {}) as Record<string, unknown>;
+    // Capture raw client-supplied namespace for logging before any injection.
     const requestNamespace =
       typeof args.namespace === "string" ? args.namespace : null;
+
+    if (session.readonly && WRITE_TOOLS.has(toolName)) {
+      return {
+        response: makeJsonRpcError(
+          id,
+          ErrorCode.PERMISSION_DENIED,
+          "Session is read-only; write operations are not allowed",
+        ),
+        sessionId: null,
+        httpStatus: 200,
+      };
+    }
+
+    if (session.lockedNamespace) {
+      if (
+        typeof args.namespace === "string" &&
+        args.namespace !== session.namespace
+      ) {
+        return {
+          response: makeJsonRpcError(
+            id,
+            ErrorCode.PERMISSION_DENIED,
+            `Session namespace is locked to: ${session.namespace}`,
+          ),
+          sessionId: null,
+          httpStatus: 200,
+        };
+      }
+      // For search tools that default to all namespaces when namespace is
+      // omitted, inject the locked namespace to enforce the scope constraint.
+      if (args.namespace === undefined && NAMESPACE_INJECT_TOOLS.has(toolName)) {
+        args = { ...args, namespace: session.namespace };
+      }
+    }
     const startMs = Date.now();
 
     try {
@@ -664,6 +726,7 @@ export function createMcpRouter(
     email: string | null,
     urlNamespace: string | undefined,
     requestId: string,
+    queryFlags: { readonly: boolean; lockedNamespace: boolean },
   ): Promise<DispatchResult> {
     const { id } = req;
     const params = req.params as Record<string, unknown> | undefined;
@@ -717,11 +780,18 @@ export function createMcpRouter(
         httpStatus: 400,
       };
     }
-    const sessionId = sessionStore.create(userId, namespace);
+    const sessionId = sessionStore.create(userId, namespace, queryFlags);
 
     await neo4jClient.upsertUserProfile(userId, name, email);
 
-    logger.info("session_created", { requestId, userId, namespace, sessionId });
+    logger.info("session_created", {
+      requestId,
+      userId,
+      namespace,
+      sessionId,
+      readonly: queryFlags.readonly,
+      lockedNamespace: queryFlags.lockedNamespace,
+    });
 
     return {
       response: {

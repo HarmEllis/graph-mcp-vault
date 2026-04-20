@@ -18,6 +18,11 @@ describe("NAMESPACE_REGEX", () => {
     ["test-default"],
     ["iso-ns-a"],
     ["zz"],
+    ["foo1"],
+    ["123"],
+    ["3d-printing"],
+    ["v2-api"],
+    ["2024"],
   ])("accepts %s", (ns) => {
     expect(NAMESPACE_REGEX.test(ns)).toBe(true);
   });
@@ -32,9 +37,7 @@ describe("NAMESPACE_REGEX", () => {
     ["FOO"],
     ["foo_bar"],
     ["foo bar"],
-    ["foo1"],
     ["café"],
-    ["123"],
     ["foo/bar"],
   ])("rejects %s", (ns) => {
     expect(NAMESPACE_REGEX.test(ns)).toBe(false);
@@ -84,7 +87,7 @@ describe("normalizeNamespaceForMigration", () => {
     ["Foo--Bar", "foo-bar"],
     ["FOO/BAR", "foo-bar"],
     ["-leading-", "leading"],
-    ["123", "default"],
+    ["123", "123"],
     ["", "default"],
     ["a-b", "a-b"],
     ["A", "a"],

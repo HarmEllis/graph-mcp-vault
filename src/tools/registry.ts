@@ -20,6 +20,7 @@ export interface McpTool {
 export interface ToolContext {
   userId: string;
   namespace: string;
+  lockedNamespace?: boolean;
 }
 
 export type ToolHandler = (
@@ -55,3 +56,22 @@ export class ToolError extends Error {
  * main.ts builds the full list and passes it to `createMcpRouter`.
  */
 export const TOOL_LIST: RegisteredTool[] = [];
+
+// ── Write tool set ────────────────────────────────────────────────────────────
+
+export const WRITE_TOOLS = new Set([
+  "knowledge_create_entry",
+  "knowledge_update_entry",
+  "knowledge_delete_entry",
+  "knowledge_create_relation",
+  "knowledge_delete_relation",
+  "knowledge_share_entry",
+  "knowledge_revoke_access",
+  "knowledge_update_namespace_config",
+]);
+
+// Tools that accept an optional `namespace` filter and default to ALL namespaces
+// when omitted. These need namespace injection when a session lock is active.
+export const NAMESPACE_INJECT_TOOLS = new Set([
+  "knowledge_search_entries",
+]);
