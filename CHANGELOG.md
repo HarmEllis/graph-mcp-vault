@@ -5,6 +5,26 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.12] - 2026-04-20
+
+Introduces namespace-scoped guardrails and configurable entry versioning, while expanding namespace metadata to guide consistent knowledge modeling.
+
+### Added
+
+- Read-only MCP sessions via the `readonly` query flag to block mutating tool calls.
+- Locked-namespace MCP sessions via the `lock_namespace` query flag to enforce namespace-constrained access.
+- Namespace `structure_template` support in namespace configuration and `knowledge_list_namespaces`.
+- Entry versioning controls with three layers: server cap, namespace defaults (`versioning_enabled`, `max_versions`), and per-entry override (`versioned`).
+- Version history tools: `knowledge_list_versions`, `knowledge_get_version`, and `knowledge_restore_version`.
+
+### Changed
+
+- Namespace validation now allows digit-only namespace names.
+- Local MCP client entry in `.mcp.json` renamed to `graph-mcp-vault-dev`.
+- `src/server-instructions.md` refreshed to align with the current data model and tool behavior.
+
+**Full Changelog**: https://github.com/HarmEllis/graph-mcp-vault/compare/v0.0.11...v0.0.12
+
 ## [0.0.11] - 2026-04-18
 
 Patches multiple CVEs in npm transitive dependencies and Docker OS packages.

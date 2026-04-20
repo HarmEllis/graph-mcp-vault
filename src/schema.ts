@@ -407,7 +407,7 @@ async function migrate_v6(driver: Driver): Promise<void> {
 async function migrate_v7(driver: Driver): Promise<void> {
   // Phase 1: dedup — keep the latest snapshot per (resource_id, version) pair
   const discoverSession = driver.session();
-  let toDeleteIds: string[] = [];
+  const toDeleteIds: string[] = [];
   try {
     const dupsResult = await discoverSession.run(`
       MATCH (v:ResourceVersion)
@@ -423,7 +423,9 @@ async function migrate_v7(driver: Driver): Promise<void> {
         const byDate = b.properties.created_at.localeCompare(
           a.properties.created_at,
         );
-        return byDate !== 0 ? byDate : b.properties.id.localeCompare(a.properties.id);
+        return byDate !== 0
+          ? byDate
+          : b.properties.id.localeCompare(a.properties.id);
       });
       for (const v of sorted.slice(1)) {
         toDeleteIds.push(v.properties.id);
@@ -436,7 +438,7 @@ async function migrate_v7(driver: Driver): Promise<void> {
     const deleteSession = driver.session();
     try {
       await deleteSession.run(
-        `UNWIND $ids AS id MATCH (v:ResourceVersion {id: id}) DETACH DELETE v`,
+        "UNWIND $ids AS id MATCH (v:ResourceVersion {id: id}) DETACH DELETE v",
         { ids: toDeleteIds },
       );
     } finally {

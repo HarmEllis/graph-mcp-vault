@@ -533,9 +533,7 @@ export class Neo4jClient {
           versioningEnabled: params.versioning_enabled ?? null,
           clearMaxVersions: params.max_versions === null,
           maxVersions:
-            params.max_versions != null
-              ? neo4j.int(params.max_versions)
-              : null,
+            params.max_versions != null ? neo4j.int(params.max_versions) : null,
           now: new Date().toISOString(),
         },
       );
@@ -606,7 +604,8 @@ export class Neo4jClient {
     if (params.source !== undefined) optionalProps.source = params.source;
     if (params.last_verified_at !== undefined)
       optionalProps.last_verified_at = params.last_verified_at;
-    if (params.versioned !== undefined) optionalProps.versioned = params.versioned;
+    if (params.versioned !== undefined)
+      optionalProps.versioned = params.versioned;
 
     const session = this.driver.session();
     try {
@@ -767,6 +766,10 @@ export class Neo4jClient {
     const session = this.driver.session();
     try {
       if (needsSnapshot) {
+        const snapshotConfig = versioning;
+        if (!snapshotConfig) {
+          throw new Error("Invariant violation: versioning config is required");
+        }
         const now2 = new Date().toISOString();
         const MAX_VERSION_RETRIES = 3;
         let lastErr: unknown;
@@ -775,7 +778,7 @@ export class Neo4jClient {
             const versionId = randomUUID();
             await session.executeWrite(async (tx) => {
               await tx.run(
-            `
+                `
             MATCH (r:Resource {id: $resourceId})
             OPTIONAL MATCH (r)-[:HAS_VERSION]->(existing:ResourceVersion)
             WITH r, coalesce(max(existing.version), 0) + 1 AS nextVer
@@ -790,18 +793,18 @@ export class Neo4jClient {
             })
             CREATE (r)-[:HAS_VERSION]->(v)
             `,
-            {
-              resourceId,
-              versionId,
-              now: now2,
-              changedBy: versioning!.changedBy,
-            },
-          );
+                {
+                  resourceId,
+                  versionId,
+                  now: now2,
+                  changedBy: snapshotConfig.changedBy,
+                },
+              );
               await tx.run("MATCH (r:Resource {id: $id}) SET r += $patch", {
                 id: resourceId,
                 patch,
               });
-              if (versioning!.maxVersions > 0) {
+              if (snapshotConfig.maxVersions > 0) {
                 await tx.run(
                   `
                   MATCH (r:Resource {id: $resourceId})-[:HAS_VERSION]->(v:ResourceVersion)
@@ -813,7 +816,7 @@ export class Neo4jClient {
                   `,
                   {
                     resourceId,
-                    maxVersions: neo4j.int(versioning!.maxVersions),
+                    maxVersions: neo4j.int(snapshotConfig.maxVersions),
                   },
                 );
               }
@@ -867,7 +870,9 @@ export class Neo4jClient {
         return {
           id: props.id as string,
           resource_id: props.resource_id as string,
-          version: neo4j.integer.toNumber(props.version as Parameters<typeof neo4j.integer.toNumber>[0]),
+          version: neo4j.integer.toNumber(
+            props.version as Parameters<typeof neo4j.integer.toNumber>[0],
+          ),
           title: props.title as string,
           content: props.content as string,
           created_at: props.created_at as string,
@@ -899,7 +904,9 @@ export class Neo4jClient {
       return {
         id: props.id as string,
         resource_id: props.resource_id as string,
-        version: neo4j.integer.toNumber(props.version as Parameters<typeof neo4j.integer.toNumber>[0]),
+        version: neo4j.integer.toNumber(
+          props.version as Parameters<typeof neo4j.integer.toNumber>[0],
+        ),
         title: props.title as string,
         content: props.content as string,
         created_at: props.created_at as string,

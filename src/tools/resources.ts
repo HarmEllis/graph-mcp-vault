@@ -217,7 +217,10 @@ async function handleGet(
     throw new ToolError(ErrorCode.RESOURCE_NOT_FOUND, "Resource not found");
 
   if (ctx.lockedNamespace && resource.namespace !== ctx.namespace) {
-    throw new ToolError(ErrorCode.PERMISSION_DENIED, `Entry namespace does not match locked namespace: ${ctx.namespace}`);
+    throw new ToolError(
+      ErrorCode.PERMISSION_DENIED,
+      `Entry namespace does not match locked namespace: ${ctx.namespace}`,
+    );
   }
 
   const role = await neo4jClient.getEffectiveRole(ctx.userId, entry_id);
@@ -318,7 +321,8 @@ async function handleUpdate(
       resource?.namespace ?? ctx.namespace,
     );
     const effectiveVersioned =
-      (versioned ?? resource?.versioned) ??
+      versioned ??
+      resource?.versioned ??
       namespaceCfg.versioning_enabled ??
       false;
     if (effectiveVersioned) {
@@ -1029,7 +1033,8 @@ export function createResourceTools(
           required: ["entry_id"],
         },
       },
-      handler: (args, ctx) => handleUpdate(args, ctx, neo4jClient, maxVersionsLimit),
+      handler: (args, ctx) =>
+        handleUpdate(args, ctx, neo4jClient, maxVersionsLimit),
     },
     {
       descriptor: {
@@ -1334,7 +1339,10 @@ export function createResourceTools(
           type: "object",
           properties: {
             entry_id: { type: "string", description: "UUID of the entry" },
-            version: { type: "number", description: "Version number to retrieve" },
+            version: {
+              type: "number",
+              description: "Version number to retrieve",
+            },
           },
           required: ["entry_id", "version"],
         },
@@ -1350,7 +1358,10 @@ export function createResourceTools(
           type: "object",
           properties: {
             entry_id: { type: "string", description: "UUID of the entry" },
-            version: { type: "number", description: "Version number to restore" },
+            version: {
+              type: "number",
+              description: "Version number to restore",
+            },
           },
           required: ["entry_id", "version"],
         },

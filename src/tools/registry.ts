@@ -72,6 +72,4 @@ export const WRITE_TOOLS = new Set([
 
 // Tools that accept an optional `namespace` filter and default to ALL namespaces
 // when omitted. These need namespace injection when a session lock is active.
-export const NAMESPACE_INJECT_TOOLS = new Set([
-  "knowledge_search_entries",
-]);
+export const NAMESPACE_INJECT_TOOLS = new Set(["knowledge_search_entries"]);

@@ -512,7 +512,7 @@ describe("initialize", () => {
     const { res } = await doInitialize(app, token);
     const body = await res.json();
 
-    expect(body.result.serverInfo.version).toBe("0.0.11");
+    expect(body.result.serverInfo.version).toBe("0.0.12");
   });
 
   it("includes capabilities.tools in result", async () => {
@@ -1192,7 +1192,10 @@ function buildAppWithStubTools() {
       description: "search",
       inputSchema: {
         type: "object" as const,
-        properties: { query: { type: "string" }, namespace: { type: "string" } },
+        properties: {
+          query: { type: "string" },
+          namespace: { type: "string" },
+        },
         required: ["query"],
       },
     },
@@ -1204,7 +1207,10 @@ function buildAppWithStubTools() {
       description: "create",
       inputSchema: {
         type: "object" as const,
-        properties: { namespace: { type: "string" }, title: { type: "string" } },
+        properties: {
+          namespace: { type: "string" },
+          title: { type: "string" },
+        },
       },
     },
     handler: vi.fn().mockResolvedValue({ id: "new-id" }),
@@ -1320,9 +1326,15 @@ describe("?lock_namespace query flag", () => {
     const { sessionId } = await doInitialize(app, token, {
       urlPath: "/mcp/homelab?lock_namespace",
     });
-    const res = await callTool(app, token, sessionId, "knowledge_list_entries", {
-      namespace: "other",
-    });
+    const res = await callTool(
+      app,
+      token,
+      sessionId,
+      "knowledge_list_entries",
+      {
+        namespace: "other",
+      },
+    );
 
     expect(res.status).toBe(200);
     const body = await res.json();
@@ -1357,9 +1369,15 @@ describe("?lock_namespace query flag", () => {
     const { sessionId } = await doInitialize(app, token, {
       urlPath: "/mcp/homelab?lock_namespace",
     });
-    const res = await callTool(app, token, sessionId, "knowledge_list_entries", {
-      namespace: "homelab",
-    });
+    const res = await callTool(
+      app,
+      token,
+      sessionId,
+      "knowledge_list_entries",
+      {
+        namespace: "homelab",
+      },
+    );
 
     expect(res.status).toBe(200);
     const body = await res.json();
@@ -1375,9 +1393,15 @@ describe("?lock_namespace query flag", () => {
     const { sessionId } = await doInitialize(app, token, {
       urlPath: "/mcp/homelab?lock_namespace=false",
     });
-    const res = await callTool(app, token, sessionId, "knowledge_list_entries", {
-      namespace: "other",
-    });
+    const res = await callTool(
+      app,
+      token,
+      sessionId,
+      "knowledge_list_entries",
+      {
+        namespace: "other",
+      },
+    );
 
     expect(res.status).toBe(200);
     const body = await res.json();

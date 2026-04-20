@@ -9,10 +9,10 @@ import { NAMESPACE_ERROR_MESSAGE, NAMESPACE_REGEX } from "../namespace.js";
 import type { Neo4jClient } from "../neo4j-client.js";
 import type { Session, SessionStore } from "../session.js";
 import {
+  NAMESPACE_INJECT_TOOLS,
   type RegisteredTool,
   type ToolContext,
   ToolError,
-  NAMESPACE_INJECT_TOOLS,
   WRITE_TOOLS,
 } from "../tools/registry.js";
 
@@ -31,7 +31,7 @@ const KNOWN_PROTOCOL_VERSIONS = new Set([
   "2024-10-07",
 ]);
 export const SERVER_NAME = "graph-mcp-vault";
-export const SERVER_VERSION = "0.0.11";
+export const SERVER_VERSION = "0.0.12";
 
 // ── JSON-RPC types ────────────────────────────────────────────────────────────
 
@@ -633,7 +633,10 @@ export function createMcpRouter(
       }
       // For search tools that default to all namespaces when namespace is
       // omitted, inject the locked namespace to enforce the scope constraint.
-      if (args.namespace === undefined && NAMESPACE_INJECT_TOOLS.has(toolName)) {
+      if (
+        args.namespace === undefined &&
+        NAMESPACE_INJECT_TOOLS.has(toolName)
+      ) {
         args = { ...args, namespace: session.namespace };
       }
     }
