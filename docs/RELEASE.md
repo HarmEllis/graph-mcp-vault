@@ -60,7 +60,10 @@ pnpm version "${VERSION}" --no-git-tag-version
 - `src/routers/mcp.ts` (`SERVER_VERSION`)
 - `tests/mcp-lifecycle.test.ts` (assertion for `serverInfo.version`)
 
-3. Add the new section at the top of `CHANGELOG.md`:
+3. Pin docker-compose image tag:
+- `docker-compose.yml` → `image: ghcr.io/harmellis/graph-mcp-vault:<VERSION>`
+
+4. Add the new section at the top of `CHANGELOG.md`:
 - `## [<VERSION>] - YYYY-MM-DD`
 - Include a short intro summary paragraph before subsection headings.
 - Include `Added` / `Changed` / `Fixed` / `Security` headings as applicable.
@@ -80,7 +83,7 @@ pnpm build
 ## 7. Commit release changes (do not tag yet)
 
 ```bash
-git add package.json src/routers/mcp.ts tests/mcp-lifecycle.test.ts CHANGELOG.md docs/RELEASE.md
+git add package.json src/routers/mcp.ts tests/mcp-lifecycle.test.ts CHANGELOG.md docs/RELEASE.md docker-compose.yml
 git commit -m "chore(release): prepare ${TAG}"
 ```
 

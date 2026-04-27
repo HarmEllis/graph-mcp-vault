@@ -28,6 +28,9 @@ RUN pnpm install --frozen-lockfile --prod
 
 COPY --from=build /app/dist ./dist
 
+RUN chown -R node:node /app
+USER node
+
 EXPOSE 8000
 
 HEALTHCHECK --interval=10s --timeout=5s --retries=6 --start-period=10s \

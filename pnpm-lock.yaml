@@ -10,6 +10,7 @@ overrides:
   minimatch: '>=9.0.7'
   picomatch: '>=4.0.4'
   brace-expansion: '>=2.0.3'
+  uuid: '>=14.0.0'
 
 importers:
 
@@ -1611,8 +1612,8 @@ packages:
   util-deprecate@1.0.2:
     resolution: {integrity: sha512-EPD5q1uXyFxJpCrLnCc1nHnq3gOa6DZBocAIiI2TaSCA7VCJ1UJDMagCzIkXNsUYfD1daK//LTEQ8xiIbrHtcw==}
 
-  uuid@10.0.0:
-    resolution: {integrity: sha512-8XkAphELsDnEGrDxUOHB3RGvXz6TeuYSGEZBOjtTtPm2lwhGBjLgOzLHB63IUWfBpNucQjND6d3AOudO+H3RWQ==}
+  uuid@14.0.0:
+    resolution: {integrity: sha512-Qo+uWgilfSmAhXCMav1uYFynlQO7fMFiMVZsQqZRMIXp0O7rR7qjkj+cPvBHLgBqi960QCoo/PH2/6ZtVqKvrg==}
     hasBin: true
 
   vary@1.1.2:
@@ -2444,7 +2445,7 @@ snapshots:
       docker-modem: 5.0.7
       protobufjs: 8.0.1
       tar-fs: 2.1.4
-      uuid: 10.0.0
+      uuid: 14.0.0
     transitivePeerDependencies:
       - supports-color
 
@@ -3227,7 +3228,7 @@ snapshots:
 
   util-deprecate@1.0.2: {}
 
-  uuid@10.0.0: {}
+  uuid@14.0.0: {}
 
   vary@1.1.2: {}
 

@@ -226,7 +226,7 @@ jobs:
           exit-code: "0"  # non-blocking; review results in Security tab
 
       - name: Upload Trivy results to GitHub Security
-        uses: github/codeql-action/upload-sarif@ff0a06e83cb2de871e5a09832bc6a81e7276941f  # v3.28.18
+        uses: github/codeql-action/upload-sarif@95e58e9a2cdfd71adc6e0353d5c52f41a045d225  # v4.35.2
         if: always()
         with:
           sarif_file: trivy-results.sarif
