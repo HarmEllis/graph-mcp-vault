@@ -13,11 +13,5 @@
       "automerge": false,
       "labels": ["major-update"]
     }
-  ],
-  "docker": {
-    "enabled": true
-  },
-  "github-actions": {
-    "enabled": true
-  }
+  ]
 }
