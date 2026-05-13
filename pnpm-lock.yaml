@@ -3,6 +3,12 @@ lockfileVersion: '9.0'
 settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
+  onlyBuiltDependencies:
+    - '@biomejs/biome'
+    - cpu-features
+    - esbuild
+    - protobufjs
+    - ssh2
 
 importers:
 
