@@ -515,7 +515,7 @@ describe("initialize", () => {
     const { res } = await doInitialize(app, token);
     const body = await res.json();
 
-    expect(body.result.serverInfo.version).toBe("0.0.12");
+    expect(body.result.serverInfo.version).toBe("0.0.13");
   });
 
   it("includes capabilities.tools in result", async () => {

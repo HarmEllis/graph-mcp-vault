@@ -5,6 +5,34 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.13] - 2026-07-08
+
+Adds API key authentication for non-OIDC clients and hardens key storage, dependency policy, CI, and container builds.
+
+### Added
+
+- API key authentication support for MCP clients.
+- Configurable API key namespace restrictions and lifecycle coverage in tests.
+- `pnpm-workspace.yaml` build policy for pnpm v11.
+
+### Changed
+
+- API key digests now use scrypt.
+- Docker builds now copy `pnpm-workspace.yaml` so pnpm v11 build policy is available in the image build context.
+- Renovate configuration migrated away from deprecated top-level manager config.
+
+### Fixed
+
+- pnpm v11 lockfile and build-script policy compatibility.
+
+### Security
+
+- Hardened API key hashing and dependency policy.
+- Pinned GitHub Actions to commit SHAs and run the Docker image as a non-root user.
+- Patched transitive dependency CVEs for `postcss`, `fast-uri`, and `ip-address`.
+
+**Full Changelog**: https://github.com/HarmEllis/graph-mcp-vault/compare/v0.0.12...v0.0.13
+
 ## [0.0.12] - 2026-04-20
 
 Introduces namespace-scoped guardrails and configurable entry versioning, while expanding namespace metadata to guide consistent knowledge modeling.
