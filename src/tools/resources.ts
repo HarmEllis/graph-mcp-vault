@@ -780,7 +780,15 @@ async function handleListNamespaces(
   ctx: ToolContext,
   neo4jClient: Neo4jClient,
 ): Promise<unknown> {
-  const namespaces = await neo4jClient.listNamespaces({ userId: ctx.userId });
+  const allNamespaces = await neo4jClient.listNamespaces({
+    userId: ctx.userId,
+  });
+  const namespaces =
+    ctx.authMethod === "api_key" && ctx.allowedNamespaces != null
+      ? allNamespaces.filter((n) =>
+          ctx.allowedNamespaces?.includes(n.namespace),
+        )
+      : allNamespaces;
 
   // Ensure the current session namespace is always present, even with zero counts
   if (!namespaces.some((n) => n.namespace === ctx.namespace)) {

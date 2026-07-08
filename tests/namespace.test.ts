@@ -47,6 +47,8 @@ const BASE_CONFIG: Config = {
   publicUrl: "http://localhost:8000",
   scopesAllowlist: undefined,
   maxVersionsLimit: 10,
+  apiKeysEnabled: false,
+  apiKeysMaxPerUser: 20,
 };
 
 let container: StartedTestContainer;

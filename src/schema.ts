@@ -7,7 +7,7 @@ import {
 
 // ── Current schema version ────────────────────────────────────────────────────
 
-export const SCHEMA_VERSION = 7;
+export const SCHEMA_VERSION = 8;
 
 // ── Base schema statements (idempotent, version-independent) ──────────────────
 
@@ -457,6 +457,28 @@ async function migrate_v7(driver: Driver): Promise<void> {
   }
 }
 
+// ── Migration v8 ──────────────────────────────────────────────────────────────
+//
+// Changes introduced in v8:
+//   1. Add ApiKey schema for optional API key authentication.
+
+async function migrate_v8(driver: Driver): Promise<void> {
+  const session = driver.session();
+  try {
+    await session.run(
+      "CREATE CONSTRAINT api_key_id_unique IF NOT EXISTS FOR (k:ApiKey) REQUIRE k.id IS UNIQUE",
+    );
+    await session.run(
+      "CREATE INDEX api_key_hash IF NOT EXISTS FOR (k:ApiKey) ON (k.key_hash)",
+    );
+    await session.run(
+      "CREATE INDEX api_key_user IF NOT EXISTS FOR (k:ApiKey) ON (k.user_id)",
+    );
+  } finally {
+    await session.close();
+  }
+}
+
 // ── initSchema ────────────────────────────────────────────────────────────────
 
 /**
@@ -520,6 +542,12 @@ export async function initSchema(
     await migrate_v7(driver);
     await setSchemaVersion(driver, 7);
     version = 7;
+  }
+
+  if (version < 8) {
+    await migrate_v8(driver);
+    await setSchemaVersion(driver, 8);
+    version = 8;
   }
 
   if (version !== SCHEMA_VERSION) {

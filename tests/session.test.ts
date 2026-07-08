@@ -42,12 +42,13 @@ describe("SessionStore.create", () => {
     expect(session?.namespace).toBe("workspace-1");
   });
 
-  it("defaults readonly and lockedNamespace to false when flags are omitted", () => {
+  it("defaults readonly, lockedNamespace, and allowedNamespaces when flags are omitted", () => {
     const store = freshStore();
     const id = store.create("user-a", "default");
     const session = store.get(id);
     expect(session?.readonly).toBe(false);
     expect(session?.lockedNamespace).toBe(false);
+    expect(session?.allowedNamespaces).toBeNull();
   });
 
   it("stores readonly and lockedNamespace flags when provided", () => {
@@ -67,6 +68,15 @@ describe("SessionStore.create", () => {
     const session = store.get(id);
     expect(session?.readonly).toBe(true);
     expect(session?.lockedNamespace).toBe(false);
+  });
+
+  it("stores allowedNamespaces when provided", () => {
+    const store = freshStore();
+    const id = store.create("user-a", "homelab", {
+      allowedNamespaces: ["homelab", "work"],
+    });
+    const session = store.get(id);
+    expect(session?.allowedNamespaces).toEqual(["homelab", "work"]);
   });
 });
 

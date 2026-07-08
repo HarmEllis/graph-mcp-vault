@@ -32,6 +32,8 @@ const envSchema = z.object({
   ALLOWED_ORIGINS: z.string().default(""),
   SCOPES_ALLOWLIST: z.string().optional(),
   MAX_VERSIONS_LIMIT: z.coerce.number().int().min(0).default(10),
+  API_KEYS_ENABLED: z.enum(["true", "false"]).default("false"),
+  API_KEYS_MAX_PER_USER: z.coerce.number().int().min(1).default(20),
 });
 
 export interface Config {
@@ -58,6 +60,8 @@ export interface Config {
   scopesAllowlist: string[] | undefined;
   /** Hard ceiling on stored versions per entry. 0 = versioning disabled globally. */
   maxVersionsLimit: number;
+  apiKeysEnabled: boolean;
+  apiKeysMaxPerUser: number;
 }
 
 export function parseConfig(env: Record<string, string | undefined>): Config {
@@ -91,5 +95,7 @@ export function parseConfig(env: Record<string, string | undefined>): Config {
     allowedOrigins: parsed.ALLOWED_ORIGINS,
     scopesAllowlist,
     maxVersionsLimit: parsed.MAX_VERSIONS_LIMIT,
+    apiKeysEnabled: parsed.API_KEYS_ENABLED === "true",
+    apiKeysMaxPerUser: parsed.API_KEYS_MAX_PER_USER,
   };
 }

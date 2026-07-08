@@ -2581,3 +2581,87 @@ describe("Neo4jClient.updateNamespaceConfig", () => {
     expect(config.auto_share_user_ids).toEqual([targetId]);
   });
 });
+
+// ── API key helpers ──────────────────────────────────────────────────────────
+
+describe("Neo4jClient API key helpers", () => {
+  it("creates, fetches, lists, counts, updates, and revokes API keys", async () => {
+    const userId = `user-api-key-${Date.now()}`;
+    const created = await client.createApiKey({
+      id: `key-${Date.now()}`,
+      userId,
+      name: "CI key",
+      keyHash: "a".repeat(64),
+      keyPrefix: "gmv_aaaaaaaa",
+      namespaces: ["homelab", "work"],
+      expiresAt: "2026-12-31T00:00:00.000Z",
+    });
+
+    expect(created.user_id).toBe(userId);
+    expect(created.name).toBe("CI key");
+    expect(created.key_hash).toBe("a".repeat(64));
+    expect(created.key_prefix).toBe("gmv_aaaaaaaa");
+    expect(created.namespaces).toEqual(["homelab", "work"]);
+    expect(created.last_used_at).toBeNull();
+    expect(created.revoked).toBe(false);
+
+    const fetched = await client.getApiKeyByHash("a".repeat(64));
+    expect(fetched?.id).toBe(created.id);
+
+    const listed = await client.listApiKeys(userId);
+    expect(listed).toHaveLength(1);
+    expect(listed[0]).toEqual({
+      id: created.id,
+      name: "CI key",
+      key_prefix: "gmv_aaaaaaaa",
+      namespaces: ["homelab", "work"],
+      created_at: created.created_at,
+      last_used_at: null,
+      expires_at: "2026-12-31T00:00:00.000Z",
+      revoked: false,
+    });
+    expect(listed[0]).not.toHaveProperty("key_hash");
+
+    await expect(client.countActiveApiKeys(userId)).resolves.toBe(1);
+
+    await client.updateApiKeyLastUsed(created.id);
+    const afterUse = await client.getApiKeyByHash("a".repeat(64));
+    expect(afterUse?.last_used_at).toEqual(expect.any(String));
+
+    await expect(client.revokeApiKey(userId, created.id)).resolves.toBe(true);
+    await expect(client.countActiveApiKeys(userId)).resolves.toBe(0);
+    const afterRevoke = await client.getApiKeyByHash("a".repeat(64));
+    expect(afterRevoke?.revoked).toBe(true);
+  });
+
+  it("normalizes empty namespace allow-lists to unrestricted null", async () => {
+    const created = await client.createApiKey({
+      id: `key-empty-ns-${Date.now()}`,
+      userId: `user-empty-ns-${Date.now()}`,
+      name: "Unrestricted key",
+      keyHash: "b".repeat(64),
+      keyPrefix: "gmv_bbbbbbbb",
+      namespaces: [],
+      expiresAt: null,
+    });
+
+    expect(created.namespaces).toBeNull();
+  });
+
+  it("returns false when revoking a key owned by another user", async () => {
+    const ownerId = `user-key-owner-${Date.now()}`;
+    const created = await client.createApiKey({
+      id: `key-owner-${Date.now()}`,
+      userId: ownerId,
+      name: "Owned key",
+      keyHash: "c".repeat(64),
+      keyPrefix: "gmv_cccccccc",
+      namespaces: null,
+      expiresAt: null,
+    });
+
+    await expect(
+      client.revokeApiKey("different-user", created.id),
+    ).resolves.toBe(false);
+  });
+});

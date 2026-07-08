@@ -16,7 +16,7 @@ import {
   it,
   vi,
 } from "vitest";
-import { JwksClient } from "../src/auth.js";
+import { JwksClient, generateApiKey } from "../src/auth.js";
 import type { Config } from "../src/config.js";
 import { ErrorCode } from "../src/errors.js";
 import { Neo4jClient } from "../src/neo4j-client.js";
@@ -57,6 +57,8 @@ const BASE_CONFIG: Config = {
   publicUrl: "http://localhost:8000",
   scopesAllowlist: undefined,
   maxVersionsLimit: 10,
+  apiKeysEnabled: false,
+  apiKeysMaxPerUser: 20,
 };
 
 let container: StartedTestContainer;
@@ -1733,6 +1735,94 @@ describe("knowledge_list_namespaces", () => {
     expect(ns).toBeDefined();
     expect(ns?.owned_count).toBe(1);
     expect(ns?.shared_count).toBe(1);
+  });
+
+  it("filters namespaces to the API key allow-list", async () => {
+    const sub = uniqueUser("ns-api-key-filter");
+    const homelabSid = await openSession(sub, "homelab");
+    const workSid = await openSession(sub, "work");
+
+    await callTool(
+      "knowledge_create_entry",
+      { entry_type: "note", title: "Homelab", content: "" },
+      sub,
+      homelabSid,
+    );
+    await callTool(
+      "knowledge_create_entry",
+      { entry_type: "note", title: "Work", content: "" },
+      sub,
+      workSid,
+    );
+
+    const { raw, hash, prefix } = generateApiKey();
+    await neo4jClient.createApiKey({
+      id: `${sub}-homelab-key`,
+      userId: sub,
+      name: "homelab-only",
+      keyHash: hash,
+      keyPrefix: prefix,
+      namespaces: ["homelab"],
+      expiresAt: null,
+    });
+
+    const apiKeyConfig = { ...BASE_CONFIG, apiKeysEnabled: true };
+    const apiKeyApp = new Hono();
+    apiKeyApp.route(
+      "/",
+      createMcpRouter(
+        apiKeyConfig,
+        new SessionStore(),
+        new JwksClient(JWKS_URI, apiKeyConfig.jwksCacheTtl * 1000),
+        createResourceTools(neo4jClient, 10),
+        neo4jClient,
+        "",
+      ),
+    );
+
+    const initRes = await apiKeyApp.request("/mcp", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${raw}`,
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 0,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-03-26",
+          capabilities: {},
+          clientInfo: { name: "test", version: "1.0" },
+          meta: { namespace: "homelab" },
+        },
+      }),
+    });
+    const apiKeySid = initRes.headers.get("mcp-session-id");
+    expect(initRes.status).toBe(200);
+    expect(apiKeySid).toBeTruthy();
+
+    const listRes = await apiKeyApp.request("/mcp", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${raw}`,
+        "Mcp-Session-Id": apiKeySid ?? "",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "knowledge_list_namespaces", arguments: {} },
+      }),
+    });
+    const body = (await listRes.json()) as Record<string, unknown>;
+    const namespaces = parseToolSuccess(body).namespaces as Array<
+      Record<string, unknown>
+    >;
+
+    expect(namespaces.some((n) => n.namespace === "homelab")).toBe(true);
+    expect(namespaces.some((n) => n.namespace === "work")).toBe(false);
   });
 
   it("excludes namespaces that belong to unrelated users", async () => {

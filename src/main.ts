@@ -17,6 +17,7 @@ import {
 } from "./routers/oauth-meta.js";
 import { initSchema } from "./schema.js";
 import { SessionStore } from "./session.js";
+import { createApiKeyTools } from "./tools/api-keys.js";
 import { createNamespaceConfigTools } from "./tools/namespace-config.js";
 import { createResourceTools } from "./tools/resources.js";
 import { createSharingTools } from "./tools/sharing.js";
@@ -102,6 +103,7 @@ const tools = [
   ...createSharingTools(_neo4jClient),
   ...createUserTools(_neo4jClient),
   ...createNamespaceConfigTools(_neo4jClient),
+  ...(config.apiKeysEnabled ? createApiKeyTools(_neo4jClient, config) : []),
 ];
 app.route(
   "/",

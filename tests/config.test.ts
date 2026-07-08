@@ -28,6 +28,8 @@ describe("parseConfig", () => {
     expect(config.defaultNamespace).toBe("default");
     expect(config.logLevel).toBe("info");
     expect(config.allowedOrigins).toBe("");
+    expect(config.apiKeysEnabled).toBe(false);
+    expect(config.apiKeysMaxPerUser).toBe(20);
   });
 
   it("accepts overridden optional values", () => {
@@ -215,6 +217,33 @@ describe("parseConfig", () => {
   it("throws when JWKS_ALLOW_STALE_ON_ERROR is not true or false", () => {
     expect(() =>
       parseConfig({ ...required, JWKS_ALLOW_STALE_ON_ERROR: "yes" }),
+    ).toThrow();
+  });
+
+  // ── API key authentication fields ──────────────────────────────────────────
+
+  it("apiKeysEnabled is true when API_KEYS_ENABLED=true", () => {
+    const config = parseConfig({ ...required, API_KEYS_ENABLED: "true" });
+    expect(config.apiKeysEnabled).toBe(true);
+  });
+
+  it("throws when API_KEYS_ENABLED is not true or false", () => {
+    expect(() =>
+      parseConfig({ ...required, API_KEYS_ENABLED: "yes" }),
+    ).toThrow();
+  });
+
+  it("accepts a custom API_KEYS_MAX_PER_USER", () => {
+    const config = parseConfig({
+      ...required,
+      API_KEYS_MAX_PER_USER: "5",
+    });
+    expect(config.apiKeysMaxPerUser).toBe(5);
+  });
+
+  it("throws when API_KEYS_MAX_PER_USER is less than one", () => {
+    expect(() =>
+      parseConfig({ ...required, API_KEYS_MAX_PER_USER: "0" }),
     ).toThrow();
   });
 });
