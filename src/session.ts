@@ -10,6 +10,9 @@ export interface Session {
   lastActiveAt: number;
   readonly: boolean;
   lockedNamespace: boolean;
+  allowedNamespaces: string[] | null;
+  authMethod: "jwt" | "api_key";
+  apiKeyId?: string;
 }
 
 // ── SessionStore ──────────────────────────────────────────────────────────────
@@ -46,7 +49,13 @@ export class SessionStore {
   create(
     userId: string,
     namespace: string,
-    flags?: { readonly?: boolean; lockedNamespace?: boolean },
+    flags?: {
+      readonly?: boolean;
+      lockedNamespace?: boolean;
+      allowedNamespaces?: string[] | null;
+      authMethod?: "jwt" | "api_key";
+      apiKeyId?: string;
+    },
   ): string {
     const id = randomUUID();
     const now = Date.now();
@@ -58,6 +67,9 @@ export class SessionStore {
       lastActiveAt: now,
       readonly: flags?.readonly ?? false,
       lockedNamespace: flags?.lockedNamespace ?? false,
+      allowedNamespaces: flags?.allowedNamespaces ?? null,
+      authMethod: flags?.authMethod ?? "jwt",
+      ...(flags?.apiKeyId !== undefined ? { apiKeyId: flags.apiKeyId } : {}),
     });
     return id;
   }

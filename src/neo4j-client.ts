@@ -56,6 +56,21 @@ export interface UserProfile {
   email?: string;
 }
 
+export interface ApiKeyRecord {
+  id: string;
+  user_id: string;
+  name: string;
+  key_hash: string;
+  key_prefix: string;
+  namespaces: string[] | null;
+  created_at: string;
+  last_used_at: string | null;
+  expires_at: string | null;
+  revoked: boolean;
+}
+
+export type ApiKeyListItem = Omit<ApiKeyRecord, "key_hash" | "user_id">;
+
 export type AutoSharePermission = "read" | "write";
 
 export interface NamespaceConfig {
@@ -264,6 +279,294 @@ export class Neo4jClient {
     role: "owner" | "editor" | "viewer" | null,
   ): boolean {
     return role === "owner" || role === "editor" || role === "viewer";
+  }
+
+  // ── API keys ────────────────────────────────────────────────────────────────
+
+  async createApiKey(params: {
+    id: string;
+    userId: string;
+    name: string;
+    keyHash: string;
+    keyPrefix: string;
+    namespaces: string[] | null;
+    expiresAt: string | null;
+  }): Promise<ApiKeyRecord> {
+    const now = new Date().toISOString();
+    const namespaces =
+      params.namespaces && params.namespaces.length > 0
+        ? params.namespaces
+        : null;
+    const session = this.driver.session();
+    try {
+      const result = await session.run(
+        `
+        MERGE (u:User {id: $userId})
+        CREATE (k:ApiKey {
+          id: $id,
+          user_id: $userId,
+          name: $name,
+          key_hash: $keyHash,
+          key_prefix: $keyPrefix,
+          created_at: $createdAt,
+          revoked: false
+        })
+        SET k.namespaces = $namespaces,
+            k.expires_at = $expiresAt
+        MERGE (u)-[:OWNS_KEY]->(k)
+        RETURN k.id AS id,
+               k.user_id AS user_id,
+               k.name AS name,
+               k.key_hash AS key_hash,
+               k.key_prefix AS key_prefix,
+               k.namespaces AS namespaces,
+               k.created_at AS created_at,
+               k.last_used_at AS last_used_at,
+               k.expires_at AS expires_at,
+               k.revoked AS revoked
+        `,
+        {
+          id: params.id,
+          userId: params.userId,
+          name: params.name,
+          keyHash: params.keyHash,
+          keyPrefix: params.keyPrefix,
+          namespaces,
+          expiresAt: params.expiresAt,
+          createdAt: now,
+        },
+      );
+      const record = result.records[0];
+      if (!record) throw new Error("ApiKey creation returned no record");
+      return {
+        id: record.get("id") as string,
+        user_id: record.get("user_id") as string,
+        name: record.get("name") as string,
+        key_hash: record.get("key_hash") as string,
+        key_prefix: record.get("key_prefix") as string,
+        namespaces: (record.get("namespaces") as string[] | null) ?? null,
+        created_at: record.get("created_at") as string,
+        last_used_at: (record.get("last_used_at") as string | null) ?? null,
+        expires_at: (record.get("expires_at") as string | null) ?? null,
+        revoked: record.get("revoked") as boolean,
+      };
+    } finally {
+      await session.close();
+    }
+  }
+
+  /**
+   * Atomically checks the active-key count for `userId` and, if below
+   * `maxPerUser`, creates a new ApiKey node in the same write transaction.
+   *
+   * Returns the new record, or `null` when the limit is already reached.
+   * Using a single Cypher write transaction eliminates the TOCTOU race that
+   * would exist with a separate countActiveApiKeys + createApiKey pair.
+   */
+  async createApiKeyWithLimit(params: {
+    id: string;
+    userId: string;
+    name: string;
+    keyHash: string;
+    keyPrefix: string;
+    namespaces: string[] | null;
+    expiresAt: string | null;
+    maxPerUser: number;
+  }): Promise<ApiKeyRecord | null> {
+    const now = new Date().toISOString();
+    const namespaces =
+      params.namespaces && params.namespaces.length > 0
+        ? params.namespaces
+        : null;
+    const session = this.driver.session();
+    try {
+      const result = await session.executeWrite((tx) =>
+        tx.run(
+          `
+          MERGE (u:User {id: $userId})
+          WITH u
+          SET u.api_key_version = coalesce(u.api_key_version, 0) + 1
+          WITH u
+          OPTIONAL MATCH (u)-[:OWNS_KEY]->(existing:ApiKey)
+            WHERE coalesce(existing.revoked, false) = false
+              AND (existing.expires_at IS NULL OR existing.expires_at > $now)
+          WITH u, count(existing) AS activeCount
+          WHERE activeCount < $maxPerUser
+          CREATE (k:ApiKey {
+            id: $id,
+            user_id: $userId,
+            name: $name,
+            key_hash: $keyHash,
+            key_prefix: $keyPrefix,
+            created_at: $createdAt,
+            revoked: false
+          })
+          SET k.namespaces = $namespaces,
+              k.expires_at = $expiresAt
+          MERGE (u)-[:OWNS_KEY]->(k)
+          RETURN k.id AS id,
+                 k.user_id AS user_id,
+                 k.name AS name,
+                 k.key_hash AS key_hash,
+                 k.key_prefix AS key_prefix,
+                 k.namespaces AS namespaces,
+                 k.created_at AS created_at,
+                 k.last_used_at AS last_used_at,
+                 k.expires_at AS expires_at,
+                 k.revoked AS revoked
+          `,
+          {
+            id: params.id,
+            userId: params.userId,
+            name: params.name,
+            keyHash: params.keyHash,
+            keyPrefix: params.keyPrefix,
+            namespaces,
+            expiresAt: params.expiresAt,
+            createdAt: now,
+            now,
+            maxPerUser: neo4j.int(params.maxPerUser),
+          },
+        ),
+      );
+      const record = result.records[0];
+      if (!record) return null;
+      return {
+        id: record.get("id") as string,
+        user_id: record.get("user_id") as string,
+        name: record.get("name") as string,
+        key_hash: record.get("key_hash") as string,
+        key_prefix: record.get("key_prefix") as string,
+        namespaces: (record.get("namespaces") as string[] | null) ?? null,
+        created_at: record.get("created_at") as string,
+        last_used_at: (record.get("last_used_at") as string | null) ?? null,
+        expires_at: (record.get("expires_at") as string | null) ?? null,
+        revoked: record.get("revoked") as boolean,
+      };
+    } finally {
+      await session.close();
+    }
+  }
+
+  async listApiKeys(userId: string): Promise<ApiKeyListItem[]> {
+    const session = this.driver.session();
+    try {
+      const result = await session.run(
+        `
+        MATCH (:User {id: $userId})-[:OWNS_KEY]->(k:ApiKey)
+        RETURN k.id AS id,
+               k.name AS name,
+               k.key_prefix AS key_prefix,
+               k.namespaces AS namespaces,
+               k.created_at AS created_at,
+               k.last_used_at AS last_used_at,
+               k.expires_at AS expires_at,
+               k.revoked AS revoked
+        ORDER BY k.created_at DESC
+        `,
+        { userId },
+      );
+      return result.records.map((record) => ({
+        id: record.get("id") as string,
+        name: record.get("name") as string,
+        key_prefix: record.get("key_prefix") as string,
+        namespaces: (record.get("namespaces") as string[] | null) ?? null,
+        created_at: record.get("created_at") as string,
+        last_used_at: (record.get("last_used_at") as string | null) ?? null,
+        expires_at: (record.get("expires_at") as string | null) ?? null,
+        revoked: record.get("revoked") as boolean,
+      }));
+    } finally {
+      await session.close();
+    }
+  }
+
+  async getApiKeyByHash(keyHash: string): Promise<ApiKeyRecord | null> {
+    const session = this.driver.session();
+    try {
+      const result = await session.run(
+        `
+        MATCH (k:ApiKey {key_hash: $keyHash})
+        RETURN k.id AS id,
+               k.user_id AS user_id,
+               k.name AS name,
+               k.key_hash AS key_hash,
+               k.key_prefix AS key_prefix,
+               k.namespaces AS namespaces,
+               k.created_at AS created_at,
+               k.last_used_at AS last_used_at,
+               k.expires_at AS expires_at,
+               k.revoked AS revoked
+        `,
+        { keyHash },
+      );
+      const record = result.records[0];
+      if (!record) return null;
+      return {
+        id: record.get("id") as string,
+        user_id: record.get("user_id") as string,
+        name: record.get("name") as string,
+        key_hash: record.get("key_hash") as string,
+        key_prefix: record.get("key_prefix") as string,
+        namespaces: (record.get("namespaces") as string[] | null) ?? null,
+        created_at: record.get("created_at") as string,
+        last_used_at: (record.get("last_used_at") as string | null) ?? null,
+        expires_at: (record.get("expires_at") as string | null) ?? null,
+        revoked: record.get("revoked") as boolean,
+      };
+    } finally {
+      await session.close();
+    }
+  }
+
+  async revokeApiKey(userId: string, keyId: string): Promise<boolean> {
+    const session = this.driver.session();
+    try {
+      const result = await session.run(
+        `
+        MATCH (:User {id: $userId})-[:OWNS_KEY]->(k:ApiKey {id: $keyId})
+        SET k.revoked = true
+        RETURN count(k) AS count
+        `,
+        { userId, keyId },
+      );
+      return neo4j.integer.toNumber(result.records[0]?.get("count") ?? 0) > 0;
+    } finally {
+      await session.close();
+    }
+  }
+
+  async countActiveApiKeys(userId: string): Promise<number> {
+    const session = this.driver.session();
+    try {
+      const result = await session.run(
+        `
+        MATCH (:User {id: $userId})-[:OWNS_KEY]->(k:ApiKey)
+        WHERE coalesce(k.revoked, false) = false
+          AND (k.expires_at IS NULL OR k.expires_at > $now)
+        RETURN count(k) AS count
+        `,
+        { userId, now: new Date().toISOString() },
+      );
+      return neo4j.integer.toNumber(result.records[0]?.get("count") ?? 0);
+    } finally {
+      await session.close();
+    }
+  }
+
+  async updateApiKeyLastUsed(keyId: string): Promise<void> {
+    const session = this.driver.session();
+    try {
+      await session.run(
+        `
+        MATCH (k:ApiKey {id: $keyId})
+        SET k.last_used_at = $lastUsedAt
+        `,
+        { keyId, lastUsedAt: new Date().toISOString() },
+      );
+    } finally {
+      await session.close();
+    }
   }
 
   // ── User profile ─────────────────────────────────────────────────────────────
@@ -722,29 +1025,6 @@ export class Neo4jClient {
     },
     versioning?: { changedBy: string; maxVersions: number },
   ): Promise<void> {
-    if (params.namespace !== undefined) {
-      const current = await this.getResource(resourceId);
-      if (current && current.namespace !== params.namespace) {
-        const guardSession = this.driver.session();
-        try {
-          const guardResult = await guardSession.run(
-            `MATCH (r:Resource {id: $id})
-             RETURN EXISTS { (r)-[:ENTRY_RELATION]-() } AS hasRelations`,
-            { id: resourceId },
-          );
-          const guardRecord = guardResult.records[0];
-          if (guardRecord && guardRecord.get("hasRelations") === true) {
-            throw new Neo4jClientError(
-              "INVALID_PARAMS",
-              "Cannot change namespace: entry has existing relations",
-            );
-          }
-        } finally {
-          await guardSession.close();
-        }
-      }
-    }
-
     const now = new Date().toISOString();
     const patch: Record<string, unknown> = { updated_at: now };
     if (params.title !== undefined) patch.title = params.title;
@@ -777,6 +1057,25 @@ export class Neo4jClient {
           try {
             const versionId = randomUUID();
             await session.executeWrite(async (tx) => {
+              if (params.namespace !== undefined) {
+                const guardResult = await tx.run(
+                  `MATCH (r:Resource {id: $id})
+                   RETURN r.namespace AS currentNamespace,
+                          EXISTS { (r)-[:ENTRY_RELATION]-() } AS hasRelations`,
+                  { id: resourceId },
+                );
+                const rec = guardResult.records[0];
+                if (
+                  rec &&
+                  rec.get("currentNamespace") !== params.namespace &&
+                  rec.get("hasRelations") === true
+                ) {
+                  throw new Neo4jClientError(
+                    "INVALID_PARAMS",
+                    "Cannot change namespace: entry has existing relations",
+                  );
+                }
+              }
               await tx.run(
                 `
             MATCH (r:Resource {id: $resourceId})
@@ -831,9 +1130,30 @@ export class Neo4jClient {
         }
         if (lastErr != null) throw lastErr;
       } else {
-        await session.run("MATCH (r:Resource {id: $id}) SET r += $patch", {
-          id: resourceId,
-          patch,
+        await session.executeWrite(async (tx) => {
+          if (params.namespace !== undefined) {
+            const guardResult = await tx.run(
+              `MATCH (r:Resource {id: $id})
+               RETURN r.namespace AS currentNamespace,
+                      EXISTS { (r)-[:ENTRY_RELATION]-() } AS hasRelations`,
+              { id: resourceId },
+            );
+            const rec = guardResult.records[0];
+            if (
+              rec &&
+              rec.get("currentNamespace") !== params.namespace &&
+              rec.get("hasRelations") === true
+            ) {
+              throw new Neo4jClientError(
+                "INVALID_PARAMS",
+                "Cannot change namespace: entry has existing relations",
+              );
+            }
+          }
+          await tx.run("MATCH (r:Resource {id: $id}) SET r += $patch", {
+            id: resourceId,
+            patch,
+          });
         });
       }
     } finally {

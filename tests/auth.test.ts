@@ -1,8 +1,16 @@
 import { SignJWT, exportJWK, generateKeyPair } from "jose";
 import type { KeyLike } from "jose";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { AuthError, JwksClient, validateBearerToken } from "../src/auth.js";
+import {
+  AuthError,
+  JwksClient,
+  generateApiKey,
+  hashApiKey,
+  validateApiKey,
+  validateBearerToken,
+} from "../src/auth.js";
 import type { Config } from "../src/config.js";
+import type { ApiKeyRecord, Neo4jClient } from "../src/neo4j-client.js";
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -12,6 +20,7 @@ const KID_1 = "key-1";
 const KID_2 = "key-2";
 const JWKS_URI = `${ISSUER}/.well-known/jwks.json`;
 const TTL_MS = 3_600_000;
+const API_KEY_HASH_SECRET = "auth-test-api-key-hash-secret-32-chars";
 
 let privateKey1: KeyLike;
 let publicKey1: KeyLike;
@@ -40,6 +49,9 @@ const testConfig: Config = {
   publicUrl: "http://localhost:8000",
   scopesAllowlist: undefined,
   maxVersionsLimit: 10,
+  apiKeysEnabled: false,
+  apiKeysMaxPerUser: 20,
+  apiKeysHashSecret: undefined,
 };
 
 beforeAll(async () => {
@@ -640,5 +652,143 @@ describe("validateBearerToken max token lifetime", () => {
     );
 
     expect(result.userId).toBe("user-123");
+  });
+});
+
+// ── generateApiKey ───────────────────────────────────────────────────────────
+
+describe("generateApiKey", () => {
+  it("returns a gmv-prefixed 256-bit lowercase hex key", async () => {
+    const key = await generateApiKey(API_KEY_HASH_SECRET);
+
+    expect(key.raw).toMatch(/^gmv_[0-9a-f]{64}$/);
+    expect(key.raw).toHaveLength(68);
+    expect(key.prefix).toBe(key.raw.slice(0, 12));
+  });
+
+  it("returns a scrypt digest of the raw key", async () => {
+    const key = await generateApiKey(API_KEY_HASH_SECRET);
+
+    await expect(hashApiKey(key.raw, API_KEY_HASH_SECRET)).resolves.toBe(
+      key.hash,
+    );
+    expect(key.hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(key.hash).not.toBe(key.raw);
+  });
+
+  it("uses the hash secret when deriving the stored digest", async () => {
+    const key = await generateApiKey(API_KEY_HASH_SECRET);
+
+    await expect(
+      hashApiKey(key.raw, "different-api-key-hash-secret-32-chars"),
+    ).resolves.not.toBe(key.hash);
+  });
+
+  it("generates unique raw keys", async () => {
+    const keys = new Set(
+      (
+        await Promise.all(
+          Array.from({ length: 64 }, () => generateApiKey(API_KEY_HASH_SECRET)),
+        )
+      ).map((key) => key.raw),
+    );
+
+    expect(keys.size).toBe(64);
+  });
+});
+
+// ── validateApiKey ───────────────────────────────────────────────────────────
+
+function buildApiKeyRecord(
+  overrides: Partial<ApiKeyRecord> = {},
+): ApiKeyRecord {
+  return {
+    id: "api-key-1",
+    user_id: "api-user-1",
+    name: "Test key",
+    key_hash: "a".repeat(64),
+    key_prefix: "gmv_aaaaaaaa",
+    namespaces: null,
+    created_at: "2026-01-01T00:00:00.000Z",
+    last_used_at: null,
+    expires_at: null,
+    revoked: false,
+    ...overrides,
+  };
+}
+
+function buildApiKeyClient(record: ApiKeyRecord | null): Neo4jClient {
+  return {
+    getApiKeyByHash: vi.fn().mockResolvedValue(record),
+    updateApiKeyLastUsed: vi.fn().mockResolvedValue(undefined),
+  } as Pick<
+    Neo4jClient,
+    "getApiKeyByHash" | "updateApiKeyLastUsed"
+  > as Neo4jClient;
+}
+
+describe("validateApiKey", () => {
+  it("returns API key identity for a valid key and updates last_used_at", async () => {
+    const key = await generateApiKey(API_KEY_HASH_SECRET);
+    const record = buildApiKeyRecord({
+      id: "api-key-valid",
+      user_id: "api-user-valid",
+      key_hash: key.hash,
+      namespaces: ["homelab"],
+      expires_at: "2999-01-01T00:00:00.000Z",
+    });
+    const client = buildApiKeyClient(record);
+
+    const result = await validateApiKey(key.raw, client, API_KEY_HASH_SECRET);
+
+    expect(result).toEqual({
+      userId: "api-user-valid",
+      apiKeyId: "api-key-valid",
+      allowedNamespaces: ["homelab"],
+    });
+    expect(client.getApiKeyByHash).toHaveBeenCalledWith(key.hash);
+    expect(client.updateApiKeyLastUsed).toHaveBeenCalledWith("api-key-valid");
+  });
+
+  it("throws AuthError when the key hash is unknown", async () => {
+    const key = await generateApiKey(API_KEY_HASH_SECRET);
+    const client = buildApiKeyClient(null);
+
+    await expect(
+      validateApiKey(key.raw, client, API_KEY_HASH_SECRET),
+    ).rejects.toThrow(AuthError);
+  });
+
+  it("throws AuthError when the key is revoked", async () => {
+    const key = await generateApiKey(API_KEY_HASH_SECRET);
+    const client = buildApiKeyClient(
+      buildApiKeyRecord({ key_hash: key.hash, revoked: true }),
+    );
+
+    await expect(
+      validateApiKey(key.raw, client, API_KEY_HASH_SECRET),
+    ).rejects.toThrow(AuthError);
+  });
+
+  it("throws AuthError when the key is expired", async () => {
+    const key = await generateApiKey(API_KEY_HASH_SECRET);
+    const client = buildApiKeyClient(
+      buildApiKeyRecord({
+        key_hash: key.hash,
+        expires_at: "2000-01-01T00:00:00.000Z",
+      }),
+    );
+
+    await expect(
+      validateApiKey(key.raw, client, API_KEY_HASH_SECRET),
+    ).rejects.toThrow(AuthError);
+  });
+
+  it("throws AuthError when the token format is invalid", async () => {
+    const client = buildApiKeyClient(null);
+
+    await expect(
+      validateApiKey("gmv_not-hex", client, API_KEY_HASH_SECRET),
+    ).rejects.toThrow(AuthError);
   });
 });

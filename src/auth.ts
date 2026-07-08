@@ -1,6 +1,9 @@
+import { randomBytes, scrypt } from "node:crypto";
+import { promisify } from "node:util";
 import { decodeProtectedHeader, importJWK, jwtVerify } from "jose";
 import type { JWK, KeyLike } from "jose";
 import type { Config } from "./config.js";
+import type { Neo4jClient } from "./neo4j-client.js";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -116,15 +119,85 @@ export class JwksClient {
       throw new AuthError(`JWKS fetch failed with HTTP ${resp.status}`);
     }
     const doc = (await resp.json()) as JwksDocument;
-    const entries = await Promise.all(
+    const results = await Promise.allSettled(
       doc.keys.map(async (jwk) => {
         const key = await importJWK(jwk, "RS256");
         return [jwk.kid, key as KeyLike] as const;
       }),
     );
+    const entries = results
+      .filter(
+        (r): r is PromiseFulfilledResult<readonly [string, KeyLike]> =>
+          r.status === "fulfilled",
+      )
+      .map((r) => r.value);
+    if (entries.length === 0) {
+      if (this.allowStaleOnError && this.keys.size > 0) return;
+      throw new AuthError("JWKS contains no usable RS256 keys");
+    }
     this.keys = new Map(entries);
     this.fetchedAt = Date.now();
   }
+}
+
+// ── API key helpers ──────────────────────────────────────────────────────────
+
+const scryptAsync = promisify(scrypt);
+
+export async function hashApiKey(
+  raw: string,
+  hashSecret: string,
+): Promise<string> {
+  const digest = (await scryptAsync(raw, hashSecret, 32)) as Buffer;
+  return digest.toString("hex");
+}
+
+export async function generateApiKey(hashSecret: string): Promise<{
+  raw: string;
+  hash: string;
+  prefix: string;
+}> {
+  const raw = `gmv_${randomBytes(32).toString("hex")}`;
+  return {
+    raw,
+    hash: await hashApiKey(raw, hashSecret),
+    prefix: raw.slice(0, 12),
+  };
+}
+
+export async function validateApiKey(
+  token: string,
+  neo4jClient: Neo4jClient,
+  hashSecret: string,
+): Promise<{
+  userId: string;
+  apiKeyId: string;
+  allowedNamespaces: string[] | null;
+}> {
+  if (!/^gmv_[0-9a-f]{64}$/.test(token)) {
+    throw new AuthError("Invalid API key");
+  }
+
+  const keyHash = await hashApiKey(token, hashSecret);
+  const apiKey = await neo4jClient.getApiKeyByHash(keyHash);
+  if (!apiKey || apiKey.revoked) {
+    throw new AuthError("Invalid API key");
+  }
+
+  if (apiKey.expires_at !== null) {
+    const expiresAt = Date.parse(apiKey.expires_at);
+    if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+      throw new AuthError("Invalid API key");
+    }
+  }
+
+  void neo4jClient.updateApiKeyLastUsed(apiKey.id).catch(() => undefined);
+
+  return {
+    userId: apiKey.user_id,
+    apiKeyId: apiKey.id,
+    allowedNamespaces: apiKey.namespaces,
+  };
 }
 
 // ── validateBearerToken ───────────────────────────────────────────────────────

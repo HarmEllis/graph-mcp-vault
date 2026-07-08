@@ -21,6 +21,9 @@ export interface ToolContext {
   userId: string;
   namespace: string;
   lockedNamespace?: boolean;
+  allowedNamespaces?: string[] | null;
+  authMethod: "jwt" | "api_key";
+  apiKeyId?: string;
 }
 
 export type ToolHandler = (
@@ -68,6 +71,8 @@ export const WRITE_TOOLS = new Set([
   "knowledge_share_entry",
   "knowledge_revoke_access",
   "knowledge_update_namespace_config",
+  "knowledge_create_api_key",
+  "knowledge_revoke_api_key",
 ]);
 
 // Tools that accept an optional `namespace` filter and default to ALL namespaces

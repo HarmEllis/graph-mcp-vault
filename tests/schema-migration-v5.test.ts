@@ -170,3 +170,42 @@ describe("migrate_v5", () => {
     expect(lines.find((l) => l.includes("migration_v5_report"))).toBeFalsy();
   });
 });
+
+describe("migrate_v8", () => {
+  it("creates ApiKey constraints and indexes and bumps the schema version", async () => {
+    await reset();
+    const session = driver.session();
+    try {
+      await session.run("MERGE (s:SchemaInfo) SET s.version = 7");
+    } finally {
+      await session.close();
+    }
+
+    await initSchema(driver);
+
+    const verify = driver.session();
+    try {
+      const constraints = await verify.run(
+        "SHOW CONSTRAINTS YIELD name RETURN collect(name) AS names",
+      );
+      const constraintNames = constraints.records[0]?.get("names") as string[];
+      expect(constraintNames).toContain("api_key_id_unique");
+
+      const indexes = await verify.run(
+        "SHOW INDEXES YIELD name RETURN collect(name) AS names",
+      );
+      const indexNames = indexes.records[0]?.get("names") as string[];
+      expect(indexNames).toContain("api_key_hash");
+      expect(indexNames).toContain("api_key_user");
+
+      const ver = await verify.run(
+        "MATCH (s:SchemaInfo) RETURN s.version AS version",
+      );
+      expect(neo4j.integer.toNumber(ver.records[0]?.get("version"))).toBe(
+        SCHEMA_VERSION,
+      );
+    } finally {
+      await verify.close();
+    }
+  }, 60_000);
+});

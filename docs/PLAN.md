@@ -382,6 +382,444 @@ volumes:
 
 ---
 
+## Extension: API Key Authentication
+
+> **Status**: Planned — extends but does not replace the OIDC/JWT path (D-006).
+> The finalized architecture section ("Bearer JWT only — no API keys") is superseded by
+> this extension. A corresponding DECISIONS.md entry (D-032) must be added before merging.
+
+### Motivation
+
+Bearer JWT authentication via OIDC works well for interactive clients (Claude Code, Open WebUI).
+Some use cases require simpler, long-lived credentials:
+
+- **Automation scripts and CI pipelines** that cannot perform interactive OIDC flows
+- **Deployments without a public OIDC provider** (air-gapped, local-only installs)
+- **Third-party integrations** that need a stable credential without token refresh complexity
+
+API keys complement OIDC — they do not replace it. The JWT/OIDC path and all existing
+middleware remain unchanged. `API_KEYS_ENABLED=false` (default) means no behaviour change for
+current deployments.
+
+---
+
+### Authentication Flow
+
+Both paths use the `Authorization: Bearer` header. The middleware inspects the token value to
+determine which path to take:
+
+```
+if API_KEYS_ENABLED and token.startsWith("gmv_"):
+  → validateApiKey()  (new path)
+else:
+  → validateBearerToken()  (existing path, unchanged)
+```
+
+The `gmv_` prefix is unambiguous: JWTs always start with `eyJ` (base64url-encoded `{"alg":…}`),
+so there is no overlap.
+
+If `API_KEYS_ENABLED=false` and the token starts with `gmv_`, the middleware returns HTTP 401
+immediately without hitting any key-lookup logic.
+
+---
+
+### API Key Format
+
+```
+gmv_<64 lowercase hex characters>
+```
+
+- **`gmv_`** — literal prefix enabling fast identification and routing
+- **64 hex chars** — 32 bytes from `crypto.randomBytes(32).toString("hex")` (256-bit entropy)
+- **Total length**: 68 characters
+
+**Key prefix for display**: first 12 characters of the raw key (e.g. `gmv_a1b2c3d4ef56`).
+Stored in plaintext as `key_prefix` on the `ApiKey` node; never exposes the secret.
+
+**Key hash**: `scrypt(raw_key, API_KEYS_HASH_SECRET, 32)` encoded as lowercase hex, stored as `key_hash`. The server-side hash secret prevents offline verification of guessed keys if Neo4j is compromised, while preserving indexed lookup by digest. Changing `API_KEYS_HASH_SECRET` invalidates existing API keys.
+
+---
+
+### Neo4j Schema Changes (Migration v8)
+
+**New node type**: `(:ApiKey)`
+
+| Property | Type | Notes |
+|---|---|---|
+| `id` | `string` | UUID4 — internal identifier |
+| `user_id` | `string` | matches `User.id` |
+| `name` | `string` | human-readable label (max 100 chars) |
+| `key_hash` | `string` | scrypt(raw_key, API_KEYS_HASH_SECRET, 32), lowercase hex |
+| `key_prefix` | `string` | first 12 chars of raw key (display only) |
+| `namespaces` | `string[] \| null` | `null` = all namespaces allowed |
+| `created_at` | `string` | ISO-8601 |
+| `last_used_at` | `string \| null` | ISO-8601; updated asynchronously |
+| `expires_at` | `string \| null` | ISO-8601; `null` = no expiry |
+| `revoked` | `boolean` | set to `true` by `revoke_api_key` |
+
+**New relationship**: `(:User)-[:OWNS_KEY]->(:ApiKey)`
+
+**New schema statements** (migration v8):
+
+```cypher
+CREATE CONSTRAINT api_key_id_unique IF NOT EXISTS FOR (k:ApiKey) REQUIRE k.id IS UNIQUE;
+CREATE INDEX api_key_hash IF NOT EXISTS FOR (k:ApiKey) ON (k.key_hash);
+CREATE INDEX api_key_user IF NOT EXISTS FOR (k:ApiKey) ON (k.user_id);
+```
+
+**Schema version bumps from 7 → 8.**
+
+---
+
+### Environment Variables
+
+```env
+# Enable API key authentication. Must be opt-in (default: false).
+API_KEYS_ENABLED=false
+# Hard ceiling on active (non-revoked) API keys per user.
+API_KEYS_MAX_PER_USER=20
+# Required when API_KEYS_ENABLED=true; changing it invalidates existing API keys.
+API_KEYS_HASH_SECRET=change-me-to-a-long-random-secret-at-least-32-chars
+```
+
+**Config additions**:
+- `apiKeysEnabled: boolean` (parsed from `API_KEYS_ENABLED`)
+- `apiKeysMaxPerUser: number` (parsed from `API_KEYS_MAX_PER_USER`)
+- `apiKeysHashSecret: string | undefined` (parsed from `API_KEYS_HASH_SECRET`; required when API keys are enabled)
+
+---
+
+### Code Changes per Module
+
+#### `src/auth.ts` — new exports
+
+```typescript
+// Returns raw key (shown once), scrypt digest (stored), and 12-char display prefix.
+export function generateApiKey(hashSecret: string): { raw: string; hash: string; prefix: string }
+
+// Validates a gmv_-prefixed token against the ApiKey table.
+// Throws AuthError on unknown hash, revoked key, or expired key.
+// Returns userId, apiKeyId, and the optional namespace allow-list.
+export async function validateApiKey(
+  token: string,
+  neo4jClient: Neo4jClient,
+  hashSecret: string,
+): Promise<{ userId: string; apiKeyId: string; allowedNamespaces: string[] | null }>
+```
+
+#### `src/routers/mcp.ts` — auth middleware extension
+
+Current: always calls `validateBearerToken`.
+
+After this change the middleware conditionally branches:
+
+```
+const bearerToken = extractBearerToken(authHeader)  // existing helper
+
+if (config.apiKeysEnabled && bearerToken.startsWith("gmv_")) {
+  const { userId, apiKeyId, allowedNamespaces } = await validateApiKey(bearerToken, neo4jClient, config.apiKeysHashSecret)
+  // name / email are null for API key auth (User node already holds profile from OIDC)
+  requestIdentity = { userId, name: null, email: null, allowedNamespaces }
+} else {
+  const { userId, name, email } = await validateBearerToken(authHeader, config, jwksClient)
+  requestIdentity = { userId, name, email, allowedNamespaces: null }
+}
+```
+
+In `handleInitialize`, after namespace resolution, when `allowedNamespaces !== null`:
+
+```
+if (!allowedNamespaces.includes(resolvedNamespace)) {
+  return HTTP 401 "API key not authorized for namespace: <resolvedNamespace>"
+}
+```
+
+#### `src/neo4j-client.ts` — new query helpers
+
+```typescript
+createApiKey(params: {
+  id: string; userId: string; name: string;
+  keyHash: string; keyPrefix: string;
+  namespaces: string[] | null; expiresAt: string | null;
+}): Promise<ApiKeyRecord>
+
+listApiKeys(userId: string): Promise<ApiKeyListItem[]>
+  // Returns all keys owned by userId; never returns key_hash.
+  // Items include: id, name, key_prefix, namespaces, created_at,
+  //   last_used_at, expires_at, revoked.
+
+getApiKeyByHash(keyHash: string): Promise<ApiKeyRecord | null>
+  // Used by validateApiKey. Returns full record including revoked and expires_at.
+
+revokeApiKey(userId: string, keyId: string): Promise<boolean>
+  // Sets revoked=true on the ApiKey owned by userId. Returns false if not found.
+
+countActiveApiKeys(userId: string): Promise<number>
+  // Counts non-revoked keys for limit enforcement.
+
+updateApiKeyLastUsed(keyId: string): Promise<void>
+  // Fire-and-forget. Caller does not await.
+```
+
+#### `src/tools/api-keys.ts` — new file
+
+Three tool handler functions:
+- `handleCreateApiKey(ctx, args)` — generates key, enforces limit, stores hash, returns raw key once
+- `handleListApiKeys(ctx, args)` — returns metadata list, never key_hash
+- `handleRevokeApiKey(ctx, args)` — sets revoked=true, validates ownership
+
+#### `src/tools/registry.ts` — register new tools
+
+Add `knowledge_create_api_key`, `knowledge_list_api_keys`, `knowledge_revoke_api_key` to the
+tool registry and to `tools/list` responses.
+
+#### `src/schema.ts` — migration v8
+
+Add `migrate_v8` function (constraint + two indexes) and bump `SCHEMA_VERSION` to `8`.
+
+#### `src/config.ts` — two new env vars
+
+Add `API_KEYS_ENABLED`, `API_KEYS_MAX_PER_USER`, and `API_KEYS_HASH_SECRET` to `envSchema` and `Config`.
+
+---
+
+### New MCP Tool Specifications
+
+#### `knowledge_create_api_key`
+
+- **Auth**: any (OIDC JWT or existing API key)
+- **Params**:
+  - `name: string` — label (1–100 chars, required)
+  - `namespaces?: string[]` — namespace allow-list; omit for unrestricted access
+  - `expires_in_days?: number` — expiry window (1–365); omit for no expiry
+- **Behaviour**:
+  1. Check `API_KEYS_ENABLED`; if false → PERMISSION_DENIED
+  2. Count active keys for caller; if ≥ `API_KEYS_MAX_PER_USER` → INVALID_PARAMS
+  3. Call `generateApiKey(config.apiKeysHashSecret)` → raw, hash, prefix
+  4. Persist `ApiKey` node via `createApiKey()`
+  5. Return `{ id, name, key, key_prefix, namespaces, expires_at }`
+- **`key` is shown exactly once**; it is not stored and cannot be recovered
+
+#### `knowledge_list_api_keys`
+
+- **Auth**: any
+- **Params**: none
+- **Returns**: `[{ id, name, key_prefix, namespaces, created_at, last_used_at, expires_at, revoked }]`
+- `key_hash` is never included in the response
+
+#### `knowledge_revoke_api_key`
+
+- **Auth**: any
+- **Params**: `key_id: string`
+- **Behaviour**:
+  1. Call `revokeApiKey(userId, keyId)` — checks ownership in the same query
+  2. If returns false → RESOURCE_NOT_FOUND (key does not exist or not owned by caller)
+  3. If returns true → `{ revoked: true }`
+- Revoking an already-revoked key is idempotent (returns `{ revoked: true }`)
+
+---
+
+### Bootstrap JSON Provisioning
+
+> ⚠️ **Status: planned — not yet implemented.** The bootstrap feature is deferred to a future iteration. The current implementation requires OIDC to be configured; API keys complement OIDC rather than replacing it. See D-032 in DECISIONS.md.
+
+> **Use case**: pre-seeding API keys into a fresh container without going through the MCP tool flow — useful for CI pipelines, air-gapped installs, or first-run admin setup.
+
+**Flow**:
+
+1. Admin drops one or more `.json` files into the bootstrap directory (default: `/run/secrets/api-keys/`, configurable via `API_KEYS_BOOTSTRAP_DIR`).
+2. On startup, `src/bootstrap.ts` scans the directory, imports each key, then **deletes the file** so secrets are not left on disk.
+3. If the bootstrap directory does not exist or is empty, startup proceeds normally — the scan is a no-op.
+
+**JSON schema** (one file per key):
+
+```json
+{
+  "name": "ci-pipeline",
+  "user_id": "svc-ci@example.com",
+  "namespaces": ["homelab", "work"],
+  "expires_at": "2026-12-31T00:00:00Z"
+}
+```
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `name` | `string` | Yes | Human-readable label (max 100 chars) |
+| `user_id` | `string` | Yes | Maps to `User.id`; node is MERGE'd if absent |
+| `namespaces` | `string[] \| null` | No | `null` or omitted = all namespaces; non-empty array = restricted (see below) |
+| `expires_at` | `string \| null` | No | ISO-8601; `null` or omitted = no expiry |
+
+**Environment variable**:
+
+```env
+# Directory scanned at startup for bootstrap API key JSON files.
+# Files are deleted after import. Set to empty string to disable.
+API_KEYS_BOOTSTRAP_DIR=/run/secrets/api-keys
+```
+
+**Security notes**:
+- The directory must be mounted read-write so files can be deleted after import.
+- Each file is processed atomically (import then delete); a crash between the two steps means the key already exists in Neo4j and the next startup attempt will fail the uniqueness constraint — this is safe (no duplicate key is created).
+- The raw key is **only** returned in the startup log at `info` level, once, immediately after import. Operators must capture it from container logs before the container restarts.
+
+---
+
+### Namespace Optional Behavior (API Key Scope)
+
+The `namespaces` field on `ApiKey` controls which namespaces a key can open a session in:
+
+| Value | Meaning |
+|---|---|
+| `null` | Key is unrestricted — all namespaces are allowed |
+| `[]` (empty array) | Treated identically to `null` — all namespaces are allowed |
+| `["homelab", "work"]` | Key is restricted — only the listed namespaces are allowed |
+
+The empty-array case is normalised to `null` on write so that the stored value is always either `null` or a non-empty array. This avoids an ambiguous state where the serialised form differs but the semantic meaning is the same.
+
+Enforcement happens at `initialize` time in the auth middleware, not in Neo4j. A key that passes the hash/revoked/expiry checks but fails the namespace check returns HTTP 401 with `"API key not authorized for namespace: <resolvedNamespace>"`.
+
+---
+
+### Security Considerations
+
+1. **Raw key shown only once** — `knowledge_create_api_key` includes `key` in the response.
+   After the MCP session ends, the raw key is unrecoverable. Clients must store it securely.
+
+2. **SHA-256 for key storage** — 256-bit CSPRNG entropy means brute-force and rainbow-table
+   attacks are computationally infeasible. bcrypt/Argon2 provides no additional protection for
+   randomly-generated keys and would impose 100–300 ms per request latency.
+
+3. **Timing-safe lookup** — keys are looked up by hash equality using a Neo4j index (point
+   lookup, not substring scan). No timing oracle exists for the hash value itself.
+
+4. **Asynchronous `last_used_at`** — the timestamp update fires after the response is sent
+   and is not awaited. A crash between response and write leaves `last_used_at` slightly stale;
+   this is acceptable because `last_used_at` is an audit field, not a security control.
+
+5. **Namespace restriction enforced at `initialize`** — a key with `namespaces: ["homelab"]`
+   cannot open a session in any other namespace, regardless of the URL or meta parameter the
+   client provides.
+
+6. **Expiry checked on every validation** — an expired key returns HTTP 401 identically to a
+   revoked key. No distinction is returned to the caller (avoids enumeration).
+
+7. **`API_KEYS_ENABLED=false` by default** — existing deployments require no change. API key
+   support is strictly opt-in.
+
+8. **Per-user key limit** — `API_KEYS_MAX_PER_USER` (default: 20) prevents unbounded key
+   proliferation. Revoked keys do not count toward the limit.
+
+9. **HTTPS required** — API keys in Bearer tokens are as sensitive as passwords. Production
+   deployments MUST terminate TLS before the server. This is the same requirement as JWT Bearer
+   tokens and is not a new constraint.
+
+10. **No built-in key rotation** — callers create a new key then revoke the old one. A rotation
+    primitive is not provided; it would add complexity for no security gain in this deployment
+    target.
+
+11. **API key management tools are self-referential** — a caller authenticated via API key can
+    create new keys and revoke existing ones. This is intentional: automation scripts need to
+    rotate their own keys. If this is undesirable, set `API_KEYS_ENABLED=false` for those keys
+    or restrict at the namespace level.
+
+---
+
+### Test Scenarios
+
+#### `api-keys.test.ts` (new)
+
+- `knowledge_create_api_key` returns raw key + metadata; raw key authenticates a subsequent request
+- `knowledge_create_api_key` when `API_KEYS_ENABLED=false` → PERMISSION_DENIED
+- `knowledge_create_api_key` when user already has `API_KEYS_MAX_PER_USER` active keys → INVALID_PARAMS
+- `knowledge_create_api_key` with `namespaces` restriction — authenticated session limited to those namespaces
+- `knowledge_create_api_key` with `expires_in_days=1` — key expires after 24 h (fast-forward time in test)
+- `knowledge_list_api_keys` returns list without `key` or `key_hash` fields
+- `knowledge_list_api_keys` shows revoked keys in the list (with `revoked: true`)
+- `knowledge_revoke_api_key` → subsequent auth with that key returns 401
+- `knowledge_revoke_api_key` for a key owned by a different user → RESOURCE_NOT_FOUND
+- `knowledge_revoke_api_key` on already-revoked key → idempotent, returns `{ revoked: true }`
+
+#### `auth.test.ts` extensions
+
+- `gmv_` token with `API_KEYS_ENABLED=false` → HTTP 401
+- Valid API key → HTTP 200 (session opens as correct userId)
+- Unknown `key_hash` (not in DB) → HTTP 401
+- Revoked API key → HTTP 401
+- Expired API key → HTTP 401
+- API key with `namespaces: ["homelab"]`, request to `/mcp/homelab` → 200
+- API key with `namespaces: ["homelab"]`, request to `/mcp/work` → 401
+
+---
+
+### TDD Execution Order (API Key Extension)
+
+Insert after existing step 3 (Neo4j schema + client):
+
+| Step | Action | Test file |
+|---|---|---|
+| 3a | Config additions: `API_KEYS_ENABLED`, `API_KEYS_MAX_PER_USER`, `API_KEYS_HASH_SECRET` | `config.test.ts` (unit) |
+| 3b | `generateApiKey()` — format, entropy, hash correctness | `auth.test.ts` (unit) |
+| 3c | Schema migration v8 — ApiKey constraint + indexes | `schema.test.ts` (integration) |
+| 3d | Neo4j query helpers — `createApiKey`, `getApiKeyByHash`, `revokeApiKey`, `listApiKeys`, `countActiveApiKeys`, `updateApiKeyLastUsed` | `neo4j-client.test.ts` (integration) |
+| 3e | `validateApiKey()` — valid key, unknown hash, revoked, expired | `auth.test.ts` extensions (unit, mock queries) |
+| 3f | Auth middleware routing — `gmv_` branch on/off, error cases | `auth.test.ts` extensions (integration) |
+| 3g | Namespace restriction at `initialize` | `namespace.test.ts` extensions |
+| 3h | MCP tools — `create_api_key`, `list_api_keys`, `revoke_api_key` | `api-keys.test.ts` (integration) |
+| 3i | Register tools in registry; `tools/list` response | `mcp-lifecycle.test.ts` extension |
+
+Each step follows the red-green-refactor cycle per AGENTS.md. No production code is written
+before the test for that step is failing for the right reason.
+
+---
+
+## Co-dev Review with Codex (tmux workflow)
+
+Run Codex in a dedicated tmux pane so it can perform a full code review in parallel with ongoing development in the main pane.
+
+### Setup
+
+```bash
+# Create (or attach to) a named tmux session
+tmux new-session -d -s codex-review -x 220 -y 50
+
+# Open two panes: left = dev/Claude, right = Codex
+tmux split-window -h -t codex-review
+
+# In the right pane, start Codex with review instructions
+tmux send-keys -t codex-review:0.1 \
+  'codex "Review the full codebase in src/ for correctness, security, and TypeScript best-practice issues. Focus on: auth middleware routing, Neo4j query helpers, error taxonomy consistency, and the bootstrap provisioning flow. Report findings as a numbered list with file:line references."' \
+  Enter
+```
+
+### Review prompt template
+
+```
+Review src/ for the following:
+1. Security: timing-safe comparisons, secret exposure in logs, input validation at boundaries.
+2. Correctness: auth middleware branch logic (gmv_ prefix, API_KEYS_ENABLED guard), session lifecycle, namespace enforcement.
+3. TypeScript: missing type annotations, unsafe casts, unhandled promise rejections.
+4. Test coverage gaps: list any code path in src/ not covered by a test in tests/.
+
+Output a numbered finding list. For each finding include:
+- File path and line number
+- Severity: critical / high / medium / low
+- Short description
+- Suggested fix (one sentence)
+```
+
+### Workflow
+
+1. Start the Codex review in the right tmux pane (command above).
+2. Continue development or run tests in the left pane — the review runs concurrently.
+3. When Codex finishes, copy the numbered finding list into a scratch file (`docs/codex-review-findings.md`).
+4. Triage findings: accept, reject, or defer each one.
+5. Claude implements fixes for all accepted findings, preserving the core app goal and scope.
+6. Re-run the test suite after each fix batch: `pnpm vitest run`.
+
+This is the workflow described in step 14 of the TDD Execution Order and step 8 of the Current Implementation Priorities.
+
+---
+
 ## Verification
 
 ```bash

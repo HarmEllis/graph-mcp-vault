@@ -599,3 +599,37 @@ parameter is added with values `"outbound"`, `"inbound"`, and `"both"`.
 
 **Rejected alternative**: keep outbound-only default and improve documentation. Rejected because
 documentation is advisory and the silent-empty failure mode persists for undirected topologies.
+
+
+---
+
+## D-032 — Optional API key authentication alongside OIDC
+
+**Date**: 2026-06-16
+**Status**: Accepted
+
+**Decision**: Add an optional `gmv_`-prefixed API key authentication mechanism that operates
+alongside (not instead of) OIDC/JWT. Controlled by `API_KEYS_ENABLED` (default `false`).
+Keys are stored as scrypt digests in a new `(:ApiKey)` Neo4j node using `API_KEYS_HASH_SECRET`. The raw key is returned exactly once at creation; it cannot be recovered.
+
+**Rationale**:
+- Service accounts and CI pipelines need to call the MCP server without a browser-based OIDC
+  flow. Long-lived Bearer JWTs from OIDC providers are not suited for automation.
+- The existing JWT path remains unchanged; API keys are an opt-in addition.
+- scrypt hashing the stored value limits blast radius if Neo4j is compromised: the digest cannot be reversed and cannot be used to verify guesses without the server-side hash secret.
+
+**Security properties**:
+- Keys carry an optional `namespaces` allow-list; restricted keys force `lockedNamespace=true`
+  on the session and cannot mint keys with broader scope than their own allow-list.
+- Expired keys (`expires_at` in the past) and revoked keys (`revoked=true`) are rejected at
+  auth time and excluded from the active-key count for limit enforcement.
+- `API_KEYS_ENABLED=false` (the default) causes any `gmv_` token to return HTTP 401 so that
+  existing deployments require no configuration change. `API_KEYS_HASH_SECRET` is required only when API keys are enabled; rotating it invalidates existing keys.
+
+**Out of scope (planned future feature)**: Bootstrap JSON provisioning (`API_KEYS_BOOTSTRAP_DIR`)
+for air-gapped deployments without OIDC. The current implementation requires OIDC to be
+configured; API keys complement OIDC rather than replacing it.
+
+**Rejected alternative**: allow API keys to replace OIDC entirely (air-gapped mode). Rejected
+for this iteration because it requires conditional OIDC discovery, bootstrap secret management,
+and additional startup logic. Deferred to a follow-up.

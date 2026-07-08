@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { Hono } from "hono";
 import type { Context } from "hono";
-import { type JwksClient, validateBearerToken } from "../auth.js";
+import {
+  type JwksClient,
+  validateApiKey,
+  validateBearerToken,
+} from "../auth.js";
 import type { Config } from "../config.js";
 import { ErrorCode, makeJsonRpcError } from "../errors.js";
 import { type Logger, noopLogger } from "../logger.js";
@@ -261,12 +265,39 @@ export function createMcpRouter(
     let userId: string;
     let name: string | null;
     let email: string | null;
+    let allowedNamespaces: string[] | null = null;
+    let authMethod: "jwt" | "api_key" = "jwt";
+    let apiKeyId: string | undefined;
+    const authHeader = c.req.header("authorization");
+    const bearerToken = authHeader?.startsWith("Bearer ")
+      ? authHeader.slice(7)
+      : undefined;
     try {
-      ({ userId, name, email } = await validateBearerToken(
-        c.req.header("authorization"),
-        config,
-        jwksClient,
-      ));
+      if (bearerToken?.startsWith("gmv_")) {
+        if (!config.apiKeysEnabled) {
+          throw new Error("API keys are not enabled");
+        }
+        if (config.apiKeysHashSecret === undefined) {
+          throw new Error("API key hash secret is not configured");
+        }
+        const result = await validateApiKey(
+          bearerToken,
+          neo4jClient,
+          config.apiKeysHashSecret,
+        );
+        userId = result.userId;
+        name = null;
+        email = null;
+        allowedNamespaces = result.allowedNamespaces;
+        authMethod = "api_key";
+        apiKeyId = result.apiKeyId;
+      } else {
+        ({ userId, name, email } = await validateBearerToken(
+          authHeader,
+          config,
+          jwksClient,
+        ));
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unauthorized";
       logger.warn("auth_failure", { requestId, message });
@@ -308,6 +339,9 @@ export function createMcpRouter(
           userId,
           name,
           email,
+          allowedNamespaces,
+          authMethod,
+          apiKeyId,
           urlNamespace,
           c.req.header("mcp-session-id"),
           requestId,
@@ -322,6 +356,9 @@ export function createMcpRouter(
         userId,
         name,
         email,
+        allowedNamespaces,
+        authMethod,
+        apiKeyId,
         urlNamespace,
         c.req.header("mcp-session-id"),
         requestId,
@@ -338,6 +375,9 @@ export function createMcpRouter(
     userId: string,
     name: string | null,
     email: string | null,
+    allowedNamespaces: string[] | null,
+    authMethod: "jwt" | "api_key",
+    apiKeyId: string | undefined,
     urlNamespace: string | undefined,
     sessionHeader: string | undefined,
     requestId: string,
@@ -364,6 +404,9 @@ export function createMcpRouter(
       userId,
       name,
       email,
+      allowedNamespaces,
+      authMethod,
+      apiKeyId,
       urlNamespace,
       sessionHeader,
       requestId,
@@ -384,6 +427,9 @@ export function createMcpRouter(
     userId: string,
     name: string | null,
     email: string | null,
+    allowedNamespaces: string[] | null,
+    authMethod: "jwt" | "api_key",
+    apiKeyId: string | undefined,
     urlNamespace: string | undefined,
     sessionHeader: string | undefined,
     requestId: string,
@@ -411,6 +457,9 @@ export function createMcpRouter(
         userId,
         name,
         email,
+        allowedNamespaces,
+        authMethod,
+        apiKeyId,
         urlNamespace,
         sessionHeader,
         requestId,
@@ -436,6 +485,9 @@ export function createMcpRouter(
     userId: string,
     name: string | null,
     email: string | null,
+    allowedNamespaces: string[] | null,
+    authMethod: "jwt" | "api_key",
+    apiKeyId: string | undefined,
     urlNamespace: string | undefined,
     sessionHeader: string | undefined,
     requestId: string,
@@ -449,6 +501,9 @@ export function createMcpRouter(
         userId,
         name,
         email,
+        allowedNamespaces,
+        authMethod,
+        apiKeyId,
         urlNamespace,
         requestId,
         queryFlags,
@@ -504,6 +559,29 @@ export function createMcpRouter(
       };
     }
 
+    // An API-key request must use a session created by the same key.
+    // Without this, a namespace-restricted key could piggyback on a broader
+    // JWT-created session for the same user.
+    if (authMethod === "api_key") {
+      if (session.authMethod !== "api_key" || session.apiKeyId !== apiKeyId) {
+        logger.warn("session_credential_mismatch", {
+          requestId,
+          userId,
+          method,
+          sessionId: sessionHeader,
+        });
+        return {
+          response: makeJsonRpcError(
+            id,
+            ErrorCode.SESSION_NOT_FOUND,
+            "Session not found or expired",
+          ),
+          sessionId: null,
+          httpStatus: 404,
+        };
+      }
+    }
+
     if (urlNamespace !== undefined && urlNamespace !== session.namespace) {
       logger.warn("namespace_conflict", {
         requestId,
@@ -527,6 +605,9 @@ export function createMcpRouter(
       userId: session.userId,
       namespace: session.namespace,
       lockedNamespace: session.lockedNamespace,
+      allowedNamespaces: session.allowedNamespaces,
+      authMethod: session.authMethod,
+      ...(session.apiKeyId !== undefined ? { apiKeyId: session.apiKeyId } : {}),
     };
 
     switch (method) {
@@ -727,6 +808,9 @@ export function createMcpRouter(
     userId: string,
     name: string | null,
     email: string | null,
+    allowedNamespaces: string[] | null,
+    authMethod: "jwt" | "api_key",
+    apiKeyId: string | undefined,
     urlNamespace: string | undefined,
     requestId: string,
     queryFlags: { readonly: boolean; lockedNamespace: boolean },
@@ -783,7 +867,35 @@ export function createMcpRouter(
         httpStatus: 400,
       };
     }
-    const sessionId = sessionStore.create(userId, namespace, queryFlags);
+    if (allowedNamespaces !== null && !allowedNamespaces.includes(namespace)) {
+      logger.warn("api_key_namespace_denied", {
+        requestId,
+        userId,
+        namespace,
+      });
+      return {
+        response: makeJsonRpcError(
+          id,
+          ErrorCode.PERMISSION_DENIED,
+          `API key not authorized for namespace: ${namespace}`,
+        ),
+        sessionId: null,
+        httpStatus: 401,
+      };
+    }
+
+    const effectiveLockedNamespace =
+      allowedNamespaces !== null ? true : queryFlags.lockedNamespace;
+
+    const sessionId = sessionStore.create(userId, namespace, {
+      ...queryFlags,
+      // Namespace-restricted API keys lock the session so tool calls cannot
+      // cross into other namespaces via an explicit namespace argument.
+      lockedNamespace: effectiveLockedNamespace,
+      allowedNamespaces,
+      authMethod,
+      ...(apiKeyId !== undefined ? { apiKeyId } : {}),
+    });
 
     await neo4jClient.upsertUserProfile(userId, name, email);
 
@@ -793,7 +905,7 @@ export function createMcpRouter(
       namespace,
       sessionId,
       readonly: queryFlags.readonly,
-      lockedNamespace: queryFlags.lockedNamespace,
+      lockedNamespace: effectiveLockedNamespace,
     });
 
     return {
