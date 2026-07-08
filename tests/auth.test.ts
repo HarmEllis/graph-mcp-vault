@@ -658,33 +658,39 @@ describe("validateBearerToken max token lifetime", () => {
 // ── generateApiKey ───────────────────────────────────────────────────────────
 
 describe("generateApiKey", () => {
-  it("returns a gmv-prefixed 256-bit lowercase hex key", () => {
-    const key = generateApiKey(API_KEY_HASH_SECRET);
+  it("returns a gmv-prefixed 256-bit lowercase hex key", async () => {
+    const key = await generateApiKey(API_KEY_HASH_SECRET);
 
     expect(key.raw).toMatch(/^gmv_[0-9a-f]{64}$/);
     expect(key.raw).toHaveLength(68);
     expect(key.prefix).toBe(key.raw.slice(0, 12));
   });
 
-  it("returns an HMAC digest of the raw key", () => {
-    const key = generateApiKey(API_KEY_HASH_SECRET);
+  it("returns a scrypt digest of the raw key", async () => {
+    const key = await generateApiKey(API_KEY_HASH_SECRET);
 
-    expect(key.hash).toBe(hashApiKey(key.raw, API_KEY_HASH_SECRET));
+    await expect(hashApiKey(key.raw, API_KEY_HASH_SECRET)).resolves.toBe(
+      key.hash,
+    );
     expect(key.hash).toMatch(/^[0-9a-f]{64}$/);
     expect(key.hash).not.toBe(key.raw);
   });
 
-  it("uses the hash secret when deriving the stored digest", () => {
-    const key = generateApiKey(API_KEY_HASH_SECRET);
+  it("uses the hash secret when deriving the stored digest", async () => {
+    const key = await generateApiKey(API_KEY_HASH_SECRET);
 
-    expect(
+    await expect(
       hashApiKey(key.raw, "different-api-key-hash-secret-32-chars"),
-    ).not.toBe(key.hash);
+    ).resolves.not.toBe(key.hash);
   });
 
-  it("generates unique raw keys", () => {
+  it("generates unique raw keys", async () => {
     const keys = new Set(
-      Array.from({ length: 64 }, () => generateApiKey(API_KEY_HASH_SECRET).raw),
+      (
+        await Promise.all(
+          Array.from({ length: 64 }, () => generateApiKey(API_KEY_HASH_SECRET)),
+        )
+      ).map((key) => key.raw),
     );
 
     expect(keys.size).toBe(64);
@@ -723,7 +729,7 @@ function buildApiKeyClient(record: ApiKeyRecord | null): Neo4jClient {
 
 describe("validateApiKey", () => {
   it("returns API key identity for a valid key and updates last_used_at", async () => {
-    const key = generateApiKey(API_KEY_HASH_SECRET);
+    const key = await generateApiKey(API_KEY_HASH_SECRET);
     const record = buildApiKeyRecord({
       id: "api-key-valid",
       user_id: "api-user-valid",
@@ -745,7 +751,7 @@ describe("validateApiKey", () => {
   });
 
   it("throws AuthError when the key hash is unknown", async () => {
-    const key = generateApiKey(API_KEY_HASH_SECRET);
+    const key = await generateApiKey(API_KEY_HASH_SECRET);
     const client = buildApiKeyClient(null);
 
     await expect(
@@ -754,7 +760,7 @@ describe("validateApiKey", () => {
   });
 
   it("throws AuthError when the key is revoked", async () => {
-    const key = generateApiKey(API_KEY_HASH_SECRET);
+    const key = await generateApiKey(API_KEY_HASH_SECRET);
     const client = buildApiKeyClient(
       buildApiKeyRecord({ key_hash: key.hash, revoked: true }),
     );
@@ -765,7 +771,7 @@ describe("validateApiKey", () => {
   });
 
   it("throws AuthError when the key is expired", async () => {
-    const key = generateApiKey(API_KEY_HASH_SECRET);
+    const key = await generateApiKey(API_KEY_HASH_SECRET);
     const client = buildApiKeyClient(
       buildApiKeyRecord({
         key_hash: key.hash,

@@ -1,4 +1,5 @@
-import { createHmac, randomBytes } from "node:crypto";
+import { randomBytes, scrypt } from "node:crypto";
+import { promisify } from "node:util";
 import { decodeProtectedHeader, importJWK, jwtVerify } from "jose";
 import type { JWK, KeyLike } from "jose";
 import type { Config } from "./config.js";
@@ -141,19 +142,25 @@ export class JwksClient {
 
 // ── API key helpers ──────────────────────────────────────────────────────────
 
-export function hashApiKey(raw: string, hashSecret: string): string {
-  return createHmac("sha256", hashSecret).update(raw, "utf8").digest("hex");
+const scryptAsync = promisify(scrypt);
+
+export async function hashApiKey(
+  raw: string,
+  hashSecret: string,
+): Promise<string> {
+  const digest = (await scryptAsync(raw, hashSecret, 32)) as Buffer;
+  return digest.toString("hex");
 }
 
-export function generateApiKey(hashSecret: string): {
+export async function generateApiKey(hashSecret: string): Promise<{
   raw: string;
   hash: string;
   prefix: string;
-} {
+}> {
   const raw = `gmv_${randomBytes(32).toString("hex")}`;
   return {
     raw,
-    hash: hashApiKey(raw, hashSecret),
+    hash: await hashApiKey(raw, hashSecret),
     prefix: raw.slice(0, 12),
   };
 }
@@ -171,7 +178,7 @@ export async function validateApiKey(
     throw new AuthError("Invalid API key");
   }
 
-  const keyHash = hashApiKey(token, hashSecret);
+  const keyHash = await hashApiKey(token, hashSecret);
   const apiKey = await neo4jClient.getApiKeyByHash(keyHash);
   if (!apiKey || apiKey.revoked) {
     throw new AuthError("Invalid API key");

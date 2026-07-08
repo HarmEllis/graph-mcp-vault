@@ -51,7 +51,7 @@ async function handleCreateApiKey(
   const namespaces =
     rawNamespaces !== undefined ? [...new Set(rawNamespaces)] : undefined;
 
-  const { raw, hash, prefix } = generateApiKey(config.apiKeysHashSecret);
+  const { raw, hash, prefix } = await generateApiKey(config.apiKeysHashSecret);
 
   const expiresAt =
     expires_in_days !== undefined

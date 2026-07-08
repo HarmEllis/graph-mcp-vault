@@ -436,7 +436,7 @@ gmv_<64 lowercase hex characters>
 **Key prefix for display**: first 12 characters of the raw key (e.g. `gmv_a1b2c3d4ef56`).
 Stored in plaintext as `key_prefix` on the `ApiKey` node; never exposes the secret.
 
-**Key hash**: `HMAC-SHA-256(raw_key, API_KEYS_HASH_SECRET)` encoded as lowercase hex, stored as `key_hash`. The server-side hash secret prevents offline verification of guessed keys if Neo4j is compromised, while preserving indexed lookup by digest. Changing `API_KEYS_HASH_SECRET` invalidates existing API keys.
+**Key hash**: `scrypt(raw_key, API_KEYS_HASH_SECRET, 32)` encoded as lowercase hex, stored as `key_hash`. The server-side hash secret prevents offline verification of guessed keys if Neo4j is compromised, while preserving indexed lookup by digest. Changing `API_KEYS_HASH_SECRET` invalidates existing API keys.
 
 ---
 
@@ -449,7 +449,7 @@ Stored in plaintext as `key_prefix` on the `ApiKey` node; never exposes the secr
 | `id` | `string` | UUID4 — internal identifier |
 | `user_id` | `string` | matches `User.id` |
 | `name` | `string` | human-readable label (max 100 chars) |
-| `key_hash` | `string` | HMAC-SHA-256(raw_key, API_KEYS_HASH_SECRET), lowercase hex |
+| `key_hash` | `string` | scrypt(raw_key, API_KEYS_HASH_SECRET, 32), lowercase hex |
 | `key_prefix` | `string` | first 12 chars of raw key (display only) |
 | `namespaces` | `string[] \| null` | `null` = all namespaces allowed |
 | `created_at` | `string` | ISO-8601 |
@@ -494,7 +494,7 @@ API_KEYS_HASH_SECRET=change-me-to-a-long-random-secret-at-least-32-chars
 #### `src/auth.ts` — new exports
 
 ```typescript
-// Returns raw key (shown once), HMAC digest (stored), and 12-char display prefix.
+// Returns raw key (shown once), scrypt digest (stored), and 12-char display prefix.
 export function generateApiKey(hashSecret: string): { raw: string; hash: string; prefix: string }
 
 // Validates a gmv_-prefixed token against the ApiKey table.

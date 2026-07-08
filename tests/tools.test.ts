@@ -1757,7 +1757,7 @@ describe("knowledge_list_namespaces", () => {
       workSid,
     );
 
-    const { raw, hash, prefix } = generateApiKey(API_KEY_HASH_SECRET);
+    const { raw, hash, prefix } = await generateApiKey(API_KEY_HASH_SECRET);
     await neo4jClient.createApiKey({
       id: `${sub}-homelab-key`,
       userId: sub,

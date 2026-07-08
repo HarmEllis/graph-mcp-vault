@@ -346,7 +346,7 @@ describe("knowledge_create_api_key", () => {
     const sub = uniqueUser();
 
     // Create an already-expired key directly in Neo4j
-    const { hash, prefix } = generateApiKey(API_KEY_HASH_SECRET);
+    const { hash, prefix } = await generateApiKey(API_KEY_HASH_SECRET);
     await neo4jClient.createApiKey({
       id: randomUUID(),
       userId: sub,
@@ -727,7 +727,7 @@ describe("API key middleware", () => {
     const sub = uniqueUser();
 
     // Create a key directly in Neo4j with a past expiry
-    const { raw, hash, prefix } = generateApiKey(API_KEY_HASH_SECRET);
+    const { raw, hash, prefix } = await generateApiKey(API_KEY_HASH_SECRET);
     await neo4jClient.createApiKey({
       id: randomUUID(),
       userId: sub,
@@ -1262,9 +1262,9 @@ describe("createApiKeyWithLimit serialization", () => {
   it("allows only one creation when two concurrent calls race with maxPerUser: 1", async () => {
     const userId = uniqueUser();
     const { hash: hash1, prefix: prefix1 } =
-      generateApiKey(API_KEY_HASH_SECRET);
+      await generateApiKey(API_KEY_HASH_SECRET);
     const { hash: hash2, prefix: prefix2 } =
-      generateApiKey(API_KEY_HASH_SECRET);
+      await generateApiKey(API_KEY_HASH_SECRET);
 
     const [result1, result2] = await Promise.all([
       neo4jClient.createApiKeyWithLimit({
