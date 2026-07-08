@@ -30,6 +30,7 @@ describe("parseConfig", () => {
     expect(config.allowedOrigins).toBe("");
     expect(config.apiKeysEnabled).toBe(false);
     expect(config.apiKeysMaxPerUser).toBe(20);
+    expect(config.apiKeysHashSecret).toBeUndefined();
   });
 
   it("accepts overridden optional values", () => {
@@ -222,9 +223,32 @@ describe("parseConfig", () => {
 
   // ── API key authentication fields ──────────────────────────────────────────
 
-  it("apiKeysEnabled is true when API_KEYS_ENABLED=true", () => {
-    const config = parseConfig({ ...required, API_KEYS_ENABLED: "true" });
+  it("apiKeysEnabled is true when API_KEYS_ENABLED=true and API_KEYS_HASH_SECRET is set", () => {
+    const config = parseConfig({
+      ...required,
+      API_KEYS_ENABLED: "true",
+      API_KEYS_HASH_SECRET: "test-api-key-hash-secret-at-least-32-chars",
+    });
     expect(config.apiKeysEnabled).toBe(true);
+    expect(config.apiKeysHashSecret).toBe(
+      "test-api-key-hash-secret-at-least-32-chars",
+    );
+  });
+
+  it("throws when API_KEYS_ENABLED=true without API_KEYS_HASH_SECRET", () => {
+    expect(() =>
+      parseConfig({ ...required, API_KEYS_ENABLED: "true" }),
+    ).toThrow();
+  });
+
+  it("throws when API_KEYS_HASH_SECRET is too short", () => {
+    expect(() =>
+      parseConfig({
+        ...required,
+        API_KEYS_ENABLED: "true",
+        API_KEYS_HASH_SECRET: "short",
+      }),
+    ).toThrow();
   });
 
   it("throws when API_KEYS_ENABLED is not true or false", () => {

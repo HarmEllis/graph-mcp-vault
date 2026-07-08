@@ -50,6 +50,7 @@ const BASE_CONFIG: Config = {
   maxVersionsLimit: 10,
   apiKeysEnabled: false,
   apiKeysMaxPerUser: 20,
+  apiKeysHashSecret: undefined,
 };
 
 let container: StartedTestContainer;

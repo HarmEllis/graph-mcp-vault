@@ -436,10 +436,7 @@ gmv_<64 lowercase hex characters>
 **Key prefix for display**: first 12 characters of the raw key (e.g. `gmv_a1b2c3d4ef56`).
 Stored in plaintext as `key_prefix` on the `ApiKey` node; never exposes the secret.
 
-**Key hash**: `SHA-256(raw_key)` encoded as lowercase hex, stored as `key_hash`.
-SHA-256 is appropriate here — 256-bit CSPRNG entropy makes preimage attacks computationally
-infeasible regardless of hash strength, and SHA-256 lookup is O(1) via Neo4j index.
-bcrypt/Argon2 would add 100–300 ms per request with no added security for randomly-generated keys.
+**Key hash**: `HMAC-SHA-256(raw_key, API_KEYS_HASH_SECRET)` encoded as lowercase hex, stored as `key_hash`. The server-side hash secret prevents offline verification of guessed keys if Neo4j is compromised, while preserving indexed lookup by digest. Changing `API_KEYS_HASH_SECRET` invalidates existing API keys.
 
 ---
 
@@ -452,7 +449,7 @@ bcrypt/Argon2 would add 100–300 ms per request with no added security for rand
 | `id` | `string` | UUID4 — internal identifier |
 | `user_id` | `string` | matches `User.id` |
 | `name` | `string` | human-readable label (max 100 chars) |
-| `key_hash` | `string` | SHA-256(raw_key), lowercase hex |
+| `key_hash` | `string` | HMAC-SHA-256(raw_key, API_KEYS_HASH_SECRET), lowercase hex |
 | `key_prefix` | `string` | first 12 chars of raw key (display only) |
 | `namespaces` | `string[] \| null` | `null` = all namespaces allowed |
 | `created_at` | `string` | ISO-8601 |
@@ -481,11 +478,14 @@ CREATE INDEX api_key_user IF NOT EXISTS FOR (k:ApiKey) ON (k.user_id);
 API_KEYS_ENABLED=false
 # Hard ceiling on active (non-revoked) API keys per user.
 API_KEYS_MAX_PER_USER=20
+# Required when API_KEYS_ENABLED=true; changing it invalidates existing API keys.
+API_KEYS_HASH_SECRET=change-me-to-a-long-random-secret-at-least-32-chars
 ```
 
 **Config additions**:
 - `apiKeysEnabled: boolean` (parsed from `API_KEYS_ENABLED`)
 - `apiKeysMaxPerUser: number` (parsed from `API_KEYS_MAX_PER_USER`)
+- `apiKeysHashSecret: string | undefined` (parsed from `API_KEYS_HASH_SECRET`; required when API keys are enabled)
 
 ---
 
@@ -494,8 +494,8 @@ API_KEYS_MAX_PER_USER=20
 #### `src/auth.ts` — new exports
 
 ```typescript
-// Returns raw key (shown once), SHA-256 hash (stored), and 12-char display prefix.
-export function generateApiKey(): { raw: string; hash: string; prefix: string }
+// Returns raw key (shown once), HMAC digest (stored), and 12-char display prefix.
+export function generateApiKey(hashSecret: string): { raw: string; hash: string; prefix: string }
 
 // Validates a gmv_-prefixed token against the ApiKey table.
 // Throws AuthError on unknown hash, revoked key, or expired key.
@@ -503,6 +503,7 @@ export function generateApiKey(): { raw: string; hash: string; prefix: string }
 export async function validateApiKey(
   token: string,
   neo4jClient: Neo4jClient,
+  hashSecret: string,
 ): Promise<{ userId: string; apiKeyId: string; allowedNamespaces: string[] | null }>
 ```
 
@@ -516,7 +517,7 @@ After this change the middleware conditionally branches:
 const bearerToken = extractBearerToken(authHeader)  // existing helper
 
 if (config.apiKeysEnabled && bearerToken.startsWith("gmv_")) {
-  const { userId, apiKeyId, allowedNamespaces } = await validateApiKey(bearerToken, neo4jClient)
+  const { userId, apiKeyId, allowedNamespaces } = await validateApiKey(bearerToken, neo4jClient, config.apiKeysHashSecret)
   // name / email are null for API key auth (User node already holds profile from OIDC)
   requestIdentity = { userId, name: null, email: null, allowedNamespaces }
 } else {
@@ -578,7 +579,7 @@ Add `migrate_v8` function (constraint + two indexes) and bump `SCHEMA_VERSION` t
 
 #### `src/config.ts` — two new env vars
 
-Add `API_KEYS_ENABLED` and `API_KEYS_MAX_PER_USER` to `envSchema` and `Config`.
+Add `API_KEYS_ENABLED`, `API_KEYS_MAX_PER_USER`, and `API_KEYS_HASH_SECRET` to `envSchema` and `Config`.
 
 ---
 
@@ -594,7 +595,7 @@ Add `API_KEYS_ENABLED` and `API_KEYS_MAX_PER_USER` to `envSchema` and `Config`.
 - **Behaviour**:
   1. Check `API_KEYS_ENABLED`; if false → PERMISSION_DENIED
   2. Count active keys for caller; if ≥ `API_KEYS_MAX_PER_USER` → INVALID_PARAMS
-  3. Call `generateApiKey()` → raw, hash, prefix
+  3. Call `generateApiKey(config.apiKeysHashSecret)` → raw, hash, prefix
   4. Persist `ApiKey` node via `createApiKey()`
   5. Return `{ id, name, key, key_prefix, namespaces, expires_at }`
 - **`key` is shown exactly once**; it is not stored and cannot be recovered
@@ -756,7 +757,7 @@ Insert after existing step 3 (Neo4j schema + client):
 
 | Step | Action | Test file |
 |---|---|---|
-| 3a | Config additions: `API_KEYS_ENABLED`, `API_KEYS_MAX_PER_USER` | `config.test.ts` (unit) |
+| 3a | Config additions: `API_KEYS_ENABLED`, `API_KEYS_MAX_PER_USER`, `API_KEYS_HASH_SECRET` | `config.test.ts` (unit) |
 | 3b | `generateApiKey()` — format, entropy, hash correctness | `auth.test.ts` (unit) |
 | 3c | Schema migration v8 — ApiKey constraint + indexes | `schema.test.ts` (integration) |
 | 3d | Neo4j query helpers — `createApiKey`, `getApiKeyByHash`, `revokeApiKey`, `listApiKeys`, `countActiveApiKeys`, `updateApiKeyLastUsed` | `neo4j-client.test.ts` (integration) |

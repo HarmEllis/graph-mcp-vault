@@ -38,13 +38,20 @@ async function handleCreateApiKey(
     );
   }
 
+  if (config.apiKeysHashSecret === undefined) {
+    throw new ToolError(
+      ErrorCode.PERMISSION_DENIED,
+      "API key hash secret is not configured",
+    );
+  }
+
   const { name, namespaces: rawNamespaces, expires_in_days } = parsed.data;
 
   // Deduplicate while preserving order
   const namespaces =
     rawNamespaces !== undefined ? [...new Set(rawNamespaces)] : undefined;
 
-  const { raw, hash, prefix } = generateApiKey();
+  const { raw, hash, prefix } = generateApiKey(config.apiKeysHashSecret);
 
   const expiresAt =
     expires_in_days !== undefined

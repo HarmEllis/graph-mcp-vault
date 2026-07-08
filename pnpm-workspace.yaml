@@ -1,3 +1,26 @@
+packages:
+  - .
+
+overrides:
+  protobufjs: ">=7.5.5"
+  tar: ">=7.5.11"
+  minimatch: ">=9.0.7"
+  picomatch: ">=4.0.4"
+  brace-expansion: ">=2.0.3"
+  uuid: ">=14.0.0"
+  postcss: ">=8.5.10"
+  fast-uri: ">=3.1.2"
+  ip-address: ">=10.1.1"
+  hono: ">=4.12.25"
+  qs: ">=6.15.2"
+
+onlyBuiltDependencies:
+  - '@biomejs/biome'
+  - cpu-features
+  - esbuild
+  - protobufjs
+  - ssh2
+
 allowBuilds:
   '@biomejs/biome': true
   cpu-features: true

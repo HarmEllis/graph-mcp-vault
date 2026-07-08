@@ -8,7 +8,7 @@
   "scripts": {
     "dev": "tsx watch src/main.ts",
     "build": "tsc",
-    "test": "vitest run",
+    "test": "vitest run --maxWorkers=1",
     "test:watch": "vitest",
     "lint": "biome check .",
     "format": "biome format --write .",
@@ -18,30 +18,10 @@
     "@hono/node-server": "^1.13.0",
     "@modelcontextprotocol/sdk": "^1.10.0",
     "dotenv": "^16.4.0",
-    "hono": "^4.12.18",
+    "hono": "^4.12.25",
     "jose": "^5.9.0",
     "neo4j-driver": "^5.28.0",
     "zod": "^3.23.0"
-  },
-  "pnpm": {
-    "overrides": {
-      "protobufjs": ">=7.5.5",
-      "tar": ">=7.5.11",
-      "minimatch": ">=9.0.7",
-      "picomatch": ">=4.0.4",
-      "brace-expansion": ">=2.0.3",
-      "uuid": ">=14.0.0",
-      "postcss": ">=8.5.10",
-      "fast-uri": ">=3.1.2",
-      "ip-address": ">=10.1.1"
-    },
-    "onlyBuiltDependencies": [
-      "@biomejs/biome",
-      "cpu-features",
-      "esbuild",
-      "protobufjs",
-      "ssh2"
-    ]
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.0",

@@ -34,6 +34,7 @@ const AUDIENCE = "graph-mcp-vault";
 const KID = "tools-test-key";
 const JWKS_URI = `${ISSUER}/.well-known/jwks.json`;
 const NEO4J_PASSWORD = "testpassword";
+const API_KEY_HASH_SECRET = "tools-test-api-key-hash-secret-32-chars";
 
 const BASE_CONFIG: Config = {
   oidcIssuer: ISSUER,
@@ -59,6 +60,7 @@ const BASE_CONFIG: Config = {
   maxVersionsLimit: 10,
   apiKeysEnabled: false,
   apiKeysMaxPerUser: 20,
+  apiKeysHashSecret: undefined,
 };
 
 let container: StartedTestContainer;
@@ -1755,7 +1757,7 @@ describe("knowledge_list_namespaces", () => {
       workSid,
     );
 
-    const { raw, hash, prefix } = generateApiKey();
+    const { raw, hash, prefix } = generateApiKey(API_KEY_HASH_SECRET);
     await neo4jClient.createApiKey({
       id: `${sub}-homelab-key`,
       userId: sub,
@@ -1766,7 +1768,11 @@ describe("knowledge_list_namespaces", () => {
       expiresAt: null,
     });
 
-    const apiKeyConfig = { ...BASE_CONFIG, apiKeysEnabled: true };
+    const apiKeyConfig: Config = {
+      ...BASE_CONFIG,
+      apiKeysEnabled: true,
+      apiKeysHashSecret: API_KEY_HASH_SECRET,
+    };
     const apiKeyApp = new Hono();
     apiKeyApp.route(
       "/",

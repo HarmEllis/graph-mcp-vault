@@ -25,6 +25,7 @@ const AUDIENCE = "graph-mcp-vault";
 const KID = "api-keys-test-key";
 const JWKS_URI = `${ISSUER}/.well-known/jwks.json`;
 const NEO4J_PASSWORD = "testpassword";
+const API_KEY_HASH_SECRET = "api-keys-test-hash-secret-32-chars";
 
 const BASE_CONFIG: Config = {
   oidcIssuer: ISSUER,
@@ -50,6 +51,7 @@ const BASE_CONFIG: Config = {
   maxVersionsLimit: 10,
   apiKeysEnabled: true,
   apiKeysMaxPerUser: 20,
+  apiKeysHashSecret: API_KEY_HASH_SECRET,
 };
 
 let container: StartedTestContainer;
@@ -344,7 +346,7 @@ describe("knowledge_create_api_key", () => {
     const sub = uniqueUser();
 
     // Create an already-expired key directly in Neo4j
-    const { hash, prefix } = generateApiKey();
+    const { hash, prefix } = generateApiKey(API_KEY_HASH_SECRET);
     await neo4jClient.createApiKey({
       id: randomUUID(),
       userId: sub,
@@ -725,7 +727,7 @@ describe("API key middleware", () => {
     const sub = uniqueUser();
 
     // Create a key directly in Neo4j with a past expiry
-    const { raw, hash, prefix } = generateApiKey();
+    const { raw, hash, prefix } = generateApiKey(API_KEY_HASH_SECRET);
     await neo4jClient.createApiKey({
       id: randomUUID(),
       userId: sub,
@@ -1259,8 +1261,10 @@ describe("createApiKeyWithLimit serialization", () => {
   // write conflicts and retry the losing transaction with an up-to-date count.
   it("allows only one creation when two concurrent calls race with maxPerUser: 1", async () => {
     const userId = uniqueUser();
-    const { hash: hash1, prefix: prefix1 } = generateApiKey();
-    const { hash: hash2, prefix: prefix2 } = generateApiKey();
+    const { hash: hash1, prefix: prefix1 } =
+      generateApiKey(API_KEY_HASH_SECRET);
+    const { hash: hash2, prefix: prefix2 } =
+      generateApiKey(API_KEY_HASH_SECRET);
 
     const [result1, result2] = await Promise.all([
       neo4jClient.createApiKeyWithLimit({

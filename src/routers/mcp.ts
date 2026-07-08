@@ -277,7 +277,14 @@ export function createMcpRouter(
         if (!config.apiKeysEnabled) {
           throw new Error("API keys are not enabled");
         }
-        const result = await validateApiKey(bearerToken, neo4jClient);
+        if (config.apiKeysHashSecret === undefined) {
+          throw new Error("API key hash secret is not configured");
+        }
+        const result = await validateApiKey(
+          bearerToken,
+          neo4jClient,
+          config.apiKeysHashSecret,
+        );
         userId = result.userId;
         name = null;
         email = null;

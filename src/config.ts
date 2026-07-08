@@ -1,40 +1,58 @@
 import { z } from "zod";
 import { NAMESPACE_ERROR_MESSAGE, NAMESPACE_REGEX } from "./namespace.js";
 
-const envSchema = z.object({
-  OIDC_ISSUER: z.string().url(),
-  OIDC_AUDIENCE: z.string().min(1),
-  OIDC_DISCOVERY_URL: z.string().url().optional(),
-  PUBLIC_URL: z.string().url().optional(),
-  JWKS_CACHE_TTL: z.coerce.number().int().positive().default(3600),
-  JWKS_FORCE_REFRESH_MIN_INTERVAL_SECONDS: z.coerce
-    .number()
-    .int()
-    .nonnegative()
-    .default(30),
-  JWKS_FETCH_TIMEOUT_MS: z.coerce.number().int().positive().default(5000),
-  JWKS_ALLOW_STALE_ON_ERROR: z.enum(["true", "false"]).default("false"),
-  MAX_TOKEN_LIFETIME_SECONDS: z.coerce.number().int().positive().default(3600),
-  MAX_REQUEST_BODY_BYTES: z.coerce.number().int().positive().default(262144),
-  METADATA_CACHE_TTL: z.coerce.number().int().positive().default(3600),
-  NEO4J_URI: z.string().min(1),
-  NEO4J_USER: z.string().min(1),
-  NEO4J_PASSWORD: z.string().min(1),
-  HOST: z.string().default("0.0.0.0"),
-  PORT: z.coerce.number().int().positive().default(8000),
-  DEFAULT_NAMESPACE: z
-    .string()
-    .regex(NAMESPACE_REGEX, NAMESPACE_ERROR_MESSAGE)
-    .default("default"),
-  LOG_LEVEL: z
-    .enum(["trace", "debug", "info", "warn", "error"])
-    .default("info"),
-  ALLOWED_ORIGINS: z.string().default(""),
-  SCOPES_ALLOWLIST: z.string().optional(),
-  MAX_VERSIONS_LIMIT: z.coerce.number().int().min(0).default(10),
-  API_KEYS_ENABLED: z.enum(["true", "false"]).default("false"),
-  API_KEYS_MAX_PER_USER: z.coerce.number().int().min(1).default(20),
-});
+const envSchema = z
+  .object({
+    OIDC_ISSUER: z.string().url(),
+    OIDC_AUDIENCE: z.string().min(1),
+    OIDC_DISCOVERY_URL: z.string().url().optional(),
+    PUBLIC_URL: z.string().url().optional(),
+    JWKS_CACHE_TTL: z.coerce.number().int().positive().default(3600),
+    JWKS_FORCE_REFRESH_MIN_INTERVAL_SECONDS: z.coerce
+      .number()
+      .int()
+      .nonnegative()
+      .default(30),
+    JWKS_FETCH_TIMEOUT_MS: z.coerce.number().int().positive().default(5000),
+    JWKS_ALLOW_STALE_ON_ERROR: z.enum(["true", "false"]).default("false"),
+    MAX_TOKEN_LIFETIME_SECONDS: z.coerce
+      .number()
+      .int()
+      .positive()
+      .default(3600),
+    MAX_REQUEST_BODY_BYTES: z.coerce.number().int().positive().default(262144),
+    METADATA_CACHE_TTL: z.coerce.number().int().positive().default(3600),
+    NEO4J_URI: z.string().min(1),
+    NEO4J_USER: z.string().min(1),
+    NEO4J_PASSWORD: z.string().min(1),
+    HOST: z.string().default("0.0.0.0"),
+    PORT: z.coerce.number().int().positive().default(8000),
+    DEFAULT_NAMESPACE: z
+      .string()
+      .regex(NAMESPACE_REGEX, NAMESPACE_ERROR_MESSAGE)
+      .default("default"),
+    LOG_LEVEL: z
+      .enum(["trace", "debug", "info", "warn", "error"])
+      .default("info"),
+    ALLOWED_ORIGINS: z.string().default(""),
+    SCOPES_ALLOWLIST: z.string().optional(),
+    MAX_VERSIONS_LIMIT: z.coerce.number().int().min(0).default(10),
+    API_KEYS_ENABLED: z.enum(["true", "false"]).default("false"),
+    API_KEYS_MAX_PER_USER: z.coerce.number().int().min(1).default(20),
+    API_KEYS_HASH_SECRET: z.string().min(32).optional(),
+  })
+  .superRefine((env, ctx) => {
+    if (
+      env.API_KEYS_ENABLED === "true" &&
+      env.API_KEYS_HASH_SECRET === undefined
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["API_KEYS_HASH_SECRET"],
+        message: "API_KEYS_HASH_SECRET is required when API_KEYS_ENABLED=true",
+      });
+    }
+  });
 
 export interface Config {
   oidcIssuer: string;
@@ -62,6 +80,7 @@ export interface Config {
   maxVersionsLimit: number;
   apiKeysEnabled: boolean;
   apiKeysMaxPerUser: number;
+  apiKeysHashSecret: string | undefined;
 }
 
 export function parseConfig(env: Record<string, string | undefined>): Config {
@@ -97,5 +116,6 @@ export function parseConfig(env: Record<string, string | undefined>): Config {
     maxVersionsLimit: parsed.MAX_VERSIONS_LIMIT,
     apiKeysEnabled: parsed.API_KEYS_ENABLED === "true",
     apiKeysMaxPerUser: parsed.API_KEYS_MAX_PER_USER,
+    apiKeysHashSecret: parsed.API_KEYS_HASH_SECRET,
   };
 }
