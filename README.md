@@ -15,6 +15,7 @@ MCP transport: **Streamable HTTP 2025-03-26** — JSON-only responses, no SSE.
 - [Production deployment](#production-deployment)
 - [Environment variables](#environment-variables)
 - [Authentication](#authentication)
+- [API key authentication](#api-key-authentication)
 - [Namespaces](#namespaces)
 - [MCP tools](#mcp-tools)
 - [Permissions](#permissions)
@@ -114,6 +115,9 @@ Copy `.env.example` to `.env` before running.
 | `LOG_LEVEL` | no | `info` | Log verbosity (`trace`, `debug`, `info`, `warn`, `error`) |
 | `ALLOWED_ORIGINS` | no | `""` | Comma-separated CORS origins; `*` for any; empty = no cross-origin requests |
 | `SCOPES_ALLOWLIST` | no | provider scopes (fallback `openid`) | Comma-separated scopes exposed in OAuth metadata (recommended: `openid,profile,email`) |
+| `API_KEYS_ENABLED` | no | `false` | Enable API key authentication for non-OIDC clients |
+| `API_KEYS_MAX_PER_USER` | no | `20` | Maximum active (non-revoked) API keys per user |
+| `API_KEYS_HASH_SECRET` | when `API_KEYS_ENABLED=true` | — | Secret used to hash API keys (min 32 chars); changing it invalidates all existing keys |
 
 ---
 
@@ -134,6 +138,48 @@ The server:
 5. Uses the `sub` claim as the persistent user identity in Neo4j.
 
 An unknown `kid` triggers a one-time JWKS cache refresh before failing. Repeated unknown-`kid` requests are throttled via `JWKS_FORCE_REFRESH_MIN_INTERVAL_SECONDS` to prevent JWKS endpoint flooding.
+
+---
+
+## API key authentication
+
+For automation, CI pipelines, or MCP clients that do not support OAuth2 browser flows, the server supports API key authentication as an alternative to OIDC JWTs.
+
+### Enabling API keys
+
+Set the following environment variables:
+
+```env
+API_KEYS_ENABLED=true
+API_KEYS_HASH_SECRET=your-long-random-secret-at-least-32-chars
+```
+
+### Creating a key
+
+API keys are created through the MCP tool `knowledge_create_api_key` during an **OIDC-authenticated session**. This means a user must first authenticate via OAuth2/OIDC, then use the tool to mint an API key for subsequent headless access.
+
+### Using an API key
+
+Send the key as a Bearer token in the `Authorization` header:
+
+```
+Authorization: Bearer gmv_<hex>
+```
+
+The server detects API keys by their `gmv_` prefix and routes them to API key validation instead of JWT verification.
+
+### Key properties
+
+- **Prefix**: all keys start with `gmv_` followed by 64 hex characters.
+- **Namespace restriction**: keys can optionally be scoped to specific namespaces. A namespace-restricted key cannot access namespaces outside its allow-list and automatically locks the session namespace.
+- **Expiry**: keys can have an optional expiry (1–365 days). Keys without an expiry never expire.
+- **Per-user limit**: each user can hold at most `API_KEYS_MAX_PER_USER` active (non-revoked) keys (default: 20).
+- **Hashing**: keys are stored as scrypt digests; the raw key is returned exactly once at creation and cannot be recovered.
+- **Privilege escalation prevention**: a namespace-restricted API key cannot mint a new key with broader scope than its own allow-list.
+
+### Management tools
+
+See [API key tools](#api-key-tools) below for the full tool reference.
 
 ---
 
@@ -170,8 +216,8 @@ passing `namespace: "other"` overrides it for that single call.
 
 ## MCP tools
 
-The server exposes thirteen knowledge tools. LLMs should **search before creating** to avoid
-duplicate entries.
+The server exposes up to 27 MCP tools (24 always-on, plus 3 API key management tools when
+`API_KEYS_ENABLED=true`). LLMs should **search before creating** to avoid duplicate entries.
 
 ### Knowledge entry tools
 
@@ -517,6 +563,71 @@ Returns `{ "namespaces": [{ "namespace", "owned_count", "shared_count" }] }`.
 
 ---
 
+### API key tools
+
+These tools are only available when `API_KEYS_ENABLED=true`.
+
+#### `knowledge_create_api_key`
+
+Create a new API key for the authenticated user. The raw key is returned exactly once
+and cannot be recovered. Requires an OIDC-authenticated session (or an existing API key
+with sufficient scope).
+
+```json
+{
+  "name": "ci-deploy",
+  "namespaces": ["production", "staging"],
+  "expires_in_days": 90
+}
+```
+
+| Parameter | Required | Description |
+|---|---|---|
+| `name` | yes | Human-readable label (1–100 chars) |
+| `namespaces` | no | Namespace allow-list; omit for unrestricted access |
+| `expires_in_days` | no | Expiry window in days (1–365); omit for no expiry |
+
+Returns:
+```json
+{
+  "id": "<uuid>",
+  "name": "ci-deploy",
+  "key": "gmv_<hex>",
+  "key_prefix": "gmv_abcdef01",
+  "namespaces": ["production", "staging"],
+  "expires_at": "2026-10-06T12:00:00.000Z"
+}
+```
+
+> **⚠️ Save the `key` value immediately** — it is not stored and cannot be retrieved later.
+
+---
+
+#### `knowledge_list_api_keys`
+
+List all API keys owned by the authenticated user. Never returns the raw key or key hash.
+
+```json
+{}
+```
+
+Returns `{ "api_keys": [{ "id", "name", "key_prefix", "namespaces", "expires_at", "last_used_at", "created_at" }] }`.
+
+---
+
+#### `knowledge_revoke_api_key`
+
+Revoke an API key owned by the authenticated user. Revocation is immediate and
+irreversible.
+
+```json
+{ "key_id": "<uuid>" }
+```
+
+Returns `{ "revoked": true }`. Returns `RESOURCE_NOT_FOUND` if the key does not exist.
+
+---
+
 ## Permissions
 
 | Operation | Minimum role |
@@ -529,6 +640,7 @@ Returns `{ "namespaces": [{ "namespace", "owned_count", "shared_count" }] }`.
 | Create relation | viewer (on both entries) |
 | List relations | viewer (on anchor entry) |
 | Delete relation | owner (on source entry) |
+| Create / list / revoke API keys | authenticated user (own keys only) |
 
 Roles are stored as `HAS_ACCESS` relationships in Neo4j. The entry creator
 automatically becomes the owner via an `OWNS` relationship.
@@ -584,9 +696,37 @@ Send an array of requests/notifications:
 
 ## Client setup
 
-### Claude Code
+### Claude Code (OAuth — recommended)
 
-Add to `~/.claude/mcp.json` (one entry per namespace):
+Claude Code supports MCP OAuth auto-discovery. Add to `~/.claude/mcp.json` (one entry per namespace):
+
+```json
+{
+  "mcpServers": {
+    "vault-homelab": {
+      "type": "http",
+      "url": "https://graph-mcp-vault.example.com/mcp/homelab"
+    }
+  }
+}
+```
+
+On first use, Claude Code probes `/.well-known/oauth-protected-resource`, discovers the
+authorization server, and triggers a browser-based PKCE login flow. No manual `auth` block
+is needed.
+
+Or via CLI:
+
+```bash
+claude mcp add vault-homelab \
+  --type http \
+  --url https://graph-mcp-vault.example.com/mcp/homelab
+```
+
+### Claude Code (API key)
+
+If you have an API key (see [API key authentication](#api-key-authentication)), you can
+use it as a static Bearer token instead of OAuth:
 
 ```json
 {
@@ -594,27 +734,15 @@ Add to `~/.claude/mcp.json` (one entry per namespace):
     "vault-homelab": {
       "type": "http",
       "url": "https://graph-mcp-vault.example.com/mcp/homelab",
-      "auth": {
-        "type": "oauth2",
-        "clientId": "graph-mcp-vault",
-        "authorizationUrl": "https://idp.example.com/authorize",
-        "tokenUrl": "https://idp.example.com/token",
-        "scopes": ["openid", "profile"]
+      "headers": {
+        "Authorization": "Bearer gmv_<your-api-key>"
       }
     }
   }
 }
 ```
 
-Or via CLI:
-
-```bash
-claude mcp add vault-homelab \
-  --type http \
-  --url https://graph-mcp-vault.example.com/mcp/homelab \
-  --oauth2-client-id graph-mcp-vault \
-  --oauth2-discovery https://graph-mcp-vault.example.com/.well-known/oauth-authorization-server
-```
+This is ideal for CI, automation, or environments without a browser.
 
 ### Open WebUI
 
