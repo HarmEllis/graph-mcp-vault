@@ -26,6 +26,7 @@ import {
   type RegisteredTool,
   type ToolContext,
   ToolError,
+  assertEntryNamespaceInScope,
   assertNamespaceInScope,
 } from "./registry.js";
 
@@ -58,7 +59,7 @@ async function requirePermission(
   if (!resource)
     throw new ToolError(ErrorCode.RESOURCE_NOT_FOUND, "Resource not found");
 
-  assertNamespaceInScope(ctx, resource.namespace);
+  assertEntryNamespaceInScope(ctx, resource.namespace);
 
   const role = await neo4jClient.getEffectiveRole(ctx.userId, entryId);
   if (role === null || !hasPermission(role, permission)) {
@@ -82,7 +83,7 @@ async function assertEntryInScope(
   const resource = await neo4jClient.getResource(entryId);
   if (!resource)
     throw new ToolError(ErrorCode.RESOURCE_NOT_FOUND, "Resource not found");
-  assertNamespaceInScope(ctx, resource.namespace);
+  assertEntryNamespaceInScope(ctx, resource.namespace);
 }
 
 function throwMappedClientError(error: unknown): never {
@@ -214,7 +215,7 @@ async function handleGet(
   if (!resource)
     throw new ToolError(ErrorCode.RESOURCE_NOT_FOUND, "Resource not found");
 
-  assertNamespaceInScope(ctx, resource.namespace);
+  assertEntryNamespaceInScope(ctx, resource.namespace);
 
   const role = await neo4jClient.getEffectiveRole(ctx.userId, entry_id);
   if (role === null)

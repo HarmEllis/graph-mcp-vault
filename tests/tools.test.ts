@@ -1632,6 +1632,44 @@ describe("knowledge_create_relation / knowledge_list_relations / knowledge_delet
     ).toBe(0);
   });
 
+  it("never names the entry's namespace when refusing an out-of-scope entry", async () => {
+    const sub = uniqueUser("rel-scope-leak");
+    const hiddenNs = "scope-leak-secret-ns";
+    const sidHidden = await openSession(sub, hiddenNs);
+    const hiddenId = await createEntry(sub, sidHidden, { title: "Hidden" });
+
+    const sidLocked = await openSession(
+      sub,
+      "scope-leak-visible-ns",
+      "?lock_namespace=true",
+    );
+
+    // Every surface that resolves an entry by ID before checking the scope.
+    for (const [tool, args] of [
+      ["knowledge_get_entry", { entry_id: hiddenId }],
+      ["knowledge_update_entry", { entry_id: hiddenId, title: "Renamed" }],
+      ["knowledge_delete_entry", { entry_id: hiddenId }],
+      ["knowledge_list_relations", { entry_id: hiddenId, direction: "both" }],
+      ["knowledge_expand_context", { entry_id: hiddenId }],
+      ["knowledge_impact_analysis", { entry_id: hiddenId }],
+    ] as const) {
+      const { body } = await callTool(tool, args, sub, sidLocked);
+      const error = parseToolError(body);
+      expect(error.code).toBe(ErrorCode.PERMISSION_DENIED);
+      // Holding only an entry ID must not reveal which namespace it lives in.
+      expect(error.message).not.toContain(hiddenNs);
+    }
+
+    // The entry survived the refused update/delete.
+    const { body: stillThere } = await callTool(
+      "knowledge_get_entry",
+      { entry_id: hiddenId },
+      sub,
+      sidHidden,
+    );
+    expect(parseToolSuccess(stillThere).title).toBe("Hidden");
+  });
+
   it("filters list results where caller cannot read counterpart entry", async () => {
     const owner = uniqueUser("rel-filter-owner");
     const viewer = uniqueUser("rel-filter-viewer");

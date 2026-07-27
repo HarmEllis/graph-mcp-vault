@@ -185,8 +185,15 @@ See [API key tools](#api-key-tools) below for the full tool reference.
 
 ## Namespaces
 
-Every knowledge entry belongs to exactly one namespace. Namespaces provide multi-tenant
-data isolation — a session in namespace `work` cannot see entries in `homelab`.
+Every knowledge entry belongs to exactly one namespace, which organises entries into
+separate workspaces.
+
+A namespace is **not** an isolation boundary by itself: the session namespace is only the
+default used by calls that omit one. By default a session may still target another
+namespace explicitly, search across all of them, and traverse relations that cross the
+boundary. What a session can actually reach is its [namespace scope](#namespace-scope) —
+use `?lock_namespace=true` or a single-namespace API key allow-list to confine a client to
+one namespace.
 
 ### How a session's namespace is resolved (first match wins)
 

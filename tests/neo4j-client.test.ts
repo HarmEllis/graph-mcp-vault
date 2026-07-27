@@ -2894,6 +2894,41 @@ describe("Neo4jClient.getRelationSummary", () => {
 
     expect(summary.outbound).toBe(1); // only accessible, not hidden
   });
+
+  it("returns zeros when the caller cannot read the anchor itself", async () => {
+    const owner = "user-relsummary-anchor-owner";
+    const querier = "user-relsummary-anchor-querier";
+    const ns = "relsummary-anchor-ns";
+    const hub = await client.createResource({
+      userId: owner,
+      namespace: ns,
+      entry_type: "note",
+      title: "Hub",
+      content: "",
+    });
+    const counterpart = await client.createResource({
+      userId: owner,
+      namespace: ns,
+      entry_type: "note",
+      title: "Counterpart",
+      content: "",
+    });
+    await client.createEntryRelation(
+      owner,
+      hub.id,
+      counterpart.id,
+      "CONNECTS_TO",
+      null,
+    );
+
+    // querier can read the counterpart but was never granted the anchor.
+    await client.shareResource(counterpart.id, querier, "viewer");
+
+    const summary = await client.getRelationSummary(hub.id, querier, null);
+
+    expect(summary.outbound).toBe(0);
+    expect(summary.inbound).toBe(0);
+  });
 });
 
 // ── impactAnalysis ────────────────────────────────────────────────────────────
@@ -3353,9 +3388,11 @@ describe("Neo4jClient cross-namespace traversal and namespace scope", () => {
       inbound: 1,
     });
 
-    // The inbound counterpart lives in NS_A, so it drops out instead.
+    // The anchor itself lives in NS_A. A scope that excludes it counts nothing
+    // at all — the anchor is subject to the scope predicate like any other node,
+    // so an out-of-scope entry cannot report its relations.
     expect(await client.getRelationSummary(anchor.id, userId, [NS_B])).toEqual({
-      outbound: 1,
+      outbound: 0,
       inbound: 0,
     });
   });
