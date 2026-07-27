@@ -5,6 +5,19 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Security
+
+- Override `fast-uri` to `>=3.1.4` (resolves to 4.1.1) to fix CVE-2026-13676 (HIGH): security policy
+  bypass via improper Unicode hostname canonicalization, and CVE-2026-16221 (HIGH). Pulled in
+  transitively through `@modelcontextprotocol/sdk` → `ajv`.
+- Bump `@hono/node-server` to `^2.0.12` and override it to `>=2.0.5` to fix GHSA-frvp-7c67-39w9
+  (MEDIUM): path traversal in `serve-static` on Windows via encoded segments. The override is
+  needed because `@modelcontextprotocol/sdk` pins `^1.19.9` and pulled the vulnerable copy back in.
+  This project only uses `serve`, so the advisory was not exploitable here, but the CI security gate
+  fails on any MEDIUM or higher finding.
+
 ## [0.0.13] - 2026-07-08
 
 Adds API key authentication for non-OIDC clients and hardens key storage, dependency policy, CI, and container builds.
