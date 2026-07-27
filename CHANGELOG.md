@@ -7,8 +7,56 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+Relations can now connect entries in different namespaces. What a session is allowed to see is
+governed by an explicit **namespace scope** derived from the `?lock_namespace` flag and an API key's
+namespace allow-list, enforced inside the Neo4j queries rather than as a side effect of the old
+same-namespace rule. See [D-033](docs/DECISIONS.md) for the full rationale.
+
+### Added
+
+- Relations may be created between entries in different namespaces.
+- Relation, traversal and path results now include each entry's `namespace`.
+- Namespace-restricted API keys can work across their whole allow-list instead of being pinned to
+  the single namespace chosen at `initialize`.
+
+### Changed
+
+- **Breaking** — `knowledge_expand_context`, `knowledge_find_paths`,
+  `knowledge_explain_relationship` and `knowledge_impact_analysis` now traverse across namespace
+  boundaries by default, so unscoped sessions receive more results than before.
+- **Breaking** — `knowledge_create_relation` no longer fails with `INVALID_PARAMS` when the two
+  entries are in different namespaces, and `knowledge_update_entry` can move an entry that has
+  relations. Both error paths are gone.
+- **Breaking** — relation counts on `knowledge_get_entry`, `knowledge_list_namespaces` and API-key
+  administration are now scope-sensitive; under `?lock_namespace=true` they narrow to the session
+  namespace.
+- Result objects gained an additive `namespace` field, which strict JSON decoders may need to allow.
+- Clients that relied on namespace isolation should open their session with `?lock_namespace=true`,
+  which reproduces the previous behaviour.
+- No graph migration and no schema-version bump: `SCHEMA_VERSION` stays 8 and existing relations
+  remain valid.
+
+### Fixed
+
+- `pnpm build` now copies `src/server-instructions.md` into `dist/` via a `postbuild` step, so
+  `pnpm start` works outside Docker. Previously only the Dockerfile copied it and a local start
+  crashed with `ENOENT`.
+
 ### Security
 
+- Namespace confinement on the relation, traversal, search and listing queries is now enforced as a
+  `$namespaceScope` predicate inside the Cypher itself, instead of relying on tool-layer preflight
+  checks. The single-entry mutation, version and sharing methods still rely on preflight — see the
+  "Known gap" note in D-033.
+- Traversal endpoints are resolved with scope and read access in a single query, so
+  `knowledge_find_paths` and `knowledge_explain_relationship` can no longer return an out-of-scope
+  entry's title, type or namespace.
+- Relation create and delete authorize inside the write transaction, closing the window between the
+  permission check and the write.
+- A namespace-locked session can no longer mint, list or revoke API keys for namespaces it cannot
+  itself reach.
+- `knowledge_explain_relationship` now applies read-access and scope checks to its direct-relation
+  query, which previously had neither.
 - Override `fast-uri` to `>=3.1.4` (resolves to 4.1.1) to fix CVE-2026-13676 (HIGH): security policy
   bypass via improper Unicode hostname canonicalization, and CVE-2026-16221 (HIGH). Pulled in
   transitively through `@modelcontextprotocol/sdk` → `ajv`.

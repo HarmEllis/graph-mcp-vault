@@ -11,13 +11,17 @@ import { ErrorCode, makeJsonRpcError } from "../errors.js";
 import { type Logger, noopLogger } from "../logger.js";
 import { NAMESPACE_ERROR_MESSAGE, NAMESPACE_REGEX } from "../namespace.js";
 import type { Neo4jClient } from "../neo4j-client.js";
-import type { Session, SessionStore } from "../session.js";
 import {
-  NAMESPACE_INJECT_TOOLS,
+  type Session,
+  type SessionStore,
+  sessionNamespaceScope,
+} from "../session.js";
+import {
   type RegisteredTool,
   type ToolContext,
   ToolError,
   WRITE_TOOLS,
+  isNamespaceInScope,
 } from "../tools/registry.js";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -604,8 +608,7 @@ export function createMcpRouter(
     const ctx: ToolContext = {
       userId: session.userId,
       namespace: session.namespace,
-      lockedNamespace: session.lockedNamespace,
-      allowedNamespaces: session.allowedNamespaces,
+      namespaceScope: sessionNamespaceScope(session),
       authMethod: session.authMethod,
       ...(session.apiKeyId !== undefined ? { apiKeyId: session.apiKeyId } : {}),
     };
@@ -680,7 +683,7 @@ export function createMcpRouter(
       };
     }
 
-    let args = (params?.arguments ?? {}) as Record<string, unknown>;
+    const args = (params?.arguments ?? {}) as Record<string, unknown>;
     // Capture raw client-supplied namespace for logging before any injection.
     const requestNamespace =
       typeof args.namespace === "string" ? args.namespace : null;
@@ -697,29 +700,22 @@ export function createMcpRouter(
       };
     }
 
-    if (session.lockedNamespace) {
-      if (
-        typeof args.namespace === "string" &&
-        args.namespace !== session.namespace
-      ) {
-        return {
-          response: makeJsonRpcError(
-            id,
-            ErrorCode.PERMISSION_DENIED,
-            `Session namespace is locked to: ${session.namespace}`,
-          ),
-          sessionId: null,
-          httpStatus: 200,
-        };
-      }
-      // For search tools that default to all namespaces when namespace is
-      // omitted, inject the locked namespace to enforce the scope constraint.
-      if (
-        args.namespace === undefined &&
-        NAMESPACE_INJECT_TOOLS.has(toolName)
-      ) {
-        args = { ...args, namespace: session.namespace };
-      }
+    // Early rejection of an out-of-scope namespace argument. Defense in depth:
+    // the authorization boundary is the $namespaceScope predicate in Cypher, and
+    // tools that omit `namespace` are confined there rather than here.
+    if (
+      typeof args.namespace === "string" &&
+      !isNamespaceInScope(ctx.namespaceScope, args.namespace)
+    ) {
+      return {
+        response: makeJsonRpcError(
+          id,
+          ErrorCode.PERMISSION_DENIED,
+          `Namespace is outside the session scope: ${args.namespace}`,
+        ),
+        sessionId: null,
+        httpStatus: 200,
+      };
     }
     const startMs = Date.now();
 
@@ -884,14 +880,8 @@ export function createMcpRouter(
       };
     }
 
-    const effectiveLockedNamespace =
-      allowedNamespaces !== null ? true : queryFlags.lockedNamespace;
-
     const sessionId = sessionStore.create(userId, namespace, {
       ...queryFlags,
-      // Namespace-restricted API keys lock the session so tool calls cannot
-      // cross into other namespaces via an explicit namespace argument.
-      lockedNamespace: effectiveLockedNamespace,
       allowedNamespaces,
       authMethod,
       ...(apiKeyId !== undefined ? { apiKeyId } : {}),
@@ -899,13 +889,15 @@ export function createMcpRouter(
 
     await neo4jClient.upsertUserProfile(userId, name, email);
 
+    const session = sessionStore.get(sessionId);
     logger.info("session_created", {
       requestId,
       userId,
       namespace,
       sessionId,
       readonly: queryFlags.readonly,
-      lockedNamespace: effectiveLockedNamespace,
+      lockedNamespace: queryFlags.lockedNamespace,
+      namespaceScope: session === null ? null : sessionNamespaceScope(session),
     });
 
     return {

@@ -9,6 +9,7 @@ import {
   type RegisteredTool,
   type ToolContext,
   ToolError,
+  assertNamespaceInScope,
 } from "./registry.js";
 
 // ── Permission helpers ────────────────────────────────────────────────────────
@@ -27,12 +28,7 @@ async function requireOwner(
   if (!resource)
     throw new ToolError(ErrorCode.RESOURCE_NOT_FOUND, "Resource not found");
 
-  if (ctx.lockedNamespace && resource.namespace !== ctx.namespace) {
-    throw new ToolError(
-      ErrorCode.PERMISSION_DENIED,
-      `Entry namespace does not match locked namespace: ${ctx.namespace}`,
-    );
-  }
+  assertNamespaceInScope(ctx, resource.namespace);
 
   const role = await neo4jClient.getEffectiveRole(ctx.userId, entryId);
   if (role !== "owner") {
@@ -53,12 +49,7 @@ async function requireRead(
   if (!resource)
     throw new ToolError(ErrorCode.RESOURCE_NOT_FOUND, "Resource not found");
 
-  if (ctx.lockedNamespace && resource.namespace !== ctx.namespace) {
-    throw new ToolError(
-      ErrorCode.PERMISSION_DENIED,
-      `Entry namespace does not match locked namespace: ${ctx.namespace}`,
-    );
-  }
+  assertNamespaceInScope(ctx, resource.namespace);
 
   const role = await neo4jClient.getEffectiveRole(ctx.userId, entryId);
   if (role === null)
@@ -122,12 +113,7 @@ async function handleRevoke(
   if (!resource)
     throw new ToolError(ErrorCode.RESOURCE_NOT_FOUND, "Resource not found");
 
-  if (ctx.lockedNamespace && resource.namespace !== ctx.namespace) {
-    throw new ToolError(
-      ErrorCode.PERMISSION_DENIED,
-      `Entry namespace does not match locked namespace: ${ctx.namespace}`,
-    );
-  }
+  assertNamespaceInScope(ctx, resource.namespace);
 
   // Prevent revoking own access
   if (target_user_id === ctx.userId) {

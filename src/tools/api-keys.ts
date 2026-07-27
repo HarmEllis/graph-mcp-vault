@@ -65,13 +65,14 @@ async function handleCreateApiKey(
     namespaces !== undefined && namespaces.length > 0 ? namespaces : null;
 
   // Prevent privilege escalation: a namespace-restricted caller cannot mint a
-  // key with broader scope than its own allow-list.
-  const callerScope =
-    ctx.allowedNamespaces != null ? ctx.allowedNamespaces : null;
+  // key with broader scope than its own effective scope. Using the effective
+  // scope (not the raw allow-list) means a hard-locked session cannot mint a
+  // key for a namespace it may not itself reach.
+  const callerScope = ctx.namespaceScope;
   if (callerScope !== null) {
     if (namespaceList === null) {
       // Caller omitted namespaces (unrestricted) — cap to caller's own scope
-      namespaceList = callerScope;
+      namespaceList = [...callerScope];
     } else {
       const outsideScope = namespaceList.filter(
         (ns) => !callerScope.includes(ns),
@@ -139,11 +140,11 @@ async function handleListApiKeys(
 
   const keys = await neo4jClient.listApiKeys(ctx.userId);
 
-  // Namespace-restricted API-key callers may only see keys whose namespace
-  // allow-list is entirely within their own scope. Unrestricted keys (null)
-  // and keys for other namespaces are invisible to them.
-  if (ctx.authMethod === "api_key" && ctx.allowedNamespaces != null) {
-    const callerScope = ctx.allowedNamespaces;
+  // Namespace-scoped callers may only see keys whose namespace allow-list is
+  // entirely within their own effective scope. Unrestricted keys (null) and
+  // keys for other namespaces are invisible to them.
+  const callerScope = ctx.namespaceScope;
+  if (callerScope !== null) {
     const filtered = keys.filter((k) =>
       k.namespaces?.every((ns) => callerScope.includes(ns)),
     );
@@ -180,10 +181,10 @@ async function handleRevokeApiKey(
 
   const { key_id } = parsed.data;
 
-  // Namespace-restricted API-key callers may only revoke keys whose namespace
-  // allow-list is entirely within their own scope.
-  if (ctx.authMethod === "api_key" && ctx.allowedNamespaces != null) {
-    const callerScope = ctx.allowedNamespaces;
+  // Namespace-scoped callers may only revoke keys whose namespace allow-list is
+  // entirely within their own effective scope.
+  const callerScope = ctx.namespaceScope;
+  if (callerScope !== null) {
     const allKeys = await neo4jClient.listApiKeys(ctx.userId);
     const targetKey = allKeys.find((k) => k.id === key_id);
     if (

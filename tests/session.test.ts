@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { SessionStore } from "../src/session.js";
+import {
+  type Session,
+  SessionStore,
+  sessionNamespaceScope,
+} from "../src/session.js";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -249,5 +253,83 @@ describe("SessionStore cleanup timer", () => {
 
     // All sessions were expired at cleanup time
     expect(store.size()).toBe(0);
+  });
+});
+
+// ── sessionNamespaceScope ─────────────────────────────────────────────────────
+
+describe("sessionNamespaceScope", () => {
+  function sessionWith(flags: {
+    lockedNamespace?: boolean;
+    allowedNamespaces?: string[] | null;
+    authMethod?: "jwt" | "api_key";
+  }): Session {
+    const store = freshStore();
+    const id = store.create("user-a", "homelab", flags);
+    const session = store.get(id);
+    if (!session) throw new Error("session not created");
+    return session;
+  }
+
+  const cases: Array<{
+    name: string;
+    flags: {
+      lockedNamespace?: boolean;
+      allowedNamespaces?: string[] | null;
+      authMethod?: "jwt" | "api_key";
+    };
+    expected: readonly string[] | null;
+  }> = [
+    { name: "unlocked JWT session is unrestricted", flags: {}, expected: null },
+    {
+      name: "locked JWT session is confined to its own namespace",
+      flags: { lockedNamespace: true },
+      expected: ["homelab"],
+    },
+    {
+      name: "API key without an allow-list is unrestricted",
+      flags: { authMethod: "api_key", allowedNamespaces: null },
+      expected: null,
+    },
+    {
+      name: "API key allow-list becomes the scope",
+      flags: { authMethod: "api_key", allowedNamespaces: ["homelab", "work"] },
+      expected: ["homelab", "work"],
+    },
+    {
+      name: "hard lock wins over a multi-namespace allow-list",
+      flags: {
+        authMethod: "api_key",
+        allowedNamespaces: ["homelab", "work"],
+        lockedNamespace: true,
+      },
+      expected: ["homelab"],
+    },
+    {
+      name: "allow-list is deduplicated",
+      flags: {
+        authMethod: "api_key",
+        allowedNamespaces: ["work", "homelab", "work"],
+      },
+      expected: ["work", "homelab"],
+    },
+  ];
+
+  for (const { name, flags, expected } of cases) {
+    it(name, () => {
+      expect(sessionNamespaceScope(sessionWith(flags))).toEqual(expected);
+    });
+  }
+
+  it("returns a copy so callers cannot mutate the session allow-list", () => {
+    const session = sessionWith({
+      authMethod: "api_key",
+      allowedNamespaces: ["homelab", "work"],
+    });
+    const scope = sessionNamespaceScope(session);
+    (scope as string[]).push("secret");
+
+    expect(session.allowedNamespaces).toEqual(["homelab", "work"]);
+    expect(sessionNamespaceScope(session)).toEqual(["homelab", "work"]);
   });
 });

@@ -149,9 +149,10 @@ async function makeToken(sub: string): Promise<string> {
 async function openSession(
   sub: string,
   namespace = "default",
+  query = "",
 ): Promise<string> {
   const token = await makeToken(sub);
-  const res = await app.request("/mcp", {
+  const res = await app.request(`/mcp${query}`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -1517,7 +1518,7 @@ describe("knowledge_create_relation / knowledge_list_relations / knowledge_delet
     expect(parseToolError(body).code).toBe(ErrorCode.INVALID_PARAMS);
   });
 
-  it("returns INVALID_PARAMS when entries are in different namespaces", async () => {
+  it("creates a relation between entries in different namespaces", async () => {
     const sub = uniqueUser("rel-cross-ns");
     const sidDefault = await openSession(sub, "rel-default");
     const sidOther = await openSession(sub, "rel-other");
@@ -1530,9 +1531,105 @@ describe("knowledge_create_relation / knowledge_list_relations / knowledge_delet
       sub,
       sidDefault,
     );
-    const err = parseToolError(body);
-    expect(err.code).toBe(ErrorCode.INVALID_PARAMS);
-    expect(err.message).toBe("Entries must belong to the same namespace");
+    expect(parseToolSuccess(body)).toEqual({});
+
+    const { body: listBody } = await callTool(
+      "knowledge_list_relations",
+      { entry_id: fromId, direction: "outbound" },
+      sub,
+      sidDefault,
+    );
+    const relations = (
+      parseToolSuccess(listBody) as {
+        relations: Array<{ entry: { id: string; namespace: string } }>;
+      }
+    ).relations;
+    expect(relations).toHaveLength(1);
+    expect(relations[0]?.entry).toMatchObject({
+      id: toId,
+      namespace: "rel-other",
+    });
+  });
+
+  it("denies a cross-namespace relation from a namespace-locked session", async () => {
+    const sub = uniqueUser("rel-locked-ns");
+    const sidDefault = await openSession(sub, "rel-locked-a");
+    const sidOther = await openSession(sub, "rel-locked-b");
+    const fromId = await createEntry(sub, sidDefault, { title: "From" });
+    const toId = await createEntry(sub, sidOther, { title: "To" });
+
+    const sidLocked = await openSession(
+      sub,
+      "rel-locked-a",
+      "?lock_namespace=true",
+    );
+
+    // Either endpoint outside the locked namespace is refused.
+    for (const args of [
+      { from_id: fromId, to_id: toId, relation_type: "CONNECTS_TO" },
+      { from_id: toId, to_id: fromId, relation_type: "CONNECTS_TO" },
+    ]) {
+      const { body } = await callTool(
+        "knowledge_create_relation",
+        args,
+        sub,
+        sidLocked,
+      );
+      expect(parseToolError(body).code).toBe(ErrorCode.PERMISSION_DENIED);
+    }
+
+    // …and no edge was written.
+    const { body: listBody } = await callTool(
+      "knowledge_list_relations",
+      { entry_id: fromId, direction: "both" },
+      sub,
+      sidDefault,
+    );
+    expect(
+      (parseToolSuccess(listBody) as { relations: unknown[] }).relations,
+    ).toEqual([]);
+  });
+
+  it("hides an out-of-namespace counterpart from a locked session", async () => {
+    const sub = uniqueUser("rel-locked-hide");
+    const sidA = await openSession(sub, "rel-hide-a");
+    const sidB = await openSession(sub, "rel-hide-b");
+    const fromId = await createEntry(sub, sidA, { title: "From" });
+    const toId = await createEntry(sub, sidB, { title: "To" });
+
+    await callTool(
+      "knowledge_create_relation",
+      { from_id: fromId, to_id: toId, relation_type: "CONNECTS_TO" },
+      sub,
+      sidA,
+    );
+
+    const sidLocked = await openSession(
+      sub,
+      "rel-hide-a",
+      "?lock_namespace=true",
+    );
+    const { body } = await callTool(
+      "knowledge_list_relations",
+      { entry_id: fromId, direction: "both" },
+      sub,
+      sidLocked,
+    );
+    expect(
+      (parseToolSuccess(body) as { relations: unknown[] }).relations,
+    ).toEqual([]);
+
+    // The relation summary must not leak the hidden counterpart either.
+    const { body: getBody } = await callTool(
+      "knowledge_get_entry",
+      { entry_id: fromId },
+      sub,
+      sidLocked,
+    );
+    expect(
+      (parseToolSuccess(getBody) as { relation_summary: { total: number } })
+        .relation_summary.total,
+    ).toBe(0);
   });
 
   it("filters list results where caller cannot read counterpart entry", async () => {

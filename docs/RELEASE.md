@@ -42,7 +42,7 @@ TAG="v${VERSION}"
 Open `src/server-instructions.md` and verify that every statement still matches the actual implementation:
 
 - **Data model fields** — check that the listed fields (`namespace`, `entry_type`, `title`, `content`, `topic`, `tags`, `summary`, `source`, `last_verified_at`) match what the tool schemas in `src/tools/resources.ts` actually accept.
-- **Relations** — confirm the constraint "both entries must be in the same namespace" is still enforced in `src/neo4j-client.ts`.
+- **Relations** — confirm relations may still cross namespaces, and that every Neo4j method touching a `Resource` still applies the `$namespaceScope` predicate in `src/neo4j-client.ts` (D-033). A query that reads or mutates an entry without that predicate is a scope leak.
 - **Search workflow** — confirm the three-step deduplication flow still matches the tool behaviour.
 - **Namespace override** — confirm that the per-tool `namespace` parameter still exists in the tool definitions.
 

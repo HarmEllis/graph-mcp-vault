@@ -171,11 +171,11 @@ The server detects API keys by their `gmv_` prefix and routes them to API key va
 ### Key properties
 
 - **Prefix**: all keys start with `gmv_` followed by 64 hex characters.
-- **Namespace restriction**: keys can optionally be scoped to specific namespaces. A namespace-restricted key cannot access namespaces outside its allow-list and automatically locks the session namespace.
+- **Namespace restriction**: keys can optionally be scoped to specific namespaces. A namespace-restricted key can work across its whole allow-list but cannot access namespaces outside it. Add `?lock_namespace=true` to confine such a session to a single namespace.
 - **Expiry**: keys can have an optional expiry (1–365 days). Keys without an expiry never expire.
 - **Per-user limit**: each user can hold at most `API_KEYS_MAX_PER_USER` active (non-revoked) keys (default: 20).
 - **Hashing**: keys are stored as scrypt digests; the raw key is returned exactly once at creation and cannot be recovered.
-- **Privilege escalation prevention**: a namespace-restricted API key cannot mint a new key with broader scope than its own allow-list.
+- **Privilege escalation prevention**: a namespace-scoped caller cannot mint, list, or revoke a key with broader scope than its own effective namespace scope.
 
 ### Management tools
 
@@ -206,11 +206,37 @@ Once a session is created, its namespace is fixed. Sending a request to
 `/mcp/other-ns` with a session that belongs to `homelab` returns
 **HTTP 404 SESSION_NAMESPACE_CONFLICT**.
 
-### Cross-namespace reads
+### Cross-namespace access
 
 Any tool that accepts a `namespace` argument (e.g. `knowledge_list_entries`) can
 explicitly target a different namespace. The session namespace is the default;
 passing `namespace: "other"` overrides it for that single call.
+
+Relations may connect entries in **different** namespaces, and graph traversal
+(`knowledge_expand_context`, `knowledge_find_paths`,
+`knowledge_explain_relationship`, `knowledge_impact_analysis`) follows those
+edges across the boundary. Relation and traversal results carry each entry's
+`namespace` so the caller can tell them apart.
+
+### Namespace scope
+
+Every session has an **effective namespace scope** that bounds what it can see
+and write. It is derived as follows (see
+[D-033](docs/DECISIONS.md#d-033--cross-namespace-entry-relations-and-explicit-session-namespace-scope-breaking)):
+
+| Session | Effective scope |
+|---|---|
+| JWT | unrestricted |
+| JWT with `?lock_namespace=true` | the session namespace only |
+| API key with a `namespaces` allow-list | that allow-list |
+| API key with allow-list + `?lock_namespace=true` | the session namespace only |
+
+A hard lock always wins. Within the scope, per-entry permissions still apply —
+the scope narrows access, it never widens it. Entries outside the scope are
+invisible: they cannot be read, related, or reached through traversal, and they
+do not appear in search results, `knowledge_list_namespaces`, or relation counts.
+
+Use `?lock_namespace=true` when a client must be confined to a single namespace.
 
 ---
 
@@ -337,7 +363,7 @@ Returns `{ "resources": [ ... ] }`.
 #### `knowledge_create_relation`
 
 Create a typed relation between two knowledge entries. Requires at least read (viewer) access
-to both entries. Both entries must belong to the same namespace.
+to both entries. The two entries may belong to different namespaces.
 
 ```json
 {
@@ -438,8 +464,9 @@ Returns:
 
 #### `knowledge_find_paths`
 
-Find all directed paths between two entries via entry-relation edges. Only paths where
-every node is readable by the caller are returned. Both entries must be in the same namespace.
+Find all directed paths between two entries via entry-relation edges. Traversal crosses
+namespaces; only paths where every node is readable by the caller and inside the session's
+namespace scope are returned.
 
 ```json
 {
@@ -637,7 +664,7 @@ Returns `{ "revoked": true }`. Returns `RESOURCE_NOT_FOUND` if the key does not 
 | Delete entry | owner |
 | Share entry | owner |
 | Revoke access | owner |
-| Create relation | viewer (on both entries) |
+| Create relation | viewer (on both entries, which may be in different namespaces) |
 | List relations | viewer (on anchor entry) |
 | Delete relation | owner (on source entry) |
 | Create / list / revoke API keys | authenticated user (own keys only) |
