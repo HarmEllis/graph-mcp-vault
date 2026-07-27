@@ -2,6 +2,13 @@ import { randomUUID } from "node:crypto";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
+/**
+ * The set of namespaces a session may reach. `null` means unrestricted — it is
+ * the only representation of "no restriction", so an omitted or empty-ish value
+ * can never be mistaken for one.
+ */
+export type NamespaceScope = readonly string[] | null;
+
 export interface Session {
   id: string;
   userId: string;
@@ -13,6 +20,23 @@ export interface Session {
   allowedNamespaces: string[] | null;
   authMethod: "jwt" | "api_key";
   apiKeyId?: string;
+}
+
+/**
+ * Derives the session's effective namespace scope (see DECISIONS.md D-033).
+ *
+ * Precedence: a hard lock (`?lock_namespace=true`) confines the session to its
+ * own namespace and wins over everything else. Otherwise an API key's
+ * `namespaces` allow-list becomes the scope. A session with neither is
+ * unrestricted and returns `null`.
+ *
+ * The returned array is a deduplicated copy — callers cannot reach back into
+ * the stored session through it.
+ */
+export function sessionNamespaceScope(session: Session): NamespaceScope {
+  if (session.lockedNamespace) return [session.namespace];
+  if (session.allowedNamespaces === null) return null;
+  return [...new Set(session.allowedNamespaces)];
 }
 
 // ── SessionStore ──────────────────────────────────────────────────────────────

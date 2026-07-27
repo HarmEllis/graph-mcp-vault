@@ -35,8 +35,16 @@ follow the namespace conventions.
 ## Relations
 
 Create relations with `knowledge_create_relation` using UPPER_SNAKE_CASE types
-(for example `DEPENDS_ON`, `RUNS_ON`, `RELATES_TO`). Both entries must be in
-the same namespace.
+(for example `DEPENDS_ON`, `RUNS_ON`, `RELATES_TO`). The two entries may live in
+different namespaces — link them wherever the connection is real rather than
+duplicating an entry.
+
+Relation and traversal results include each counterpart's `namespace`, so you
+can tell which workspace an entry belongs to.
+
+Some sessions are restricted to a limited set of namespaces. In such a session,
+entries outside that set are simply not visible: they cannot be linked, and they
+are omitted from relation listings and graph traversals.
 
 ## Search workflow
 

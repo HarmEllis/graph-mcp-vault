@@ -8,6 +8,7 @@
   "scripts": {
     "dev": "tsx watch src/main.ts",
     "build": "tsc",
+    "postbuild": "cp src/server-instructions.md dist/src/server-instructions.md",
     "test": "vitest run --maxWorkers=1",
     "test:watch": "vitest",
     "lint": "biome check .",

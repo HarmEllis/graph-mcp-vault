@@ -198,7 +198,11 @@ describe("Neo4jClient.listResources", () => {
       content: "",
     });
 
-    const resources = await client.listResources({ userId, namespace: "ns1" });
+    const resources = await client.listResources({
+      namespaceScope: null,
+      userId,
+      namespace: "ns1",
+    });
 
     expect(resources.length).toBeGreaterThanOrEqual(2);
     expect(resources.every((r) => r.user_id === userId)).toBe(true);
@@ -222,7 +226,11 @@ describe("Neo4jClient.listResources", () => {
       content: "",
     });
 
-    const resources = await client.listResources({ userId, namespace: "ns-a" });
+    const resources = await client.listResources({
+      namespaceScope: null,
+      userId,
+      namespace: "ns-a",
+    });
 
     expect(resources.every((r) => r.namespace === "ns-a")).toBe(true);
     expect(resources.some((r) => r.title === "In A")).toBe(true);
@@ -246,7 +254,11 @@ describe("Neo4jClient.listResources", () => {
       content: "",
     });
 
-    const notes = await client.listResources({ userId, entry_type: "note" });
+    const notes = await client.listResources({
+      namespaceScope: null,
+      userId,
+      entry_type: "note",
+    });
 
     expect(notes.every((r) => r.entry_type === "note")).toBe(true);
   });
@@ -263,8 +275,18 @@ describe("Neo4jClient.listResources", () => {
       });
     }
 
-    const page1 = await client.listResources({ userId, limit: 2, skip: 0 });
-    const page2 = await client.listResources({ userId, limit: 2, skip: 2 });
+    const page1 = await client.listResources({
+      namespaceScope: null,
+      userId,
+      limit: 2,
+      skip: 0,
+    });
+    const page2 = await client.listResources({
+      namespaceScope: null,
+      userId,
+      limit: 2,
+      skip: 2,
+    });
 
     expect(page1.length).toBe(2);
     expect(page2.length).toBe(2);
@@ -538,7 +560,11 @@ describe("Neo4jClient.searchResources", () => {
       content: "how to bake bread",
     });
 
-    const results = await client.searchResources({ userId, query: "Quantum" });
+    const results = await client.searchResources({
+      namespaceScope: null,
+      userId,
+      query: "Quantum",
+    });
 
     expect(results.some((r) => r.title === "Quantum Physics")).toBe(true);
     expect(results.every((r) => r.title !== "Cooking Recipe")).toBe(true);
@@ -562,6 +588,7 @@ describe("Neo4jClient.searchResources", () => {
     });
 
     const results = await client.searchResources({
+      namespaceScope: null,
       userId,
       query: "Nebula",
       namespace: "ns-search-a",
@@ -584,6 +611,7 @@ describe("Neo4jClient.searchResources", () => {
     });
 
     const results = await client.searchResources({
+      namespaceScope: null,
       userId: searcherId,
       query: "Photon",
     });
@@ -604,6 +632,7 @@ describe("Neo4jClient.searchResources", () => {
     await client.shareResource(created.id, viewerId, "viewer");
 
     const results = await client.searchResources({
+      namespaceScope: null,
       userId: viewerId,
       query: "Quasar",
     });
@@ -630,6 +659,7 @@ describe("Neo4jClient.searchResources", () => {
     });
 
     const results = await client.searchResources({
+      namespaceScope: null,
       userId,
       query: "Electron",
       entry_type: "note",
@@ -653,12 +683,14 @@ describe("Neo4jClient.searchResources", () => {
     }
 
     const page1 = await client.searchResources({
+      namespaceScope: null,
       userId,
       query: tag,
       limit: 2,
       skip: 0,
     });
     const page2 = await client.searchResources({
+      namespaceScope: null,
       userId,
       query: tag,
       limit: 2,
@@ -682,7 +714,11 @@ describe("Neo4jClient.searchResources", () => {
       content: "",
     });
 
-    const results = await client.searchResources({ userId, query: "Proton" });
+    const results = await client.searchResources({
+      namespaceScope: null,
+      userId,
+      query: "Proton",
+    });
 
     const found = results.find((r) => r.id === created.id);
     expect(found).toBeDefined();
@@ -694,6 +730,7 @@ describe("Neo4jClient.searchResources", () => {
 
     await expect(
       client.searchResources({
+        namespaceScope: null,
         userId,
         query: "(broken query",
         match_mode: "fulltext",
@@ -706,7 +743,12 @@ describe("Neo4jClient.searchResources", () => {
 
     for (const q of ["*", "field:value", "[a TO z]", "term^2", "fuzzy~"]) {
       await expect(
-        client.searchResources({ userId, query: q, match_mode: "fulltext" }),
+        client.searchResources({
+          namespaceScope: null,
+          userId,
+          query: q,
+          match_mode: "fulltext",
+        }),
       ).resolves.toBeDefined();
     }
   });
@@ -715,6 +757,7 @@ describe("Neo4jClient.searchResources", () => {
     const userId = "user-search-fuzzy-empty";
 
     const results = await client.searchResources({
+      namespaceScope: null,
       userId,
       query: "AND OR NOT",
       match_mode: "fuzzy",
@@ -735,7 +778,12 @@ describe("Neo4jClient.searchResources", () => {
 
     // Searching with a slight typo should still find it in fuzzy mode
     await expect(
-      client.searchResources({ userId, query: tag, match_mode: "fuzzy" }),
+      client.searchResources({
+        namespaceScope: null,
+        userId,
+        query: tag,
+        match_mode: "fuzzy",
+      }),
     ).resolves.toBeDefined();
   });
 
@@ -751,6 +799,7 @@ describe("Neo4jClient.searchResources", () => {
     });
 
     const results = await client.searchResources({
+      namespaceScope: null,
       userId,
       query: tag,
       match_mode: "exact",
@@ -763,6 +812,7 @@ describe("Neo4jClient.searchResources", () => {
 
     await expect(
       client.searchResources({
+        namespaceScope: null,
         userId,
         query: "(broken query",
         match_mode: "exact",
@@ -782,7 +832,11 @@ describe("Neo4jClient.searchResources", () => {
     });
 
     // No match_mode specified — should default to fuzzy and not throw
-    const results = await client.searchResources({ userId, query: tag });
+    const results = await client.searchResources({
+      namespaceScope: null,
+      userId,
+      query: tag,
+    });
     expect(results.some((r) => r.title === tag)).toBe(true);
   });
 
@@ -800,6 +854,7 @@ describe("Neo4jClient.searchResources", () => {
     });
 
     const results = await client.searchResources({
+      namespaceScope: null,
       userId,
       query: tag,
       match_mode: "exact",
@@ -818,7 +873,11 @@ describe("Neo4jClient.searchResources", () => {
       content: `Content with ${tag}`,
     });
 
-    const results = await client.searchResources({ userId, query: tag });
+    const results = await client.searchResources({
+      namespaceScope: null,
+      userId,
+      query: tag,
+    });
 
     expect(results.length).toBeGreaterThan(0);
     const score = results[0]?.score;
@@ -841,7 +900,10 @@ describe("Neo4jClient.listNamespaces", () => {
       content: "",
     });
 
-    const result = await client.listNamespaces({ userId });
+    const result = await client.listNamespaces({
+      namespaceScope: null,
+      userId,
+    });
 
     const ns = result.find((n) => n.namespace === "ns-int");
     expect(ns).toBeDefined();
@@ -868,7 +930,10 @@ describe("Neo4jClient.listNamespaces", () => {
     });
     await client.shareResource(r2.id, owner, "viewer");
 
-    const result = await client.listNamespaces({ userId: owner });
+    const result = await client.listNamespaces({
+      namespaceScope: null,
+      userId: owner,
+    });
     const ns = result.find((n) => n.namespace === "ns-split");
 
     expect(ns).toBeDefined();
@@ -910,7 +975,10 @@ describe("Neo4jClient.listNamespaces", () => {
     await client.shareResource(shared1.id, owner, "viewer");
     await client.shareResource(shared2.id, owner, "editor");
 
-    const result = await client.listNamespaces({ userId: owner });
+    const result = await client.listNamespaces({
+      namespaceScope: null,
+      userId: owner,
+    });
     const ns = result.find((n) => n.namespace === "ns-mixed");
 
     expect(ns).toBeDefined();
@@ -931,7 +999,10 @@ describe("Neo4jClient.listNamespaces", () => {
     // Owner self-shares — should not double-count
     await client.shareResource(r.id, userId, "editor");
 
-    const result = await client.listNamespaces({ userId });
+    const result = await client.listNamespaces({
+      namespaceScope: null,
+      userId,
+    });
     const ns = result.find((n) => n.namespace === "ns-selfshare");
 
     expect(ns).toBeDefined();
@@ -963,7 +1034,10 @@ describe("Neo4jClient.listNamespaces", () => {
       content: "",
     });
 
-    const result = await client.listNamespaces({ userId });
+    const result = await client.listNamespaces({
+      namespaceScope: null,
+      userId,
+    });
     const ownedNamespaces = result.filter((n) =>
       ["zz-last", "aa-first", "mm-mid"].includes(n.namespace),
     );
@@ -1045,6 +1119,7 @@ describe("Neo4jClient entry relations", () => {
       from.id,
       to.id,
       "DEPENDS_ON",
+      null,
       "runtime dependency",
     );
     const relations = await client.listEntryRelations(
@@ -1052,6 +1127,7 @@ describe("Neo4jClient entry relations", () => {
       from.id,
       "outbound",
       100,
+      null,
     );
 
     expect(relations).toHaveLength(1);
@@ -1086,14 +1162,15 @@ describe("Neo4jClient entry relations", () => {
       content: "",
     });
 
-    await client.createEntryRelation(userId, b.id, a.id, "CONNECTS_TO");
-    await client.createEntryRelation(userId, c.id, b.id, "RUNS_ON");
+    await client.createEntryRelation(userId, b.id, a.id, "CONNECTS_TO", null);
+    await client.createEntryRelation(userId, c.id, b.id, "RUNS_ON", null);
 
     const relations = await client.listEntryRelations(
       userId,
       b.id,
       "both",
       100,
+      null,
     );
     const directions = relations.map((r) => r.direction);
     expect(directions).toContain("inbound");
@@ -1111,11 +1188,68 @@ describe("Neo4jClient entry relations", () => {
     });
 
     await expect(
-      client.createEntryRelation(userId, entry.id, entry.id, "DEPENDS_ON"),
+      client.createEntryRelation(
+        userId,
+        entry.id,
+        entry.id,
+        "DEPENDS_ON",
+        null,
+      ),
     ).rejects.toThrow("from_id and to_id must be different");
   });
 
-  it("rejects relation creation across namespaces", async () => {
+  it("clears the label when a relation is re-created without one", async () => {
+    const userId = "user-rel-label-clear";
+    const ns = "rel-label-ns";
+    const from = await client.createResource({
+      userId,
+      namespace: ns,
+      entry_type: "note",
+      title: "From",
+      content: "",
+    });
+    const to = await client.createResource({
+      userId,
+      namespace: ns,
+      entry_type: "note",
+      title: "To",
+      content: "",
+    });
+
+    await client.createEntryRelation(
+      userId,
+      from.id,
+      to.id,
+      "RELATES_TO",
+      null,
+      "first label",
+    );
+    expect(
+      (
+        await client.listEntryRelations(userId, from.id, "outbound", 10, null)
+      )[0]?.label,
+    ).toBe("first label");
+
+    // MERGE is idempotent; omitting the label must remove it, not keep the old one.
+    await client.createEntryRelation(
+      userId,
+      from.id,
+      to.id,
+      "RELATES_TO",
+      null,
+    );
+    const relations = await client.listEntryRelations(
+      userId,
+      from.id,
+      "outbound",
+      10,
+      null,
+    );
+    expect(relations).toHaveLength(1);
+    expect(relations[0]?.label).toBeUndefined();
+  });
+
+  it("creates a relation across namespaces and reports the counterpart namespace", async () => {
     const userId = "user-rel-cross-ns";
     const from = await client.createResource({
       userId,
@@ -1132,9 +1266,137 @@ describe("Neo4jClient entry relations", () => {
       content: "",
     });
 
+    await client.createEntryRelation(
+      userId,
+      from.id,
+      to.id,
+      "CONNECTS_TO",
+      null,
+    );
+
+    const relations = await client.listEntryRelations(
+      userId,
+      from.id,
+      "outbound",
+      100,
+      null,
+    );
+    expect(relations).toHaveLength(1);
+    expect(relations[0]?.entry).toMatchObject({
+      id: to.id,
+      namespace: "rel-ns-b",
+    });
+  });
+
+  it("hides an out-of-scope counterpart from list relations", async () => {
+    const userId = "user-rel-scope-hidden";
+    const from = await client.createResource({
+      userId,
+      namespace: "rel-scope-a",
+      entry_type: "note",
+      title: "A",
+      content: "",
+    });
+    const to = await client.createResource({
+      userId,
+      namespace: "rel-scope-b",
+      entry_type: "note",
+      title: "B",
+      content: "",
+    });
+    await client.createEntryRelation(
+      userId,
+      from.id,
+      to.id,
+      "CONNECTS_TO",
+      null,
+    );
+
+    for (const direction of ["outbound", "inbound", "both"] as const) {
+      const anchor = direction === "inbound" ? to.id : from.id;
+      const scope = direction === "inbound" ? ["rel-scope-b"] : ["rel-scope-a"];
+      const relations = await client.listEntryRelations(
+        userId,
+        anchor,
+        direction,
+        100,
+        scope,
+      );
+      expect(relations).toEqual([]);
+    }
+  });
+
+  it("refuses to create a relation to an entry outside the namespace scope", async () => {
+    const userId = "user-rel-scope-create";
+    const from = await client.createResource({
+      userId,
+      namespace: "rel-create-a",
+      entry_type: "note",
+      title: "A",
+      content: "",
+    });
+    const to = await client.createResource({
+      userId,
+      namespace: "rel-create-b",
+      entry_type: "note",
+      title: "B",
+      content: "",
+    });
+
     await expect(
-      client.createEntryRelation(userId, from.id, to.id, "CONNECTS_TO"),
-    ).rejects.toThrow("Entries must belong to the same namespace");
+      client.createEntryRelation(userId, from.id, to.id, "CONNECTS_TO", [
+        "rel-create-a",
+      ]),
+    ).rejects.toMatchObject({ code: "PERMISSION_DENIED" });
+
+    const relations = await client.listEntryRelations(
+      userId,
+      from.id,
+      "both",
+      100,
+      null,
+    );
+    expect(relations).toEqual([]);
+  });
+
+  it("refuses to delete a relation whose counterpart is outside the namespace scope", async () => {
+    const userId = "user-rel-scope-delete";
+    const from = await client.createResource({
+      userId,
+      namespace: "rel-delete-a",
+      entry_type: "note",
+      title: "A",
+      content: "",
+    });
+    const to = await client.createResource({
+      userId,
+      namespace: "rel-delete-b",
+      entry_type: "note",
+      title: "B",
+      content: "",
+    });
+    await client.createEntryRelation(
+      userId,
+      from.id,
+      to.id,
+      "CONNECTS_TO",
+      null,
+    );
+
+    await expect(
+      client.deleteEntryRelation(userId, from.id, to.id, "CONNECTS_TO", [
+        "rel-delete-a",
+      ]),
+    ).rejects.toMatchObject({ code: "PERMISSION_DENIED" });
+
+    const relations = await client.listEntryRelations(
+      userId,
+      from.id,
+      "outbound",
+      100,
+      null,
+    );
+    expect(relations).toHaveLength(1);
   });
 
   it("filters list relations to counterparts the caller can read", async () => {
@@ -1173,12 +1435,14 @@ describe("Neo4jClient entry relations", () => {
       anchor.id,
       visible.id,
       "CONNECTS_TO",
+      null,
     );
     await client.createEntryRelation(
       hiddenOwner,
       anchor.id,
       hidden.id,
       "CONNECTS_TO",
+      null,
     );
 
     const relations = await client.listEntryRelations(
@@ -1186,6 +1450,7 @@ describe("Neo4jClient entry relations", () => {
       anchor.id,
       "outbound",
       100,
+      null,
     );
 
     expect(relations).toHaveLength(1);
@@ -1208,14 +1473,27 @@ describe("Neo4jClient entry relations", () => {
       title: "Delete Target",
       content: "",
     });
-    await client.createEntryRelation(userId, from.id, to.id, "DEPENDS_ON");
+    await client.createEntryRelation(
+      userId,
+      from.id,
+      to.id,
+      "DEPENDS_ON",
+      null,
+    );
 
-    await client.deleteEntryRelation(userId, from.id, to.id, "DEPENDS_ON");
+    await client.deleteEntryRelation(
+      userId,
+      from.id,
+      to.id,
+      "DEPENDS_ON",
+      null,
+    );
     const relations = await client.listEntryRelations(
       userId,
       from.id,
       "outbound",
       100,
+      null,
     );
 
     expect(relations).toHaveLength(0);
@@ -1244,10 +1522,11 @@ describe("Neo4jClient entry relations", () => {
         root.id,
         neighbor.id,
         "CONNECTS_TO",
+        null,
       );
     }
 
-    const related = await client.getRelatedEntries(userId, root.id);
+    const related = await client.getRelatedEntries(userId, root.id, null);
     expect(related.length).toBe(20);
   });
 });
@@ -1311,7 +1590,13 @@ describe("Neo4jClient.listEntryRelations limit", () => {
         title: `N${i}`,
         content: "",
       });
-      await client.createEntryRelation(userId, root.id, n.id, "CONNECTS_TO");
+      await client.createEntryRelation(
+        userId,
+        root.id,
+        n.id,
+        "CONNECTS_TO",
+        null,
+      );
     }
 
     const limited = await client.listEntryRelations(
@@ -1319,6 +1604,7 @@ describe("Neo4jClient.listEntryRelations limit", () => {
       root.id,
       "outbound",
       3,
+      null,
     );
     expect(limited.length).toBe(3);
   });
@@ -1355,15 +1641,18 @@ describe("Neo4jClient.expandContext", () => {
       anchor.id,
       child1.id,
       "DEPENDS_ON",
+      null,
     );
     await client.createEntryRelation(
       userId,
       anchor.id,
       child2.id,
       "DEPENDS_ON",
+      null,
     );
 
     const layers = await client.expandContext({
+      namespaceScope: null,
       userId,
       entryId: anchor.id,
       direction: "outbound",
@@ -1404,10 +1693,11 @@ describe("Neo4jClient.expandContext", () => {
       content: "",
     });
 
-    await client.createEntryRelation(userId, a.id, b.id, "CONNECTS_TO");
-    await client.createEntryRelation(userId, b.id, c.id, "CONNECTS_TO");
+    await client.createEntryRelation(userId, a.id, b.id, "CONNECTS_TO", null);
+    await client.createEntryRelation(userId, b.id, c.id, "CONNECTS_TO", null);
 
     const layers = await client.expandContext({
+      namespaceScope: null,
       userId,
       entryId: a.id,
       direction: "outbound",
@@ -1456,15 +1746,18 @@ describe("Neo4jClient.expandContext", () => {
       anchor.id,
       depNode.id,
       "DEPENDS_ON",
+      null,
     );
     await client.createEntryRelation(
       userId,
       anchor.id,
       refNode.id,
       "REFERENCES",
+      null,
     );
 
     const layers = await client.expandContext({
+      namespaceScope: null,
       userId,
       entryId: anchor.id,
       direction: "outbound",
@@ -1515,11 +1808,19 @@ describe("Neo4jClient.expandContext", () => {
       anchor.id,
       middle.id,
       "CONNECTS_TO",
+      null,
     );
-    await client.createEntryRelation(ownerB, middle.id, leaf.id, "CONNECTS_TO");
+    await client.createEntryRelation(
+      ownerB,
+      middle.id,
+      leaf.id,
+      "CONNECTS_TO",
+      null,
+    );
 
     // ownerA cannot read middle (not shared), so path anchor→middle→leaf should be excluded
     const layers = await client.expandContext({
+      namespaceScope: null,
       userId: ownerA,
       entryId: anchor.id,
       direction: "outbound",
@@ -1557,10 +1858,12 @@ describe("Neo4jClient.expandContext", () => {
         anchor.id,
         child.id,
         "CONNECTS_TO",
+        null,
       );
     }
 
     const layers = await client.expandContext({
+      namespaceScope: null,
       userId,
       entryId: anchor.id,
       direction: "outbound",
@@ -1576,6 +1879,7 @@ describe("Neo4jClient.expandContext", () => {
   it("throws RESOURCE_NOT_FOUND for a non-existent entry", async () => {
     await expect(
       client.expandContext({
+        namespaceScope: null,
         userId: "user-expand-notfound",
         entryId: "00000000-0000-0000-0000-000000000000",
         direction: "outbound",
@@ -1598,6 +1902,7 @@ describe("Neo4jClient.expandContext", () => {
 
     await expect(
       client.expandContext({
+        namespaceScope: null,
         userId,
         entryId: entry.id,
         direction: "outbound",
@@ -1629,9 +1934,16 @@ describe("Neo4jClient.findPaths", () => {
       title: "To",
       content: "",
     });
-    await client.createEntryRelation(userId, from.id, to.id, "CONNECTS_TO");
+    await client.createEntryRelation(
+      userId,
+      from.id,
+      to.id,
+      "CONNECTS_TO",
+      null,
+    );
 
     const paths = await client.findPaths({
+      namespaceScope: null,
       userId,
       fromId: from.id,
       toId: to.id,
@@ -1674,6 +1986,7 @@ describe("Neo4jClient.findPaths", () => {
     });
 
     const paths = await client.findPaths({
+      namespaceScope: null,
       userId,
       fromId: a.id,
       toId: b.id,
@@ -1722,11 +2035,19 @@ describe("Neo4jClient.findPaths", () => {
       start.id,
       middle.id,
       "CONNECTS_TO",
+      null,
     );
-    await client.createEntryRelation(ownerB, middle.id, end.id, "CONNECTS_TO");
+    await client.createEntryRelation(
+      ownerB,
+      middle.id,
+      end.id,
+      "CONNECTS_TO",
+      null,
+    );
 
     // ownerA cannot read middle — path start→middle→end should be excluded
     const paths = await client.findPaths({
+      namespaceScope: null,
       userId: ownerA,
       fromId: start.id,
       toId: end.id,
@@ -1750,6 +2071,7 @@ describe("Neo4jClient.findPaths", () => {
 
     await expect(
       client.findPaths({
+        namespaceScope: null,
         userId,
         fromId: entry.id,
         toId: entry.id,
@@ -1760,7 +2082,7 @@ describe("Neo4jClient.findPaths", () => {
     ).rejects.toThrow("from_id and to_id must be different");
   });
 
-  it("throws INVALID_PARAMS for cross-namespace entries", async () => {
+  it("finds a path between entries in different namespaces", async () => {
     const userId = "user-paths-cross-ns";
     const a = await client.createResource({
       userId,
@@ -1776,17 +2098,67 @@ describe("Neo4jClient.findPaths", () => {
       title: "B",
       content: "",
     });
+    await client.createEntryRelation(userId, a.id, b.id, "CONNECTS_TO", null);
 
-    await expect(
-      client.findPaths({
-        userId,
-        fromId: a.id,
-        toId: b.id,
-        maxDepth: 4,
-        maxPaths: 5,
-        relationTypes: null,
-      }),
-    ).rejects.toThrow("same namespace");
+    const paths = await client.findPaths({
+      namespaceScope: null,
+      userId,
+      fromId: a.id,
+      toId: b.id,
+      maxDepth: 4,
+      maxPaths: 5,
+      relationTypes: null,
+    });
+
+    expect(paths).toHaveLength(1);
+    expect(paths[0]?.nodes.map((n) => n.namespace)).toEqual([
+      "paths-ns-x",
+      "paths-ns-y",
+    ]);
+  });
+
+  it("excludes a path that tunnels through an out-of-scope intermediate node", async () => {
+    const userId = "user-paths-tunnel";
+    const a = await client.createResource({
+      userId,
+      namespace: "tunnel-in",
+      entry_type: "note",
+      title: "A",
+      content: "",
+    });
+    const mid = await client.createResource({
+      userId,
+      namespace: "tunnel-out",
+      entry_type: "note",
+      title: "Mid",
+      content: "",
+    });
+    const b = await client.createResource({
+      userId,
+      namespace: "tunnel-in",
+      entry_type: "note",
+      title: "B",
+      content: "",
+    });
+    await client.createEntryRelation(userId, a.id, mid.id, "CONNECTS_TO", null);
+    await client.createEntryRelation(userId, mid.id, b.id, "CONNECTS_TO", null);
+
+    const base = {
+      userId,
+      fromId: a.id,
+      toId: b.id,
+      maxDepth: 4,
+      maxPaths: 5,
+      relationTypes: null,
+    };
+
+    // Both endpoints are in scope, but the only path runs through "tunnel-out".
+    expect(
+      await client.findPaths({ ...base, namespaceScope: ["tunnel-in"] }),
+    ).toEqual([]);
+    expect(
+      await client.findPaths({ ...base, namespaceScope: null }),
+    ).toHaveLength(1);
   });
 
   it("respects max_paths limit", async () => {
@@ -1821,12 +2193,37 @@ describe("Neo4jClient.findPaths", () => {
       content: "",
     });
 
-    await client.createEntryRelation(userId, start.id, mid1.id, "CONNECTS_TO");
-    await client.createEntryRelation(userId, start.id, mid2.id, "CONNECTS_TO");
-    await client.createEntryRelation(userId, mid1.id, end.id, "CONNECTS_TO");
-    await client.createEntryRelation(userId, mid2.id, end.id, "CONNECTS_TO");
+    await client.createEntryRelation(
+      userId,
+      start.id,
+      mid1.id,
+      "CONNECTS_TO",
+      null,
+    );
+    await client.createEntryRelation(
+      userId,
+      start.id,
+      mid2.id,
+      "CONNECTS_TO",
+      null,
+    );
+    await client.createEntryRelation(
+      userId,
+      mid1.id,
+      end.id,
+      "CONNECTS_TO",
+      null,
+    );
+    await client.createEntryRelation(
+      userId,
+      mid2.id,
+      end.id,
+      "CONNECTS_TO",
+      null,
+    );
 
     const paths = await client.findPaths({
+      namespaceScope: null,
       userId,
       fromId: start.id,
       toId: end.id,
@@ -1863,11 +2260,12 @@ describe("Neo4jClient.findPaths", () => {
       content: "",
     });
     // A→B and C→B (so C cannot reach A via outbound only)
-    await client.createEntryRelation(userId, a.id, b.id, "CONNECTS_TO");
-    await client.createEntryRelation(userId, c.id, b.id, "CONNECTS_TO");
+    await client.createEntryRelation(userId, a.id, b.id, "CONNECTS_TO", null);
+    await client.createEntryRelation(userId, c.id, b.id, "CONNECTS_TO", null);
 
     // direction:"both" should find C → B ← A (undirected path)
     const paths = await client.findPaths({
+      namespaceScope: null,
       userId,
       fromId: c.id,
       toId: a.id,
@@ -1903,10 +2301,11 @@ describe("Neo4jClient.findPaths", () => {
       title: "C",
       content: "",
     });
-    await client.createEntryRelation(userId, a.id, b.id, "CONNECTS_TO");
-    await client.createEntryRelation(userId, c.id, b.id, "CONNECTS_TO");
+    await client.createEntryRelation(userId, a.id, b.id, "CONNECTS_TO", null);
+    await client.createEntryRelation(userId, c.id, b.id, "CONNECTS_TO", null);
 
     const paths = await client.findPaths({
+      namespaceScope: null,
       userId,
       fromId: c.id,
       toId: a.id,
@@ -1936,10 +2335,11 @@ describe("Neo4jClient.findPaths", () => {
       content: "",
     });
     // A→B: from A's perspective, B is reachable inbound from B's perspective
-    await client.createEntryRelation(userId, a.id, b.id, "CONNECTS_TO");
+    await client.createEntryRelation(userId, a.id, b.id, "CONNECTS_TO", null);
 
     // Query B→A with direction:"inbound" (traverse against the A→B arrow)
     const paths = await client.findPaths({
+      namespaceScope: null,
       userId,
       fromId: b.id,
       toId: a.id,
@@ -1976,10 +2376,11 @@ describe("Neo4jClient.findPaths", () => {
       content: "",
     });
     // mid→a and mid→b (so A←mid→B is the only 2-hop undirected path A↔B)
-    await client.createEntryRelation(userId, mid.id, a.id, "CONNECTS_TO");
-    await client.createEntryRelation(userId, mid.id, b.id, "CONNECTS_TO");
+    await client.createEntryRelation(userId, mid.id, a.id, "CONNECTS_TO", null);
+    await client.createEntryRelation(userId, mid.id, b.id, "CONNECTS_TO", null);
 
     const paths = await client.findPaths({
+      namespaceScope: null,
       userId,
       fromId: a.id,
       toId: b.id,
@@ -2025,10 +2426,12 @@ describe("Neo4jClient.explainRelationship", () => {
       a.id,
       b.id,
       "CONNECTS_TO",
+      null,
       "via eth0",
     );
 
     const result = await client.explainRelationship({
+      namespaceScope: null,
       userId,
       entryAId: a.id,
       entryBId: b.id,
@@ -2068,10 +2471,23 @@ describe("Neo4jClient.explainRelationship", () => {
       content: "",
     });
     // NAS ←MANAGED_BY— Management VM —CONNECTS_TO→ PiKVM
-    await client.createEntryRelation(userId, mgmt.id, nas.id, "MANAGED_BY");
-    await client.createEntryRelation(userId, mgmt.id, pikvm.id, "CONNECTS_TO");
+    await client.createEntryRelation(
+      userId,
+      mgmt.id,
+      nas.id,
+      "MANAGED_BY",
+      null,
+    );
+    await client.createEntryRelation(
+      userId,
+      mgmt.id,
+      pikvm.id,
+      "CONNECTS_TO",
+      null,
+    );
 
     const result = await client.explainRelationship({
+      namespaceScope: null,
       userId,
       entryAId: nas.id,
       entryBId: pikvm.id,
@@ -2108,6 +2524,7 @@ describe("Neo4jClient.explainRelationship", () => {
     });
 
     const result = await client.explainRelationship({
+      namespaceScope: null,
       userId,
       entryAId: a.id,
       entryBId: b.id,
@@ -2146,8 +2563,20 @@ describe("Neo4jClient.explainRelationship", () => {
       title: "B",
       content: "",
     });
-    await client.createEntryRelation(owner, a.id, middle.id, "CONNECTS_TO");
-    await client.createEntryRelation(owner, middle.id, b.id, "CONNECTS_TO");
+    await client.createEntryRelation(
+      owner,
+      a.id,
+      middle.id,
+      "CONNECTS_TO",
+      null,
+    );
+    await client.createEntryRelation(
+      owner,
+      middle.id,
+      b.id,
+      "CONNECTS_TO",
+      null,
+    );
 
     // Grant querier access to A and B, but NOT to middle
     await client.shareResource(a.id, querier, "viewer");
@@ -2155,6 +2584,7 @@ describe("Neo4jClient.explainRelationship", () => {
 
     // querier cannot access middle → path should be excluded
     const result = await client.explainRelationship({
+      namespaceScope: null,
       userId: querier,
       entryAId: a.id,
       entryBId: b.id,
@@ -2178,6 +2608,7 @@ describe("Neo4jClient.explainRelationship", () => {
 
     await expect(
       client.explainRelationship({
+        namespaceScope: null,
         userId,
         entryAId: a.id,
         entryBId: a.id,
@@ -2187,7 +2618,7 @@ describe("Neo4jClient.explainRelationship", () => {
     ).rejects.toMatchObject({ code: "INVALID_PARAMS" });
   });
 
-  it("throws INVALID_PARAMS for cross-namespace entries", async () => {
+  it("explains a direct relation across namespaces and reports both namespaces", async () => {
     const userId = "user-explain-xns";
     const a = await client.createResource({
       userId,
@@ -2203,16 +2634,105 @@ describe("Neo4jClient.explainRelationship", () => {
       title: "B",
       content: "",
     });
+    await client.createEntryRelation(userId, a.id, b.id, "DEPENDS_ON", null);
 
+    const result = await client.explainRelationship({
+      namespaceScope: null,
+      userId,
+      entryAId: a.id,
+      entryBId: b.id,
+      maxDepth: 4,
+      maxPaths: 5,
+    });
+
+    expect(result.connected).toBe(true);
+    expect(result.entry_a.namespace).toBe("explain-xns-a");
+    expect(result.entry_b.namespace).toBe("explain-xns-b");
+    expect(result.direct_relations).toHaveLength(1);
+  });
+
+  it("hides both direct and indirect connections outside the namespace scope", async () => {
+    const userId = "user-explain-scope";
+    const a = await client.createResource({
+      userId,
+      namespace: "explain-scope-a",
+      entry_type: "note",
+      title: "A",
+      content: "",
+    });
+    const b = await client.createResource({
+      userId,
+      namespace: "explain-scope-b",
+      entry_type: "note",
+      title: "B",
+      content: "",
+    });
+    const mid = await client.createResource({
+      userId,
+      namespace: "explain-scope-b",
+      entry_type: "note",
+      title: "Mid",
+      content: "",
+    });
+    await client.createEntryRelation(userId, a.id, b.id, "DEPENDS_ON", null);
+    await client.createEntryRelation(userId, a.id, mid.id, "RELATES_TO", null);
+    await client.createEntryRelation(userId, mid.id, b.id, "RELATES_TO", null);
+
+    // The out-of-scope endpoint must be refused outright — returning an
+    // "unconnected" result would still leak B's title, type and namespace.
     await expect(
       client.explainRelationship({
+        namespaceScope: ["explain-scope-a"],
         userId,
         entryAId: a.id,
         entryBId: b.id,
         maxDepth: 4,
         maxPaths: 5,
       }),
-    ).rejects.toMatchObject({ code: "INVALID_PARAMS" });
+    ).rejects.toMatchObject({ code: "PERMISSION_DENIED" });
+
+    // With both endpoints in scope but the bridge outside it, only the direct
+    // relation survives.
+    const inScope = await client.explainRelationship({
+      namespaceScope: ["explain-scope-a", "explain-scope-b"],
+      userId,
+      entryAId: a.id,
+      entryBId: b.id,
+      maxDepth: 4,
+      maxPaths: 5,
+    });
+    expect(inScope.direct_relations).toHaveLength(1);
+  });
+
+  it("denies find_paths when an endpoint is outside the namespace scope", async () => {
+    const userId = "user-paths-scope-endpoint";
+    const a = await client.createResource({
+      userId,
+      namespace: "paths-scope-a",
+      entry_type: "note",
+      title: "A",
+      content: "",
+    });
+    const b = await client.createResource({
+      userId,
+      namespace: "paths-scope-b",
+      entry_type: "note",
+      title: "B",
+      content: "",
+    });
+    await client.createEntryRelation(userId, a.id, b.id, "CONNECTS_TO", null);
+
+    await expect(
+      client.findPaths({
+        namespaceScope: ["paths-scope-a"],
+        userId,
+        fromId: a.id,
+        toId: b.id,
+        maxDepth: 4,
+        maxPaths: 5,
+        relationTypes: null,
+      }),
+    ).rejects.toMatchObject({ code: "PERMISSION_DENIED" });
   });
 
   it("throws PERMISSION_DENIED when caller cannot read endpoint", async () => {
@@ -2236,6 +2756,7 @@ describe("Neo4jClient.explainRelationship", () => {
 
     await expect(
       client.explainRelationship({
+        namespaceScope: null,
         userId: stranger,
         entryAId: a.id,
         entryBId: b.id,
@@ -2280,11 +2801,29 @@ describe("Neo4jClient.getRelationSummary", () => {
       title: "In1",
       content: "",
     });
-    await client.createEntryRelation(userId, hub.id, out1.id, "CONNECTS_TO");
-    await client.createEntryRelation(userId, hub.id, out2.id, "CONNECTS_TO");
-    await client.createEntryRelation(userId, in1.id, hub.id, "DEPENDS_ON");
+    await client.createEntryRelation(
+      userId,
+      hub.id,
+      out1.id,
+      "CONNECTS_TO",
+      null,
+    );
+    await client.createEntryRelation(
+      userId,
+      hub.id,
+      out2.id,
+      "CONNECTS_TO",
+      null,
+    );
+    await client.createEntryRelation(
+      userId,
+      in1.id,
+      hub.id,
+      "DEPENDS_ON",
+      null,
+    );
 
-    const summary = await client.getRelationSummary(hub.id, userId);
+    const summary = await client.getRelationSummary(hub.id, userId, null);
 
     expect(summary.outbound).toBe(2);
     expect(summary.inbound).toBe(1);
@@ -2301,7 +2840,7 @@ describe("Neo4jClient.getRelationSummary", () => {
       content: "",
     });
 
-    const summary = await client.getRelationSummary(entry.id, userId);
+    const summary = await client.getRelationSummary(entry.id, userId, null);
 
     expect(summary.outbound).toBe(0);
     expect(summary.inbound).toBe(0);
@@ -2337,14 +2876,21 @@ describe("Neo4jClient.getRelationSummary", () => {
       hub.id,
       accessible.id,
       "CONNECTS_TO",
+      null,
     );
-    await client.createEntryRelation(owner, hub.id, hidden.id, "CONNECTS_TO");
+    await client.createEntryRelation(
+      owner,
+      hub.id,
+      hidden.id,
+      "CONNECTS_TO",
+      null,
+    );
 
     // querier can see hub and accessible, but NOT hidden
     await client.shareResource(hub.id, querier, "viewer");
     await client.shareResource(accessible.id, querier, "viewer");
 
-    const summary = await client.getRelationSummary(hub.id, querier);
+    const summary = await client.getRelationSummary(hub.id, querier, null);
 
     expect(summary.outbound).toBe(1); // only accessible, not hidden
   });
@@ -2375,9 +2921,11 @@ describe("Neo4jClient.impactAnalysis", () => {
       dependent.id,
       anchor.id,
       "DEPENDS_ON",
+      null,
     );
 
     const result = await client.impactAnalysis({
+      namespaceScope: null,
       userId,
       entryId: anchor.id,
       maxDepth: 4,
@@ -2422,15 +2970,18 @@ describe("Neo4jClient.impactAnalysis", () => {
       direct.id,
       anchor.id,
       "DEPENDS_ON",
+      null,
     );
     await client.createEntryRelation(
       userId,
       indirect.id,
       direct.id,
       "DEPENDS_ON",
+      null,
     );
 
     const result = await client.impactAnalysis({
+      namespaceScope: null,
       userId,
       entryId: anchor.id,
       maxDepth: 4,
@@ -2468,10 +3019,17 @@ describe("Neo4jClient.impactAnalysis", () => {
         title: `Dep${i}`,
         content: "",
       });
-      await client.createEntryRelation(userId, dep.id, anchor.id, "DEPENDS_ON");
+      await client.createEntryRelation(
+        userId,
+        dep.id,
+        anchor.id,
+        "DEPENDS_ON",
+        null,
+      );
     }
 
     const result = await client.impactAnalysis({
+      namespaceScope: null,
       userId,
       entryId: anchor.id,
       maxDepth: 2,
@@ -2488,6 +3046,7 @@ describe("Neo4jClient.impactAnalysis", () => {
   it("throws RESOURCE_NOT_FOUND for a non-existent entry", async () => {
     await expect(
       client.impactAnalysis({
+        namespaceScope: null,
         userId: "user-impact-notfound",
         entryId: "00000000-0000-0000-0000-000000000000",
         maxDepth: 4,
@@ -2534,12 +3093,20 @@ describe("Neo4jClient.impactAnalysis", () => {
       middle.id,
       anchor.id,
       "DEPENDS_ON",
+      null,
     );
-    await client.createEntryRelation(ownerB, top.id, middle.id, "DEPENDS_ON");
+    await client.createEntryRelation(
+      ownerB,
+      top.id,
+      middle.id,
+      "DEPENDS_ON",
+      null,
+    );
 
     // ownerA can see anchor (owns it) but cannot see middle or top (not shared)
     // So the path top→middle→anchor has inaccessible nodes for ownerA → excluded
     const result = await client.impactAnalysis({
+      namespaceScope: null,
       userId: ownerA,
       entryId: anchor.id,
       maxDepth: 4,
@@ -2663,5 +3230,213 @@ describe("Neo4jClient API key helpers", () => {
     await expect(
       client.revokeApiKey("different-user", created.id),
     ).resolves.toBe(false);
+  });
+});
+
+// ── Cross-namespace relations and namespace scope (D-033) ─────────────────────
+
+describe("Neo4jClient cross-namespace traversal and namespace scope", () => {
+  const userId = "user-xns-traversal";
+  const NS_A = "xns-alpha";
+  const NS_B = "xns-beta";
+
+  let anchor: { id: string };
+  let neighbourA: { id: string };
+  let neighbourB: { id: string };
+
+  beforeAll(async () => {
+    anchor = await client.createResource({
+      userId,
+      namespace: NS_A,
+      entry_type: "note",
+      title: "Anchor",
+      content: "",
+    });
+    neighbourA = await client.createResource({
+      userId,
+      namespace: NS_A,
+      entry_type: "note",
+      title: "Neighbour A",
+      content: "",
+    });
+    neighbourB = await client.createResource({
+      userId,
+      namespace: NS_B,
+      entry_type: "note",
+      title: "Neighbour B",
+      content: "",
+    });
+
+    // neighbourA -> anchor -> neighbourB, crossing the namespace boundary once.
+    await client.createEntryRelation(
+      userId,
+      neighbourA.id,
+      anchor.id,
+      "DEPENDS_ON",
+      null,
+    );
+    await client.createEntryRelation(
+      userId,
+      anchor.id,
+      neighbourB.id,
+      "DEPENDS_ON",
+      null,
+    );
+  });
+
+  it("expandContext crosses namespaces when unrestricted", async () => {
+    const layers = await client.expandContext({
+      namespaceScope: null,
+      userId,
+      entryId: anchor.id,
+      maxHops: 2,
+      relationTypes: null,
+      limit: 50,
+    });
+
+    const found = layers.flatMap((l) => l.entries);
+    expect(found.map((e) => e.id).sort()).toEqual(
+      [neighbourA.id, neighbourB.id].sort(),
+    );
+    expect(found.find((e) => e.id === neighbourB.id)?.namespace).toBe(NS_B);
+  });
+
+  it("expandContext confines to the namespace scope", async () => {
+    const layers = await client.expandContext({
+      namespaceScope: [NS_A],
+      userId,
+      entryId: anchor.id,
+      maxHops: 2,
+      relationTypes: null,
+      limit: 50,
+    });
+
+    expect(layers.flatMap((l) => l.entries).map((e) => e.id)).toEqual([
+      neighbourA.id,
+    ]);
+  });
+
+  it("impactAnalysis crosses namespaces and honours the scope", async () => {
+    const unrestricted = await client.impactAnalysis({
+      namespaceScope: null,
+      userId,
+      entryId: neighbourB.id,
+      maxDepth: 4,
+      relationTypes: null,
+      limit: 50,
+    });
+    expect(
+      unrestricted.layers.flatMap((l) => l.entries).map((e) => e.id),
+    ).toContain(anchor.id);
+
+    const scoped = await client.impactAnalysis({
+      namespaceScope: [NS_B],
+      userId,
+      entryId: neighbourB.id,
+      maxDepth: 4,
+      relationTypes: null,
+      limit: 50,
+    });
+    expect(scoped.layers).toEqual([]);
+    expect(scoped.total_impacted).toBe(0);
+  });
+
+  it("getRelationSummary counts across namespaces but not outside the scope", async () => {
+    expect(await client.getRelationSummary(anchor.id, userId, null)).toEqual({
+      outbound: 1,
+      inbound: 1,
+    });
+
+    // The outbound counterpart lives in NS_B, so it drops out of the count.
+    expect(await client.getRelationSummary(anchor.id, userId, [NS_A])).toEqual({
+      outbound: 0,
+      inbound: 1,
+    });
+
+    // The inbound counterpart lives in NS_A, so it drops out instead.
+    expect(await client.getRelationSummary(anchor.id, userId, [NS_B])).toEqual({
+      outbound: 1,
+      inbound: 0,
+    });
+  });
+
+  it("getRelatedEntries crosses namespaces and honours the scope", async () => {
+    const all = await client.getRelatedEntries(userId, anchor.id, null);
+    expect(all.map((r) => r.id).sort()).toEqual(
+      [neighbourA.id, neighbourB.id].sort(),
+    );
+
+    const scoped = await client.getRelatedEntries(userId, anchor.id, [NS_A]);
+    expect(scoped.map((r) => r.id)).toEqual([neighbourA.id]);
+  });
+
+  it("moves an entry with relations to another namespace and keeps the edge", async () => {
+    const mover = await client.createResource({
+      userId,
+      namespace: "move-from",
+      entry_type: "note",
+      title: "Mover",
+      content: "",
+    });
+    const target = await client.createResource({
+      userId,
+      namespace: "move-from",
+      entry_type: "note",
+      title: "Target",
+      content: "",
+    });
+    await client.createEntryRelation(
+      userId,
+      mover.id,
+      target.id,
+      "RELATES_TO",
+      null,
+    );
+
+    await expect(
+      client.updateResource(mover.id, { namespace: "move-to" }),
+    ).resolves.toBeUndefined();
+
+    expect((await client.getResource(mover.id))?.namespace).toBe("move-to");
+    const relations = await client.listEntryRelations(
+      userId,
+      mover.id,
+      "outbound",
+      100,
+      null,
+    );
+    expect(relations).toHaveLength(1);
+    expect(relations[0]?.entry).toMatchObject({
+      id: target.id,
+      namespace: "move-from",
+    });
+  });
+
+  it("confines listResources, searchResources and listNamespaces to the scope", async () => {
+    expect(
+      (
+        await client.listResources({
+          userId,
+          namespaceScope: [NS_A],
+          namespace: NS_B,
+        })
+      ).map((r) => r.id),
+    ).toEqual([]);
+
+    expect(
+      (
+        await client.searchResources({
+          userId,
+          query: "Neighbour",
+          namespaceScope: [NS_A],
+        })
+      ).map((r) => r.id),
+    ).toEqual([neighbourA.id]);
+
+    const namespaces = await client.listNamespaces({
+      userId,
+      namespaceScope: [NS_A],
+    });
+    expect(namespaces.map((n) => n.namespace)).toEqual([NS_A]);
   });
 });

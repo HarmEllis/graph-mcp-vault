@@ -6,6 +6,7 @@ import {
   type RegisteredTool,
   type ToolContext,
   ToolError,
+  assertNamespaceInScope,
 } from "./registry.js";
 
 const getNamespaceConfigSchema = z.object({
@@ -25,6 +26,7 @@ async function handleGetNamespaceConfig(
     );
   }
   const namespace = parsed.data.namespace ?? ctx.namespace;
+  assertNamespaceInScope(ctx, namespace);
   return await neo4jClient.getNamespaceConfig(ctx.userId, namespace);
 }
 
@@ -65,6 +67,7 @@ async function handleUpdateNamespaceConfig(
     );
   }
   const namespace = parsed.data.namespace ?? ctx.namespace;
+  assertNamespaceInScope(ctx, namespace);
 
   const uniqueUserIds =
     parsed.data.auto_share_user_ids === undefined

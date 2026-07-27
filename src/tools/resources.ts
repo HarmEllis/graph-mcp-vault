@@ -26,6 +26,7 @@ import {
   type RegisteredTool,
   type ToolContext,
   ToolError,
+  assertNamespaceInScope,
 } from "./registry.js";
 
 // ── Permission helpers ────────────────────────────────────────────────────────
@@ -57,12 +58,7 @@ async function requirePermission(
   if (!resource)
     throw new ToolError(ErrorCode.RESOURCE_NOT_FOUND, "Resource not found");
 
-  if (ctx.lockedNamespace && resource.namespace !== ctx.namespace) {
-    throw new ToolError(
-      ErrorCode.PERMISSION_DENIED,
-      `Entry namespace does not match locked namespace: ${ctx.namespace}`,
-    );
-  }
+  assertNamespaceInScope(ctx, resource.namespace);
 
   const role = await neo4jClient.getEffectiveRole(ctx.userId, entryId);
   if (role === null || !hasPermission(role, permission)) {
@@ -71,21 +67,22 @@ async function requirePermission(
   return role;
 }
 
-async function assertLockedNamespace(
+/**
+ * Rejects an entry that lies outside the session's namespace scope.
+ *
+ * Preflight only, for precise error reporting — the Neo4j queries apply the
+ * same scope themselves (DECISIONS.md D-033).
+ */
+async function assertEntryInScope(
   neo4jClient: Neo4jClient,
   ctx: ToolContext,
   entryId: string,
 ): Promise<void> {
-  if (!ctx.lockedNamespace) return;
+  if (ctx.namespaceScope === null) return;
   const resource = await neo4jClient.getResource(entryId);
   if (!resource)
     throw new ToolError(ErrorCode.RESOURCE_NOT_FOUND, "Resource not found");
-  if (resource.namespace !== ctx.namespace) {
-    throw new ToolError(
-      ErrorCode.PERMISSION_DENIED,
-      `Entry namespace does not match locked namespace: ${ctx.namespace}`,
-    );
-  }
+  assertNamespaceInScope(ctx, resource.namespace);
 }
 
 function throwMappedClientError(error: unknown): never {
@@ -150,6 +147,7 @@ async function handleCreate(
     versioned,
   } = parsed.data;
   const effectiveNamespace = namespace ?? ctx.namespace;
+  assertNamespaceInScope(ctx, effectiveNamespace);
 
   const created = await neo4jClient.createResource({
     userId: ctx.userId,
@@ -216,12 +214,7 @@ async function handleGet(
   if (!resource)
     throw new ToolError(ErrorCode.RESOURCE_NOT_FOUND, "Resource not found");
 
-  if (ctx.lockedNamespace && resource.namespace !== ctx.namespace) {
-    throw new ToolError(
-      ErrorCode.PERMISSION_DENIED,
-      `Entry namespace does not match locked namespace: ${ctx.namespace}`,
-    );
-  }
+  assertNamespaceInScope(ctx, resource.namespace);
 
   const role = await neo4jClient.getEffectiveRole(ctx.userId, entry_id);
   if (role === null)
@@ -230,6 +223,7 @@ async function handleGet(
   const { outbound, inbound } = await neo4jClient.getRelationSummary(
     entry_id,
     ctx.userId,
+    ctx.namespaceScope,
   );
   return {
     ...resource,
@@ -262,6 +256,7 @@ async function handleList(
   const resources = await neo4jClient.listResources({
     userId: ctx.userId,
     namespace: parsed.data.namespace ?? ctx.namespace,
+    namespaceScope: ctx.namespaceScope,
     ...(parsed.data.entry_type !== undefined && {
       entry_type: parsed.data.entry_type,
     }),
@@ -312,6 +307,8 @@ async function handleUpdate(
   } = parsed.data;
 
   await requirePermission(neo4jClient, ctx, entry_id, "write");
+  // A move must land inside the session scope, not just start inside it.
+  if (namespace !== undefined) assertNamespaceInScope(ctx, namespace);
 
   let versioningArg: { changedBy: string; maxVersions: number } | undefined;
   if (maxVersionsLimit > 0) {
@@ -415,6 +412,7 @@ async function handleSearch(
   const resources = await neo4jClient.searchResources({
     userId: ctx.userId,
     query: parsed.data.query,
+    namespaceScope: ctx.namespaceScope,
     ...(effectiveNamespace !== undefined && { namespace: effectiveNamespace }),
     ...(parsed.data.entry_type !== undefined && {
       entry_type: parsed.data.entry_type,
@@ -466,8 +464,8 @@ async function handleCreateRelation(
   }
   const { from_id, to_id, relation_type, label } = parsed.data;
 
-  await assertLockedNamespace(neo4jClient, ctx, from_id);
-  await assertLockedNamespace(neo4jClient, ctx, to_id);
+  await assertEntryInScope(neo4jClient, ctx, from_id);
+  await assertEntryInScope(neo4jClient, ctx, to_id);
 
   try {
     await neo4jClient.createEntryRelation(
@@ -475,6 +473,7 @@ async function handleCreateRelation(
       from_id,
       to_id,
       relation_type,
+      ctx.namespaceScope,
       label,
     );
     return {};
@@ -505,8 +504,8 @@ async function handleDeleteRelation(
   }
   const { from_id, to_id, relation_type } = parsed.data;
 
-  await assertLockedNamespace(neo4jClient, ctx, from_id);
-  await assertLockedNamespace(neo4jClient, ctx, to_id);
+  await assertEntryInScope(neo4jClient, ctx, from_id);
+  await assertEntryInScope(neo4jClient, ctx, to_id);
 
   try {
     await neo4jClient.deleteEntryRelation(
@@ -514,6 +513,7 @@ async function handleDeleteRelation(
       from_id,
       to_id,
       relation_type,
+      ctx.namespaceScope,
     );
     return {};
   } catch (error) {
@@ -544,7 +544,7 @@ async function handleListRelations(
   const { entry_id, direction, limit: rawLimit } = parsed.data;
   const limit = rawLimit ?? DEFAULT_LIST_RELATIONS_LIMIT;
 
-  await assertLockedNamespace(neo4jClient, ctx, entry_id);
+  await assertEntryInScope(neo4jClient, ctx, entry_id);
 
   try {
     const relations = await neo4jClient.listEntryRelations(
@@ -552,6 +552,7 @@ async function handleListRelations(
       entry_id,
       (direction ?? "both") as EntryRelationDirection,
       limit,
+      ctx.namespaceScope,
     );
     return { relations };
   } catch (error) {
@@ -595,7 +596,7 @@ async function handleExpandContext(
   const maxHops = rawHops ?? DEFAULT_MAX_HOPS;
   const limit = rawLimit ?? DEFAULT_EXPAND_CONTEXT_LIMIT;
 
-  await assertLockedNamespace(neo4jClient, ctx, entry_id);
+  await assertEntryInScope(neo4jClient, ctx, entry_id);
 
   try {
     const layers = await neo4jClient.expandContext({
@@ -605,6 +606,7 @@ async function handleExpandContext(
       maxHops,
       relationTypes: relation_types ?? null,
       limit,
+      namespaceScope: ctx.namespaceScope,
     });
     return { layers };
   } catch (error) {
@@ -647,8 +649,8 @@ async function handleFindPaths(
   const maxPaths = rawPaths ?? DEFAULT_MAX_PATHS;
   const dir = direction ?? "both";
 
-  await assertLockedNamespace(neo4jClient, ctx, from_id);
-  await assertLockedNamespace(neo4jClient, ctx, to_id);
+  await assertEntryInScope(neo4jClient, ctx, from_id);
+  await assertEntryInScope(neo4jClient, ctx, to_id);
 
   try {
     const paths = await neo4jClient.findPaths({
@@ -659,6 +661,7 @@ async function handleFindPaths(
       maxPaths,
       relationTypes: relation_types ?? null,
       direction: dir,
+      namespaceScope: ctx.namespaceScope,
     });
 
     // Hint: when no path found and direction was explicit, suggest alternatives
@@ -711,8 +714,8 @@ async function handleExplainRelationship(
   const maxDepth = rawDepth ?? DEFAULT_MAX_DEPTH;
   const maxPaths = rawPaths ?? DEFAULT_MAX_PATHS;
 
-  await assertLockedNamespace(neo4jClient, ctx, entry_a_id);
-  await assertLockedNamespace(neo4jClient, ctx, entry_b_id);
+  await assertEntryInScope(neo4jClient, ctx, entry_a_id);
+  await assertEntryInScope(neo4jClient, ctx, entry_b_id);
 
   try {
     return await neo4jClient.explainRelationship({
@@ -721,6 +724,7 @@ async function handleExplainRelationship(
       entryBId: entry_b_id,
       maxDepth,
       maxPaths,
+      namespaceScope: ctx.namespaceScope,
     });
   } catch (error) {
     throwMappedClientError(error);
@@ -757,7 +761,7 @@ async function handleImpactAnalysis(
   const maxDepth = rawDepth ?? DEFAULT_MAX_DEPTH;
   const limit = rawLimit ?? DEFAULT_IMPACT_LIMIT;
 
-  await assertLockedNamespace(neo4jClient, ctx, entry_id);
+  await assertEntryInScope(neo4jClient, ctx, entry_id);
 
   try {
     const result = await neo4jClient.impactAnalysis({
@@ -766,6 +770,7 @@ async function handleImpactAnalysis(
       maxDepth,
       relationTypes: relation_types ?? null,
       limit,
+      namespaceScope: ctx.namespaceScope,
     });
     return result;
   } catch (error) {
@@ -780,15 +785,10 @@ async function handleListNamespaces(
   ctx: ToolContext,
   neo4jClient: Neo4jClient,
 ): Promise<unknown> {
-  const allNamespaces = await neo4jClient.listNamespaces({
+  const namespaces = await neo4jClient.listNamespaces({
     userId: ctx.userId,
+    namespaceScope: ctx.namespaceScope,
   });
-  const namespaces =
-    ctx.authMethod === "api_key" && ctx.allowedNamespaces != null
-      ? allNamespaces.filter((n) =>
-          ctx.allowedNamespaces?.includes(n.namespace),
-        )
-      : allNamespaces;
 
   // Ensure the current session namespace is always present, even with zero counts
   if (!namespaces.some((n) => n.namespace === ctx.namespace)) {
@@ -1025,7 +1025,7 @@ export function createResourceTools(
             namespace: {
               type: "string",
               description:
-                "Move entry to a different namespace. Not allowed if the entry has existing relations.",
+                "Move entry to a different namespace. Existing relations are preserved and may end up crossing namespaces.",
             },
             topic: { type: "string" },
             tags: { type: "array", items: { type: "string" } },
@@ -1061,7 +1061,7 @@ export function createResourceTools(
       descriptor: {
         name: "knowledge_create_relation",
         description:
-          "Create a typed relation between two knowledge entries. Requires read access to both entries.",
+          "Create a typed relation between two knowledge entries. The entries may live in different namespaces. Requires read access to both entries.",
         inputSchema: {
           type: "object",
           properties: {
@@ -1112,7 +1112,7 @@ export function createResourceTools(
       descriptor: {
         name: "knowledge_list_relations",
         description:
-          "List entry relations for one entry. Returns outbound, inbound, or both directions.",
+          "List entry relations for one entry. Returns outbound, inbound, or both directions. Counterparts may live in another namespace; each result reports the counterpart's namespace.",
         inputSchema: {
           type: "object",
           properties: {
@@ -1186,7 +1186,7 @@ export function createResourceTools(
       descriptor: {
         name: "knowledge_expand_context",
         description:
-          "Expand the neighborhood of an entry by traversing entry relations up to max_hops away. Returns entries grouped by hop distance. Only includes entries the caller can read. Use this to explore related knowledge around a central entry.",
+          "Expand the neighborhood of an entry by traversing entry relations up to max_hops away. Returns entries grouped by hop distance, each with its namespace. Traversal crosses namespaces; only entries the caller can read are included. Use this to explore related knowledge around a central entry.",
         inputSchema: {
           type: "object",
           properties: {
@@ -1223,7 +1223,7 @@ export function createResourceTools(
       descriptor: {
         name: "knowledge_find_paths",
         description:
-          "Find paths between two entries via entry relations. Searches in both directions by default (undirected). Use direction to restrict to outbound-only or inbound-only traversal. Only returns paths where every intermediate node is accessible to the caller. Both entries must be in the same namespace.",
+          "Find paths between two entries via entry relations. Searches in both directions by default (undirected). Use direction to restrict to outbound-only or inbound-only traversal. Traversal crosses namespaces; only paths where every intermediate node is accessible to the caller are returned.",
         inputSchema: {
           type: "object",
           properties: {
@@ -1265,7 +1265,7 @@ export function createResourceTools(
       descriptor: {
         name: "knowledge_explain_relationship",
         description:
-          "Explain how two entries are connected. Finds direct relations and all indirect paths between them (undirected, up to max_depth hops). Returns a structured result including human-readable path strings like 'NAS <-[MANAGED_BY]- Management VM -[CONNECTS_TO]-> PiKVM'. Use this as the primary tool when the user asks how two things are related.",
+          "Explain how two entries are connected. Finds direct relations and all indirect paths between them (undirected, up to max_depth hops), including connections that cross namespaces. Returns a structured result including human-readable path strings like 'NAS <-[MANAGED_BY]- Management VM -[CONNECTS_TO]-> PiKVM'. Use this as the primary tool when the user asks how two things are related.",
         inputSchema: {
           type: "object",
           properties: {
@@ -1295,7 +1295,7 @@ export function createResourceTools(
       descriptor: {
         name: "knowledge_impact_analysis",
         description:
-          "Find all entries that depend on or reference a given entry, grouped by hop distance (impact layers). Identifies what would be affected if the anchor entry changes. Only readable entries are included.",
+          "Find all entries that depend on or reference a given entry, grouped by hop distance (impact layers). Identifies what would be affected if the anchor entry changes. Traversal crosses namespaces; only readable entries are included.",
         inputSchema: {
           type: "object",
           properties: {

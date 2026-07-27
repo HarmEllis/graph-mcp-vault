@@ -17,6 +17,7 @@ import { createMcpRouter } from "../src/routers/mcp.js";
 import { initSchema } from "../src/schema.js";
 import { SessionStore } from "../src/session.js";
 import { createApiKeyTools } from "../src/tools/api-keys.js";
+import { createResourceTools } from "../src/tools/resources.js";
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -108,6 +109,23 @@ function buildApp(configOverride: Partial<Config> = {}): Hono {
   const tools = config.apiKeysEnabled
     ? createApiKeyTools(neo4jClient, config)
     : [];
+  const app = new Hono();
+  app.route(
+    "/",
+    createMcpRouter(config, sessionStore, jwksClient, tools, neo4jClient, ""),
+  );
+  return app;
+}
+
+/** Like buildApp, but with the entry/relation tools registered as well. */
+function buildAppWithResourceTools(): Hono {
+  const config = BASE_CONFIG;
+  const sessionStore = new SessionStore();
+  const jwksClient = new JwksClient(JWKS_URI, config.jwksCacheTtl * 1000);
+  const tools = [
+    ...createApiKeyTools(neo4jClient, config),
+    ...createResourceTools(neo4jClient, config.maxVersionsLimit),
+  ];
   const app = new Hono();
   app.route(
     "/",
@@ -797,7 +815,7 @@ describe("API key middleware", () => {
     expect(status).toBe(401);
   });
 
-  it("locks the session namespace for namespace-restricted keys", async () => {
+  it("blocks a namespace argument outside a restricted key's allow-list", async () => {
     const app = buildApp();
     const sub = uniqueUser();
     const token = await makeToken(sub);
@@ -1377,5 +1395,197 @@ describe("session credential binding", () => {
     });
 
     expect(res.status).toBe(200);
+  });
+});
+
+// ── Multi-namespace API keys and the effective namespace scope (D-033) ────────
+
+describe("API key namespace scope", () => {
+  /** Creates an API key for `sub` with the given allow-list and returns the raw key. */
+  async function mintKey(
+    app: Hono,
+    sub: string,
+    namespaces: string[] | undefined,
+  ): Promise<string> {
+    const token = await makeToken(sub);
+    const { sessionId } = await openSession(app, `Bearer ${token}`);
+    const { body } = await callTool(
+      app,
+      `Bearer ${token}`,
+      sessionId,
+      "knowledge_create_api_key",
+      {
+        name: `key-${randomUUID()}`,
+        ...(namespaces !== undefined ? { namespaces } : {}),
+      },
+    );
+    return toolResult(body).key as string;
+  }
+
+  async function createEntry(
+    app: Hono,
+    auth: string,
+    sessionId: string,
+    namespace: string,
+    title: string,
+  ): Promise<string> {
+    const { body } = await callTool(
+      app,
+      auth,
+      sessionId,
+      "knowledge_create_entry",
+      { entry_type: "note", title, content: "", namespace },
+    );
+    return toolResult(body).id as string;
+  }
+
+  it("lets a multi-namespace key work across its whole allow-list", async () => {
+    const app = buildAppWithResourceTools();
+    const sub = uniqueUser();
+    const rawKey = await mintKey(app, sub, ["scope-a", "scope-b"]);
+    const auth = `Bearer ${rawKey}`;
+
+    const { sessionId, status } = await openSession(app, auth, {
+      urlPath: "/mcp/scope-a",
+    });
+    expect(status).toBe(200);
+
+    // Writing into the other allowed namespace is permitted.
+    const idA = await createEntry(app, auth, sessionId, "scope-a", "A");
+    const idB = await createEntry(app, auth, sessionId, "scope-b", "B");
+
+    // …as is relating the two across the boundary.
+    const { body: relBody } = await callTool(
+      app,
+      auth,
+      sessionId,
+      "knowledge_create_relation",
+      { from_id: idA, to_id: idB, relation_type: "CONNECTS_TO" },
+    );
+    expect(isToolError(relBody)).toBe(false);
+
+    const { body: listBody } = await callTool(
+      app,
+      auth,
+      sessionId,
+      "knowledge_list_relations",
+      { entry_id: idA, direction: "outbound" },
+    );
+    const relations = toolResult(listBody).relations as Array<{
+      entry: { id: string; namespace: string };
+    }>;
+    expect(relations).toHaveLength(1);
+    expect(relations[0]?.entry).toMatchObject({
+      id: idB,
+      namespace: "scope-b",
+    });
+
+    // Namespace discovery reflects the allow-list, not just the URL namespace.
+    const { body: nsBody } = await callTool(
+      app,
+      auth,
+      sessionId,
+      "knowledge_list_namespaces",
+      {},
+    );
+    expect(
+      (
+        nsBody &&
+        (toolResult(nsBody).namespaces as Array<{ namespace: string }>)
+      )
+        .map((n) => n.namespace)
+        .sort(),
+    ).toEqual(["scope-a", "scope-b"]);
+  });
+
+  it("confines a multi-namespace key to the URL namespace under ?lock_namespace", async () => {
+    const app = buildAppWithResourceTools();
+    const sub = uniqueUser();
+    const rawKey = await mintKey(app, sub, ["locked-a", "locked-b"]);
+    const auth = `Bearer ${rawKey}`;
+
+    // Seed one entry per namespace using an unlocked session.
+    const { sessionId: openSid } = await openSession(app, auth, {
+      urlPath: "/mcp/locked-a",
+    });
+    const idA = await createEntry(app, auth, openSid, "locked-a", "A");
+    const idB = await createEntry(app, auth, openSid, "locked-b", "B");
+
+    const { sessionId: lockedSid, status } = await openSession(app, auth, {
+      urlPath: "/mcp/locked-a?lock_namespace=true",
+    });
+    expect(status).toBe(200);
+
+    // Entries in the other allowed namespace are unreachable.
+    const { body: getBody } = await callTool(
+      app,
+      auth,
+      lockedSid,
+      "knowledge_get_entry",
+      { entry_id: idB },
+    );
+    expect(isToolError(getBody)).toBe(true);
+
+    // …and so is relating across the boundary.
+    const { body: relBody } = await callTool(
+      app,
+      auth,
+      lockedSid,
+      "knowledge_create_relation",
+      { from_id: idA, to_id: idB, relation_type: "CONNECTS_TO" },
+    );
+    expect(toolResult(relBody).code).toBe(ErrorCode.PERMISSION_DENIED);
+
+    // Namespace discovery narrows to the locked namespace.
+    const { body: nsBody } = await callTool(
+      app,
+      auth,
+      lockedSid,
+      "knowledge_list_namespaces",
+      {},
+    );
+    expect(
+      (toolResult(nsBody).namespaces as Array<{ namespace: string }>).map(
+        (n) => n.namespace,
+      ),
+    ).toEqual(["locked-a"]);
+
+    // Child keys cannot be minted for the namespace the session cannot reach.
+    const { body: mintBody } = await callTool(
+      app,
+      auth,
+      lockedSid,
+      "knowledge_create_api_key",
+      { name: "escalation-attempt", namespaces: ["locked-b"] },
+    );
+    expect(isToolError(mintBody)).toBe(true);
+  });
+
+  it("still denies a single-namespace key access to another namespace", async () => {
+    const app = buildAppWithResourceTools();
+    const sub = uniqueUser();
+    const rawKey = await mintKey(app, sub, ["single-a"]);
+    const auth = `Bearer ${rawKey}`;
+
+    const { status } = await openSession(app, auth, {
+      urlPath: "/mcp/single-b",
+    });
+    expect(status).toBe(401);
+
+    const { sessionId } = await openSession(app, auth, {
+      urlPath: "/mcp/single-a",
+    });
+    const { body } = await callTool(
+      app,
+      auth,
+      sessionId,
+      "knowledge_create_entry",
+      { entry_type: "note", title: "X", content: "", namespace: "single-b" },
+    );
+    // The router's scope gate fires before the handler, so this is a JSON-RPC
+    // error rather than a tool result.
+    expect((body as { error?: { code: number } }).error?.code).toBe(
+      ErrorCode.PERMISSION_DENIED,
+    );
   });
 });

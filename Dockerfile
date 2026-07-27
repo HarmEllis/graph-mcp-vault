@@ -12,7 +12,8 @@ RUN pnpm install --frozen-lockfile
 
 COPY tsconfig.json ./
 COPY src ./src
-RUN pnpm build && cp src/server-instructions.md dist/src/server-instructions.md
+# postbuild copies server-instructions.md into dist — see package.json.
+RUN pnpm build
 
 # ── Production stage ──────────────────────────────────────────────────────────
 FROM node:24-slim AS final

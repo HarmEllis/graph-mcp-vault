@@ -437,7 +437,11 @@ Relation type values are validated against `^[A-Z][A-Z0-9_]{1,63}$` (UPPER_SNAKE
 - Create: caller must have at least read (viewer) access to both entries.
 - List: caller must have at least read access to the anchor entry; counterpart entries the caller cannot read are silently filtered from results.
 - Delete: caller must be the owner of the source (`from`) entry.
-- Additional constraints: both entries must be in the same namespace; self-relations (`from_id == to_id`) are rejected.
+- Additional constraints: self-relations (`from_id == to_id`) are rejected.
+
+> **Amended by D-033 (2026-07-27)**: the original "both entries must be in the same namespace"
+> constraint has been removed. Relations may now connect entries in different namespaces; visibility
+> is confined by the session's effective namespace scope instead.
 
 **Rationale**:
 - A single relationship label with a typed property is more flexible than one Neo4j relationship type per semantic (which would require schema changes for each new relation type). The `relation_type` property index (`entry_relation_type`, added in schema v3) keeps typed lookups efficient.
@@ -621,6 +625,11 @@ Keys are stored as scrypt digests in a new `(:ApiKey)` Neo4j node using `API_KEY
 **Security properties**:
 - Keys carry an optional `namespaces` allow-list; restricted keys force `lockedNamespace=true`
   on the session and cannot mint keys with broader scope than their own allow-list.
+  > **Amended by D-033 (2026-07-27)**: restricted keys no longer force `lockedNamespace=true`. The
+  > allow-list becomes the session's effective namespace scope, so a key scoped to several
+  > namespaces can work across all of them. `?lock_namespace=true` still narrows the session to a
+  > single namespace, and key administration is capped by the effective scope rather than the raw
+  > allow-list.
 - Expired keys (`expires_at` in the past) and revoked keys (`revoked=true`) are rejected at
   auth time and excluded from the active-key count for limit enforcement.
 - `API_KEYS_ENABLED=false` (the default) causes any `gmv_` token to return HTTP 401 so that
@@ -633,3 +642,105 @@ configured; API keys complement OIDC rather than replacing it.
 **Rejected alternative**: allow API keys to replace OIDC entirely (air-gapped mode). Rejected
 for this iteration because it requires conditional OIDC discovery, bootstrap secret management,
 and additional startup logic. Deferred to a follow-up.
+
+---
+
+## D-033 — Cross-namespace entry relations and explicit session namespace scope (breaking)
+
+**Date**: 2026-07-27
+**Status**: Accepted
+
+**Decision**: `ENTRY_RELATION` edges may connect entries in different namespaces. The
+same-namespace constraint is removed from `createEntryRelation`, `findPaths` and
+`explainRelationship`, the `neighbor.namespace = start.namespace` /
+`impacted.namespace = start.namespace` predicates are removed from `expandContext` and
+`impactAnalysis`, and the `Cannot change namespace: entry has existing relations` guard is removed
+from `updateResource`.
+
+Namespace confinement becomes an explicit, first-class concept: every session derives one
+**effective namespace scope**, `NamespaceScope = readonly string[] | null`, where `null` means
+unrestricted. It is computed by `sessionNamespaceScope()` in `src/session.ts`:
+
+| Session | Effective scope |
+| --- | --- |
+| JWT, no `?lock_namespace` | `null` |
+| JWT + `?lock_namespace=true` | `[session.namespace]` |
+| API key with a `namespaces` allow-list | the allow-list |
+| API key with allow-list + `?lock_namespace=true` | `[session.namespace]` |
+| API key without allow-list | `null` (or `[session.namespace]` under `?lock_namespace=true`) |
+
+Precedence: hard lock → allow-list → unrestricted. The scope narrows what a session may see; it
+never widens it. Per-entry authorization (`OWNS` / `HAS_ACCESS`) is unchanged and still applies.
+
+The scope **replaces `lockedNamespace` as the enforcement primitive**:
+
+- `lockedNamespace` and `allowedNamespaces` remain on `Session` for derivation and audit logging,
+  but are removed from `ToolContext`, which carries a required `namespaceScope` instead.
+- Namespace-restricted API keys no longer force `lockedNamespace = true`.
+- `NAMESPACE_INJECT_TOOLS` is deleted. `knowledge_search_entries` no longer has its `namespace`
+  argument silently injected; the scope is applied as a Cypher predicate instead.
+- For the relation, traversal, search and listing surface, the enforcement boundary is the database
+  query: those methods take a required `namespaceScope` parameter and apply
+  `($namespaceScope IS NULL OR n.namespace IN $namespaceScope)` to every node they touch — for
+  traversals, inside the single `ALL(n IN nodes(path) …)` clause that also checks read access.
+  Concretely: `listEntryRelations`, `getRelationSummary`, `getRelatedEntries`, `expandContext`,
+  `impactAnalysis`, `findPaths`, `explainRelationship`, `searchResources`, `listResources`,
+  `listNamespaces`, plus `createEntryRelation` and `deleteEntryRelation`. Traversal endpoints are
+  resolved through `resolveEndpoint`, which combines existence, scope and read access in one query
+  so an out-of-scope endpoint cannot leak its metadata.
+  Tool-layer preflight checks on this surface are retained only to classify errors.
+- Relation mutations (`createEntryRelation`, `deleteEntryRelation`) authorize inside the write
+  transaction rather than in preceding reads.
+
+**Rationale**:
+- Knowledge genuinely spans namespaces: an entry in `homelab` can legitimately `DEPENDS_ON` an
+  entry in `work`. The same-namespace rule forced users to duplicate entries or give up the link.
+- Traversal crossing namespaces by default follows D-030 and D-031: an opt-in flag reproduces the
+  silent-empty-result failure mode both of those decisions rejected, because the LLM has no signal
+  that the flag is what it is missing.
+- The same-namespace rule was *incidentally* what confined a locked session — removing it without
+  an explicit scope would have leaked out-of-scope entries through `expand_context` and
+  `list_relations`. Making the scope explicit and required (non-optional, so `tsc` flags every call
+  site) turns an accidental property into a checked one.
+- Making the allow-list the effective scope is what a multi-namespace API key was always for; being
+  pinned to whichever namespace happened to be chosen at `initialize` made the extra entries in the
+  allow-list unusable.
+- Enforcing in Cypher rather than in preflight closes the TOCTOU window between the permission read
+  and the write, which lifting the same-namespace invariant would otherwise widen.
+
+**Migration impact** (breaking):
+- Unscoped sessions and multi-namespace API keys receive **more** traversal, path and relation
+  results than before, because results are no longer clipped at the namespace boundary.
+- Multi-namespace API keys become **less restricted**: they can now read and write across their
+  whole allow-list. Review existing keys.
+- `knowledge_create_relation` and `knowledge_update_entry` calls that previously failed with
+  `INVALID_PARAMS` now succeed. Those error paths are gone.
+- Relation counts from `knowledge_get_entry` become scope-sensitive.
+- `knowledge_list_namespaces` and API-key administration narrow under `?lock_namespace=true`
+  (previously a locked JWT session still saw all its namespaces and could mint unrestricted keys).
+- Result objects gain an additive `namespace` field on relation counterparts, traversal entries,
+  path nodes and `explain_relationship` endpoints. Strict JSON decoders may need updating.
+- Clients that relied on namespace isolation should open their session with
+  `?lock_namespace=true`, which reproduces the previous behaviour.
+- **No graph migration and no schema-version bump.** Cross-namespace edges use the existing
+  `ENTRY_RELATION` shape and the `entry_relation_type` index; `SCHEMA_VERSION` stays 8. Existing
+  relations remain valid.
+
+**Known gap (unchanged by this decision)**: the single-entry mutation and sharing methods —
+`updateResource`, `deleteResource`, the version methods (`listVersions`, `getVersion`,
+`restoreVersion`), `shareResource`, `revokeAccess` and `listSharing` — still take only a resource ID
+and rely on their tool handlers for the scope and role checks, in separate queries. A user holding
+both a scoped and an unscoped session could therefore move an entry out of the scoped session's
+reach between its preflight and the operation, and the operation would still go through. This is a
+self-inflicted race rather than a cross-user escalation — the scope confines a credential its own
+holder already exceeds — but it does mean the database-boundary rule above does not yet cover these
+methods. Folding `userId` and `namespaceScope` into their queries is tracked as follow-up work.
+
+**Rejected alternative**: keep the namespace boundary in traversal and add a `cross_namespace: true`
+parameter per tool. Rejected for the same reason as in D-030 and D-031 — a relation the caller just
+created would stay invisible until the caller knew to pass the flag, and the tool would look broken
+rather than scoped.
+
+**Rejected alternative**: keep enforcing the scope only in the tool layer, as the `lockedNamespace`
+checks did. Rejected because it leaves the database queries themselves unconstrained, so every new
+query is one forgotten preflight call away from leaking out-of-scope entries.

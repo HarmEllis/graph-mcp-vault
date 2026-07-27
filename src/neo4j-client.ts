@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import neo4j, { type Driver } from "neo4j-driver";
+import type { NamespaceScope } from "./session.js";
 
 // ── Domain types ──────────────────────────────────────────────────────────────
 
@@ -94,10 +95,28 @@ export interface EntryRelation {
   entry: {
     id: string;
     title: string;
+    namespace: string;
   };
 }
 
 export const ENTRY_RELATION_TYPE_REGEX = /^[A-Z][A-Z0-9_]{1,63}$/;
+
+// ── Namespace scope ───────────────────────────────────────────────────────────
+//
+// Every query that reads or mutates a Resource confines itself to the session's
+// effective namespace scope (DECISIONS.md D-033). `$namespaceScope` is bound to
+// a real `null` for unrestricted sessions, which short-circuits the predicate —
+// the same idiom already used for `$namespace` and `$relTypes`.
+
+/** The scope predicate for a single bound node variable. */
+function nsScope(nodeVar: string): string {
+  return `($namespaceScope IS NULL OR ${nodeVar}.namespace IN $namespaceScope)`;
+}
+
+/** Converts a `NamespaceScope` into a Cypher parameter value. */
+function nsScopeParam(scope: NamespaceScope): string[] | null {
+  return scope === null ? null : [...scope];
+}
 export type Neo4jClientErrorCode =
   | "INVALID_PARAMS"
   | "RESOURCE_NOT_FOUND"
@@ -105,11 +124,16 @@ export type Neo4jClientErrorCode =
 
 export interface ExpandContextLayer {
   distance: number;
-  entries: Array<{ id: string; title: string }>;
+  entries: Array<{ id: string; title: string; namespace: string }>;
 }
 
 export interface PathResult {
-  nodes: Array<{ id: string; title: string; entry_type: string }>;
+  nodes: Array<{
+    id: string;
+    title: string;
+    entry_type: string;
+    namespace: string;
+  }>;
   relations: Array<{
     relation_type: string;
     label?: string;
@@ -120,7 +144,12 @@ export interface PathResult {
 }
 
 export interface RelationshipPath {
-  nodes: Array<{ id: string; title: string; entry_type: string }>;
+  nodes: Array<{
+    id: string;
+    title: string;
+    entry_type: string;
+    namespace: string;
+  }>;
   relations: Array<{
     relation_type: string;
     label?: string;
@@ -133,8 +162,8 @@ export interface RelationshipPath {
 }
 
 export interface ExplainRelationshipResult {
-  entry_a: { id: string; title: string; entry_type: string };
-  entry_b: { id: string; title: string; entry_type: string };
+  entry_a: { id: string; title: string; entry_type: string; namespace: string };
+  entry_b: { id: string; title: string; entry_type: string; namespace: string };
   /** Relations where A and B are directly connected (no intermediates). */
   direct_relations: Array<{
     relation_type: string;
@@ -968,6 +997,7 @@ export class Neo4jClient {
    */
   async listResources(params: {
     userId: string;
+    namespaceScope: NamespaceScope;
     namespace?: string;
     entry_type?: string;
     limit?: number;
@@ -981,6 +1011,7 @@ export class Neo4jClient {
         `
         MATCH (u:User {id: $userId})-[:OWNS|HAS_ACCESS]->(r:Resource)
         WHERE ($namespace IS NULL OR r.namespace = $namespace)
+          AND ${nsScope("r")}
           AND ($entry_type IS NULL OR r.entry_type = $entry_type)
         RETURN r,
           CASE WHEN (u)-[:OWNS]->(r) THEN 'owner' ELSE 'shared' END AS ownership
@@ -990,6 +1021,7 @@ export class Neo4jClient {
         {
           userId: params.userId,
           namespace: params.namespace ?? null,
+          namespaceScope: nsScopeParam(params.namespaceScope),
           entry_type: params.entry_type ?? null,
           skip: neo4j.int(skip),
           limit: neo4j.int(limit),
@@ -1057,25 +1089,6 @@ export class Neo4jClient {
           try {
             const versionId = randomUUID();
             await session.executeWrite(async (tx) => {
-              if (params.namespace !== undefined) {
-                const guardResult = await tx.run(
-                  `MATCH (r:Resource {id: $id})
-                   RETURN r.namespace AS currentNamespace,
-                          EXISTS { (r)-[:ENTRY_RELATION]-() } AS hasRelations`,
-                  { id: resourceId },
-                );
-                const rec = guardResult.records[0];
-                if (
-                  rec &&
-                  rec.get("currentNamespace") !== params.namespace &&
-                  rec.get("hasRelations") === true
-                ) {
-                  throw new Neo4jClientError(
-                    "INVALID_PARAMS",
-                    "Cannot change namespace: entry has existing relations",
-                  );
-                }
-              }
               await tx.run(
                 `
             MATCH (r:Resource {id: $resourceId})
@@ -1131,25 +1144,6 @@ export class Neo4jClient {
         if (lastErr != null) throw lastErr;
       } else {
         await session.executeWrite(async (tx) => {
-          if (params.namespace !== undefined) {
-            const guardResult = await tx.run(
-              `MATCH (r:Resource {id: $id})
-               RETURN r.namespace AS currentNamespace,
-                      EXISTS { (r)-[:ENTRY_RELATION]-() } AS hasRelations`,
-              { id: resourceId },
-            );
-            const rec = guardResult.records[0];
-            if (
-              rec &&
-              rec.get("currentNamespace") !== params.namespace &&
-              rec.get("hasRelations") === true
-            ) {
-              throw new Neo4jClientError(
-                "INVALID_PARAMS",
-                "Cannot change namespace: entry has existing relations",
-              );
-            }
-          }
           await tx.run("MATCH (r:Resource {id: $id}) SET r += $patch", {
             id: resourceId,
             patch,
@@ -1331,6 +1325,7 @@ export class Neo4jClient {
   async searchResources(params: {
     userId: string;
     query: string;
+    namespaceScope: NamespaceScope;
     namespace?: string;
     entry_type?: string;
     limit?: number;
@@ -1351,6 +1346,7 @@ export class Neo4jClient {
         CALL db.index.fulltext.queryNodes('resource_text', $query) YIELD node AS r, score
         MATCH (u:User {id: $userId})-[:OWNS|HAS_ACCESS]->(r)
         WHERE ($namespace IS NULL OR r.namespace = $namespace)
+          AND ${nsScope("r")}
           AND ($entry_type IS NULL OR r.entry_type = $entry_type)
         RETURN r,
           CASE WHEN (u)-[:OWNS]->(r) THEN 'owner' ELSE 'shared' END AS ownership,
@@ -1362,6 +1358,7 @@ export class Neo4jClient {
           userId: params.userId,
           query: luceneQuery,
           namespace: params.namespace ?? null,
+          namespaceScope: nsScopeParam(params.namespaceScope),
           entry_type: params.entry_type ?? null,
           skip: neo4j.int(skip),
           limit: neo4j.int(limit),
@@ -1523,36 +1520,44 @@ export class Neo4jClient {
    *
    * Results are returned in deterministic alphabetical order by namespace.
    */
-  async listNamespaces(params: { userId: string }): Promise<
-    NamespaceSummary[]
-  > {
+  async listNamespaces(params: {
+    userId: string;
+    namespaceScope: NamespaceScope;
+  }): Promise<NamespaceSummary[]> {
     const session = this.driver.session();
+    const queryParams = {
+      userId: params.userId,
+      namespaceScope: nsScopeParam(params.namespaceScope),
+    };
     try {
       const ownedResult = await session.run(
         `
         MATCH (u:User {id: $userId})-[:OWNS]->(r:Resource)
+        WHERE ${nsScope("r")}
         RETURN r.namespace AS namespace, count(r) AS owned_count
         `,
-        { userId: params.userId },
+        queryParams,
       );
 
       const sharedResult = await session.run(
         `
         MATCH (u:User {id: $userId})-[:HAS_ACCESS]->(r:Resource)
         WHERE NOT (u)-[:OWNS]->(r)
+          AND ${nsScope("r")}
         RETURN r.namespace AS namespace, count(r) AS shared_count
         `,
-        { userId: params.userId },
+        queryParams,
       );
 
       const templateResult = await session.run(
         `
         MATCH (cfg:NamespaceConfig {owner_id: $userId})
         WHERE cfg.structure_template IS NOT NULL
+          AND ${nsScope("cfg")}
         RETURN cfg.namespace AS namespace,
                cfg.structure_template AS structure_template
         `,
-        { userId: params.userId },
+        queryParams,
       );
 
       const map = new Map<string, NamespaceSummary>();
@@ -1637,11 +1642,64 @@ export class Neo4jClient {
 
   // ── Entry relations ─────────────────────────────────────────────────────────
 
+  /**
+   * Resolves a traversal endpoint, applying existence, namespace scope and read
+   * access in a single query.
+   *
+   * Doing this in one query (rather than getResource + getEffectiveRole) keeps
+   * an out-of-scope entry from leaking its metadata to the caller, and matches
+   * the enforcement boundary described in DECISIONS.md D-033.
+   */
+  private async resolveEndpoint(
+    userId: string,
+    entryId: string,
+    namespaceScope: NamespaceScope,
+  ): Promise<Resource> {
+    const session = this.driver.session();
+    try {
+      const result = await session.run(
+        `
+        MATCH (r:Resource {id: $entryId})
+        RETURN r,
+               ${nsScope("r")} AS inScope,
+               EXISTS { MATCH (:User {id: $userId})-[:OWNS|HAS_ACCESS]->(r) } AS readable
+        `,
+        {
+          userId,
+          entryId,
+          namespaceScope: nsScopeParam(namespaceScope),
+        },
+      );
+      const record = result.records[0];
+      if (record === undefined) {
+        throw new Neo4jClientError("RESOURCE_NOT_FOUND", "Resource not found");
+      }
+      if (
+        !(record.get("inScope") as boolean) ||
+        !(record.get("readable") as boolean)
+      ) {
+        throw new Neo4jClientError("PERMISSION_DENIED", "Permission denied");
+      }
+      return record.get("r").properties as Resource;
+    } finally {
+      await session.close();
+    }
+  }
+
+  /**
+   * Creates (or updates the label of) a relation between two entries.
+   *
+   * The two entries may live in different namespaces (DECISIONS.md D-033); both
+   * must lie inside `namespaceScope` and be readable by the caller. Existence,
+   * scope and access are all evaluated inside the write transaction so the
+   * decision cannot go stale between the check and the MERGE.
+   */
   async createEntryRelation(
     userId: string,
     fromId: string,
     toId: string,
     relationType: string,
+    namespaceScope: NamespaceScope,
     label?: string,
   ): Promise<void> {
     if (fromId === toId) {
@@ -1657,73 +1715,78 @@ export class Neo4jClient {
       );
     }
 
-    const fromResource = await this.getResource(fromId);
-    const toResource = await this.getResource(toId);
-    if (!fromResource || !toResource) {
-      throw new Neo4jClientError("RESOURCE_NOT_FOUND", "Resource not found");
-    }
-
-    if (fromResource.namespace !== toResource.namespace) {
-      throw new Neo4jClientError(
-        "INVALID_PARAMS",
-        "Entries must belong to the same namespace",
-      );
-    }
-
-    const fromRole = await this.getEffectiveRole(userId, fromId);
-    const toRole = await this.getEffectiveRole(userId, toId);
-    if (
-      !Neo4jClient.hasReadPermission(fromRole) ||
-      !Neo4jClient.hasReadPermission(toRole)
-    ) {
-      throw new Neo4jClientError("PERMISSION_DENIED", "Permission denied");
-    }
-
     const now = new Date().toISOString();
     const session = this.driver.session();
     try {
-      await session.run(
-        `
-        MATCH (from:Resource {id: $fromId})
-        MATCH (to:Resource {id: $toId})
-        MERGE (from)-[r:ENTRY_RELATION {relation_type: $relationType}]->(to)
-        ON CREATE SET r.created_at = $now
-        SET r.label = $label
-        `,
-        {
-          fromId,
-          toId,
-          relationType,
-          now,
-          label: label ?? null,
-        },
-      );
-
-      if (label === undefined) {
-        await session.run(
+      const outcome = await session.executeWrite(async (tx) => {
+        const result = await tx.run(
           `
-          MATCH (:Resource {id: $fromId})-[r:ENTRY_RELATION {relation_type: $relationType}]->(:Resource {id: $toId})
-          REMOVE r.label
+          MATCH (from:Resource {id: $fromId})
+          MATCH (to:Resource {id: $toId})
+          WHERE ${nsScope("from")} AND ${nsScope("to")}
+            AND EXISTS { MATCH (:User {id: $userId})-[:OWNS|HAS_ACCESS]->(from) }
+            AND EXISTS { MATCH (:User {id: $userId})-[:OWNS|HAS_ACCESS]->(to) }
+          MERGE (from)-[r:ENTRY_RELATION {relation_type: $relationType}]->(to)
+          ON CREATE SET r.created_at = $now
+          SET r.label = $label
+          RETURN count(r) AS created
           `,
-          { fromId, toId, relationType },
+          {
+            userId,
+            fromId,
+            toId,
+            relationType,
+            now,
+            label: label ?? null,
+            namespaceScope: nsScopeParam(namespaceScope),
+          },
         );
+        const record = result.records[0];
+        if (
+          record !== undefined &&
+          neo4j.integer.toNumber(record.get("created")) > 0
+        ) {
+          return "created" as const;
+        }
+        // Nothing was written: distinguish a missing entry from a denied one.
+        const existence = await tx.run(
+          `
+          RETURN EXISTS { MATCH (:Resource {id: $fromId}) } AS fromExists,
+                 EXISTS { MATCH (:Resource {id: $toId}) } AS toExists
+          `,
+          { fromId, toId },
+        );
+        const existenceRecord = existence.records[0];
+        const bothExist =
+          existenceRecord !== undefined &&
+          (existenceRecord.get("fromExists") as boolean) &&
+          (existenceRecord.get("toExists") as boolean);
+        return bothExist ? ("denied" as const) : ("missing" as const);
+      });
+
+      if (outcome === "missing") {
+        throw new Neo4jClientError("RESOURCE_NOT_FOUND", "Resource not found");
+      }
+      if (outcome === "denied") {
+        throw new Neo4jClientError("PERMISSION_DENIED", "Permission denied");
       }
     } finally {
       await session.close();
     }
   }
 
+  /**
+   * Deletes a relation. The caller must own the source entry, and both entries
+   * must lie inside `namespaceScope` — all verified inside the write
+   * transaction alongside the DELETE.
+   */
   async deleteEntryRelation(
     userId: string,
     fromId: string,
     toId: string,
     relationType: string,
+    namespaceScope: NamespaceScope,
   ): Promise<void> {
-    const fromResource = await this.getResource(fromId);
-    const toResource = await this.getResource(toId);
-    if (!fromResource || !toResource) {
-      throw new Neo4jClientError("RESOURCE_NOT_FOUND", "Resource not found");
-    }
     if (!ENTRY_RELATION_TYPE_REGEX.test(relationType)) {
       throw new Neo4jClientError(
         "INVALID_PARAMS",
@@ -1731,30 +1794,74 @@ export class Neo4jClient {
       );
     }
 
-    const fromRole = await this.getEffectiveRole(userId, fromId);
-    if (fromRole !== "owner") {
-      throw new Neo4jClientError("PERMISSION_DENIED", "Permission denied");
-    }
-
     const session = this.driver.session();
     try {
-      await session.run(
-        `
-        MATCH (:Resource {id: $fromId})-[r:ENTRY_RELATION {relation_type: $relationType}]->(:Resource {id: $toId})
-        DELETE r
-        `,
-        { fromId, toId, relationType },
-      );
+      const outcome = await session.executeWrite(async (tx) => {
+        const existence = await tx.run(
+          `
+          RETURN EXISTS { MATCH (:Resource {id: $fromId}) } AS fromExists,
+                 EXISTS { MATCH (:Resource {id: $toId}) } AS toExists
+          `,
+          { fromId, toId },
+        );
+        const existenceRecord = existence.records[0];
+        if (
+          existenceRecord === undefined ||
+          !(existenceRecord.get("fromExists") as boolean) ||
+          !(existenceRecord.get("toExists") as boolean)
+        ) {
+          return "missing" as const;
+        }
+
+        const result = await tx.run(
+          `
+          MATCH (from:Resource {id: $fromId})
+          MATCH (to:Resource {id: $toId})
+          WHERE ${nsScope("from")} AND ${nsScope("to")}
+            AND EXISTS { MATCH (:User {id: $userId})-[:OWNS]->(from) }
+          OPTIONAL MATCH (from)-[r:ENTRY_RELATION {relation_type: $relationType}]->(to)
+          DELETE r
+          RETURN count(from) AS authorized
+          `,
+          {
+            userId,
+            fromId,
+            toId,
+            relationType,
+            namespaceScope: nsScopeParam(namespaceScope),
+          },
+        );
+        const record = result.records[0];
+        const authorized =
+          record !== undefined &&
+          neo4j.integer.toNumber(record.get("authorized")) > 0;
+        return authorized ? ("deleted" as const) : ("denied" as const);
+      });
+
+      if (outcome === "missing") {
+        throw new Neo4jClientError("RESOURCE_NOT_FOUND", "Resource not found");
+      }
+      if (outcome === "denied") {
+        throw new Neo4jClientError("PERMISSION_DENIED", "Permission denied");
+      }
     } finally {
       await session.close();
     }
   }
 
+  /**
+   * Lists relations anchored on `entryId`.
+   *
+   * Counterparts may live in another namespace (DECISIONS.md D-033). Both the
+   * anchor and the counterpart must lie inside `namespaceScope`, and
+   * counterparts the caller cannot read are silently omitted.
+   */
   async listEntryRelations(
     userId: string,
     entryId: string,
     direction: EntryRelationDirection,
     limit: number,
+    namespaceScope: NamespaceScope,
   ): Promise<EntryRelation[]> {
     const entry = await this.getResource(entryId);
     if (!entry) {
@@ -1765,22 +1872,28 @@ export class Neo4jClient {
       throw new Neo4jClientError("PERMISSION_DENIED", "Permission denied");
     }
 
+    const columns =
+      "r.relation_type AS relation_type, r.label AS label, r.created_at AS created_at, ";
+    const visible = (other: string) =>
+      `${nsScope("base")} AND ${nsScope(other)}
+             AND EXISTS { MATCH (:User {id: $userId})-[:OWNS|HAS_ACCESS]->(${other}) }`;
+
     const session = this.driver.session();
     try {
       let query: string;
       if (direction === "outbound") {
         query = `
           MATCH (base:Resource {id: $entryId})-[r:ENTRY_RELATION]->(other:Resource)
-          WHERE EXISTS { MATCH (:User {id: $userId})-[:OWNS|HAS_ACCESS]->(other) }
-          RETURN 'outbound' AS direction, r.relation_type AS relation_type, r.label AS label, r.created_at AS created_at, other.id AS entry_id, other.title AS entry_title
+          WHERE ${visible("other")}
+          RETURN 'outbound' AS direction, ${columns}other.id AS entry_id, other.title AS entry_title, other.namespace AS entry_namespace
           ORDER BY relation_type, entry_title
           LIMIT $limit
         `;
       } else if (direction === "inbound") {
         query = `
           MATCH (other:Resource)-[r:ENTRY_RELATION]->(base:Resource {id: $entryId})
-          WHERE EXISTS { MATCH (:User {id: $userId})-[:OWNS|HAS_ACCESS]->(other) }
-          RETURN 'inbound' AS direction, r.relation_type AS relation_type, r.label AS label, r.created_at AS created_at, other.id AS entry_id, other.title AS entry_title
+          WHERE ${visible("other")}
+          RETURN 'inbound' AS direction, ${columns}other.id AS entry_id, other.title AS entry_title, other.namespace AS entry_namespace
           ORDER BY relation_type, entry_title
           LIMIT $limit
         `;
@@ -1788,14 +1901,14 @@ export class Neo4jClient {
         query = `
           CALL {
             MATCH (base:Resource {id: $entryId})-[r:ENTRY_RELATION]->(otherOut:Resource)
-            WHERE EXISTS { MATCH (:User {id: $userId})-[:OWNS|HAS_ACCESS]->(otherOut) }
-            RETURN 'outbound' AS direction, r.relation_type AS relation_type, r.label AS label, r.created_at AS created_at, otherOut.id AS entry_id, otherOut.title AS entry_title
+            WHERE ${visible("otherOut")}
+            RETURN 'outbound' AS direction, ${columns}otherOut.id AS entry_id, otherOut.title AS entry_title, otherOut.namespace AS entry_namespace
             UNION ALL
             MATCH (otherIn:Resource)-[r:ENTRY_RELATION]->(base:Resource {id: $entryId})
-            WHERE EXISTS { MATCH (:User {id: $userId})-[:OWNS|HAS_ACCESS]->(otherIn) }
-            RETURN 'inbound' AS direction, r.relation_type AS relation_type, r.label AS label, r.created_at AS created_at, otherIn.id AS entry_id, otherIn.title AS entry_title
+            WHERE ${visible("otherIn")}
+            RETURN 'inbound' AS direction, ${columns}otherIn.id AS entry_id, otherIn.title AS entry_title, otherIn.namespace AS entry_namespace
           }
-          RETURN direction, relation_type, label, created_at, entry_id, entry_title
+          RETURN direction, relation_type, label, created_at, entry_id, entry_title, entry_namespace
           ORDER BY relation_type, entry_title
           LIMIT $limit
         `;
@@ -1805,6 +1918,7 @@ export class Neo4jClient {
         userId,
         entryId,
         limit: neo4j.int(limit),
+        namespaceScope: nsScopeParam(namespaceScope),
       });
       return result.records.map((record) => ({
         direction: record.get("direction") as "outbound" | "inbound",
@@ -1818,6 +1932,7 @@ export class Neo4jClient {
         entry: {
           id: record.get("entry_id") as string,
           title: record.get("entry_title") as string,
+          namespace: record.get("entry_namespace") as string,
         },
       }));
     } finally {
@@ -1842,6 +1957,7 @@ export class Neo4jClient {
     maxHops: number;
     relationTypes: string[] | null;
     limit: number;
+    namespaceScope: NamespaceScope;
   }): Promise<ExpandContextLayer[]> {
     const entry = await this.getResource(params.entryId);
     if (!entry) {
@@ -1875,20 +1991,21 @@ export class Neo4jClient {
       pathPattern = `(start:Resource {id: $entryId})-[:ENTRY_RELATION*1..${hopsLiteral}]-(neighbor:Resource)`;
     }
 
-    const neighborFilter = dir === "both" ? "AND neighbor <> start" : "";
+    // Undirected traversal can walk back to the anchor; directed cannot.
+    const neighborFilter = dir === "both" ? "neighbor <> start" : "true";
 
     const query = `
       MATCH path = ${pathPattern}
-      WHERE neighbor.namespace = start.namespace
-        ${neighborFilter}
+      WHERE ${neighborFilter}
         AND ALL(n IN nodes(path) WHERE
-          n = start OR EXISTS { MATCH (:User {id: $userId})-[:OWNS|HAS_ACCESS]->(n) }
+          ${nsScope("n")}
+          AND (n = start OR EXISTS { MATCH (:User {id: $userId})-[:OWNS|HAS_ACCESS]->(n) })
         )
         AND ($relTypes IS NULL OR ALL(r IN relationships(path) WHERE r.relation_type IN $relTypes))
       WITH neighbor, min(length(path)) AS distance
       ORDER BY distance, neighbor.id
       LIMIT $limit
-      WITH distance, collect({ id: neighbor.id, title: neighbor.title }) AS entries
+      WITH distance, collect({ id: neighbor.id, title: neighbor.title, namespace: neighbor.namespace }) AS entries
       RETURN distance, entries
       ORDER BY distance
     `;
@@ -1900,10 +2017,11 @@ export class Neo4jClient {
         entryId: params.entryId,
         relTypes: params.relationTypes,
         limit: neo4j.int(params.limit),
+        namespaceScope: nsScopeParam(params.namespaceScope),
       });
       return result.records.map((record) => ({
         distance: neo4j.integer.toNumber(record.get("distance")),
-        entries: record.get("entries") as Array<{ id: string; title: string }>,
+        entries: record.get("entries") as ExpandContextLayer["entries"],
       }));
     } finally {
       await session.close();
@@ -1916,9 +2034,9 @@ export class Neo4jClient {
    * Traverses in both directions by default (undirected). Use `direction` to
    * restrict to outbound-only or inbound-only traversal.
    *
-   * Only paths where every node is accessible to the caller are returned.
-   * Both entries must exist in the same namespace and the caller must have
-   * read access to both.
+   * Endpoints may live in different namespaces (DECISIONS.md D-033). Only paths
+   * where every node lies inside `namespaceScope` and is accessible to the
+   * caller are returned; the caller must have read access to both endpoints.
    */
   async findPaths(params: {
     userId: string;
@@ -1928,6 +2046,7 @@ export class Neo4jClient {
     maxPaths: number;
     relationTypes: string[] | null;
     direction?: "outbound" | "inbound" | "both";
+    namespaceScope: NamespaceScope;
   }): Promise<PathResult[]> {
     if (params.fromId === params.toId) {
       throw new Neo4jClientError(
@@ -1946,26 +2065,16 @@ export class Neo4jClient {
       }
     }
 
-    const fromResource = await this.getResource(params.fromId);
-    const toResource = await this.getResource(params.toId);
-    if (!fromResource || !toResource) {
-      throw new Neo4jClientError("RESOURCE_NOT_FOUND", "Resource not found");
-    }
-    if (fromResource.namespace !== toResource.namespace) {
-      throw new Neo4jClientError(
-        "INVALID_PARAMS",
-        "Entries must belong to the same namespace",
-      );
-    }
-
-    const fromRole = await this.getEffectiveRole(params.userId, params.fromId);
-    const toRole = await this.getEffectiveRole(params.userId, params.toId);
-    if (
-      !Neo4jClient.hasReadPermission(fromRole) ||
-      !Neo4jClient.hasReadPermission(toRole)
-    ) {
-      throw new Neo4jClientError("PERMISSION_DENIED", "Permission denied");
-    }
+    await this.resolveEndpoint(
+      params.userId,
+      params.fromId,
+      params.namespaceScope,
+    );
+    await this.resolveEndpoint(
+      params.userId,
+      params.toId,
+      params.namespaceScope,
+    );
 
     // Embed depth literal — Neo4j does not allow parameters in range bounds.
     const depthLiteral = params.maxDepth;
@@ -1983,12 +2092,14 @@ export class Neo4jClient {
       const result = await session.run(
         `
         MATCH path = ${pathPattern}
-        WHERE ALL(n IN nodes(path) WHERE EXISTS { MATCH (:User {id: $userId})-[:OWNS|HAS_ACCESS]->(n) })
+        WHERE ALL(n IN nodes(path) WHERE
+            ${nsScope("n")}
+            AND EXISTS { MATCH (:User {id: $userId})-[:OWNS|HAS_ACCESS]->(n) })
           AND ($relTypes IS NULL OR ALL(r IN relationships(path) WHERE r.relation_type IN $relTypes))
         WITH path ORDER BY length(path), [n IN nodes(path) | n.id]
         LIMIT $maxPaths
         RETURN
-          [n IN nodes(path) | { id: n.id, title: n.title, entry_type: n.entry_type }] AS pathNodes,
+          [n IN nodes(path) | { id: n.id, title: n.title, entry_type: n.entry_type, namespace: n.namespace }] AS pathNodes,
           [r IN relationships(path) | {
             relation_type: r.relation_type,
             label: r.label,
@@ -2002,14 +2113,11 @@ export class Neo4jClient {
           toId: params.toId,
           maxPaths: neo4j.int(params.maxPaths),
           relTypes: params.relationTypes,
+          namespaceScope: nsScopeParam(params.namespaceScope),
         },
       );
       const mapped = result.records.map((record) => {
-        const rawNodes = record.get("pathNodes") as Array<{
-          id: string;
-          title: string;
-          entry_type: string;
-        }>;
+        const rawNodes = record.get("pathNodes") as PathResult["nodes"];
         const rawRels = record.get("pathRels") as Array<{
           relation_type: string;
           label: string | null;
@@ -2053,8 +2161,8 @@ export class Neo4jClient {
    * Returns a structured result including a human-readable `formatted` string
    * per path (e.g. "NAS <-[MANAGED_BY]- Management VM -[CONNECTS_TO]-> PiKVM").
    *
-   * Both entries must exist, belong to the same namespace, and be readable by
-   * the caller.
+   * The two entries may live in different namespaces (DECISIONS.md D-033). Both
+   * must exist, lie inside `namespaceScope`, and be readable by the caller.
    */
   async explainRelationship(params: {
     userId: string;
@@ -2062,6 +2170,7 @@ export class Neo4jClient {
     entryBId: string;
     maxDepth: number;
     maxPaths: number;
+    namespaceScope: NamespaceScope;
   }): Promise<ExplainRelationshipResult> {
     if (params.entryAId === params.entryBId) {
       throw new Neo4jClientError(
@@ -2069,36 +2178,30 @@ export class Neo4jClient {
         "entry_a_id and entry_b_id must be different",
       );
     }
-    // Existence + namespace + access checks (reuse existing methods, same as findPaths)
-    const resourceA = await this.getResource(params.entryAId);
-    const resourceB = await this.getResource(params.entryBId);
-    if (!resourceA || !resourceB) {
-      throw new Neo4jClientError("RESOURCE_NOT_FOUND", "Resource not found");
-    }
-    if (resourceA.namespace !== resourceB.namespace) {
-      throw new Neo4jClientError(
-        "INVALID_PARAMS",
-        "Entries must belong to the same namespace",
-      );
-    }
-    const roleA = await this.getEffectiveRole(params.userId, params.entryAId);
-    const roleB = await this.getEffectiveRole(params.userId, params.entryBId);
-    if (
-      !Neo4jClient.hasReadPermission(roleA) ||
-      !Neo4jClient.hasReadPermission(roleB)
-    ) {
-      throw new Neo4jClientError("PERMISSION_DENIED", "Permission denied");
-    }
+    // Existence, namespace scope and read access, per endpoint. Resolving these
+    // together keeps an out-of-scope endpoint from leaking its metadata below.
+    const resourceA = await this.resolveEndpoint(
+      params.userId,
+      params.entryAId,
+      params.namespaceScope,
+    );
+    const resourceB = await this.resolveEndpoint(
+      params.userId,
+      params.entryBId,
+      params.namespaceScope,
+    );
 
     const entry_a = {
       id: resourceA.id,
       title: resourceA.title,
       entry_type: resourceA.entry_type,
+      namespace: resourceA.namespace,
     };
     const entry_b = {
       id: resourceB.id,
       title: resourceB.title,
       entry_type: resourceB.entry_type,
+      namespace: resourceB.namespace,
     };
 
     const depthLiteral = params.maxDepth;
@@ -2108,10 +2211,18 @@ export class Neo4jClient {
       const directResult = await session.run(
         `
         MATCH (a:Resource {id: $entryAId})-[r:ENTRY_RELATION]-(b:Resource {id: $entryBId})
+        WHERE ${nsScope("a")} AND ${nsScope("b")}
+          AND EXISTS { MATCH (:User {id: $userId})-[:OWNS|HAS_ACCESS]->(a) }
+          AND EXISTS { MATCH (:User {id: $userId})-[:OWNS|HAS_ACCESS]->(b) }
         RETURN r.relation_type AS relation_type, r.label AS label,
                startNode(r).id AS from_id
         `,
-        { entryAId: params.entryAId, entryBId: params.entryBId },
+        {
+          userId: params.userId,
+          entryAId: params.entryAId,
+          entryBId: params.entryBId,
+          namespaceScope: nsScopeParam(params.namespaceScope),
+        },
       );
       const direct_relations = directResult.records.map((record) => {
         const fromId = record.get("from_id") as string;
@@ -2129,11 +2240,13 @@ export class Neo4jClient {
       const pathResult = await session.run(
         `
         MATCH path = (a:Resource {id: $entryAId})-[:ENTRY_RELATION*1..${depthLiteral}]-(b:Resource {id: $entryBId})
-        WHERE ALL(n IN nodes(path) WHERE EXISTS { MATCH (:User {id: $userId})-[:OWNS|HAS_ACCESS]->(n) })
+        WHERE ALL(n IN nodes(path) WHERE
+            ${nsScope("n")}
+            AND EXISTS { MATCH (:User {id: $userId})-[:OWNS|HAS_ACCESS]->(n) })
         WITH path ORDER BY length(path), [n IN nodes(path) | n.id]
         LIMIT $maxPaths
         RETURN
-          [n IN nodes(path) | { id: n.id, title: n.title, entry_type: n.entry_type }] AS pathNodes,
+          [n IN nodes(path) | { id: n.id, title: n.title, entry_type: n.entry_type, namespace: n.namespace }] AS pathNodes,
           [r IN relationships(path) | {
             relation_type: r.relation_type,
             label: r.label,
@@ -2146,14 +2259,11 @@ export class Neo4jClient {
           entryAId: params.entryAId,
           entryBId: params.entryBId,
           maxPaths: neo4j.int(params.maxPaths),
+          namespaceScope: nsScopeParam(params.namespaceScope),
         },
       );
       const paths: RelationshipPath[] = pathResult.records.map((record) => {
-        const rawNodes = record.get("pathNodes") as Array<{
-          id: string;
-          title: string;
-          entry_type: string;
-        }>;
+        const rawNodes = record.get("pathNodes") as RelationshipPath["nodes"];
         const rawRels = record.get("pathRels") as Array<{
           relation_type: string;
           label: string | null;
@@ -2196,6 +2306,7 @@ export class Neo4jClient {
   async getRelationSummary(
     resourceId: string,
     userId: string,
+    namespaceScope: NamespaceScope,
   ): Promise<{ outbound: number; inbound: number }> {
     const session = this.driver.session();
     try {
@@ -2205,18 +2316,24 @@ export class Neo4jClient {
         CALL {
           WITH r
           OPTIONAL MATCH (r)-[out:ENTRY_RELATION]->(other)
-            WHERE EXISTS { MATCH (:User {id: $userId})-[:OWNS|HAS_ACCESS]->(other) }
+            WHERE ${nsScope("other")}
+              AND EXISTS { MATCH (:User {id: $userId})-[:OWNS|HAS_ACCESS]->(other) }
           RETURN count(DISTINCT out) AS outbound
         }
         CALL {
           WITH r
           OPTIONAL MATCH (other2)-[in:ENTRY_RELATION]->(r)
-            WHERE EXISTS { MATCH (:User {id: $userId})-[:OWNS|HAS_ACCESS]->(other2) }
+            WHERE ${nsScope("other2")}
+              AND EXISTS { MATCH (:User {id: $userId})-[:OWNS|HAS_ACCESS]->(other2) }
           RETURN count(DISTINCT in) AS inbound
         }
         RETURN outbound, inbound
         `,
-        { id: resourceId, userId },
+        {
+          id: resourceId,
+          userId,
+          namespaceScope: nsScopeParam(namespaceScope),
+        },
       );
       const record = result.records[0];
       if (!record) return { outbound: 0, inbound: 0 };
@@ -2243,6 +2360,7 @@ export class Neo4jClient {
     maxDepth: number;
     relationTypes: string[] | null;
     limit: number;
+    namespaceScope: NamespaceScope;
   }): Promise<{ layers: ExpandContextLayer[]; total_impacted: number }> {
     const entry = await this.getResource(params.entryId);
     if (!entry) {
@@ -2270,15 +2388,15 @@ export class Neo4jClient {
       const result = await session.run(
         `
         MATCH path = (impacted:Resource)-[:ENTRY_RELATION*1..${depthLiteral}]->(start:Resource {id: $entryId})
-        WHERE impacted.namespace = start.namespace
-          AND ALL(n IN nodes(path) WHERE
-            n = start OR EXISTS { MATCH (:User {id: $userId})-[:OWNS|HAS_ACCESS]->(n) }
+        WHERE ALL(n IN nodes(path) WHERE
+            ${nsScope("n")}
+            AND (n = start OR EXISTS { MATCH (:User {id: $userId})-[:OWNS|HAS_ACCESS]->(n) })
           )
           AND ($relTypes IS NULL OR ALL(r IN relationships(path) WHERE r.relation_type IN $relTypes))
         WITH impacted, min(length(path)) AS distance
         ORDER BY distance, impacted.id
         LIMIT $limit
-        WITH distance, collect({ id: impacted.id, title: impacted.title }) AS entries
+        WITH distance, collect({ id: impacted.id, title: impacted.title, namespace: impacted.namespace }) AS entries
         RETURN distance, entries
         ORDER BY distance
         `,
@@ -2287,11 +2405,12 @@ export class Neo4jClient {
           entryId: params.entryId,
           relTypes: params.relationTypes,
           limit: neo4j.int(params.limit),
+          namespaceScope: nsScopeParam(params.namespaceScope),
         },
       );
       const layers: ExpandContextLayer[] = result.records.map((record) => ({
         distance: neo4j.integer.toNumber(record.get("distance")),
-        entries: record.get("entries") as Array<{ id: string; title: string }>,
+        entries: record.get("entries") as ExpandContextLayer["entries"],
       }));
       const total_impacted = layers.reduce(
         (sum, l) => sum + l.entries.length,
@@ -2306,6 +2425,7 @@ export class Neo4jClient {
   async getRelatedEntries(
     userId: string,
     entryId: string,
+    namespaceScope: NamespaceScope,
     relationType?: string,
     limit = 20,
   ): Promise<Resource[]> {
@@ -2333,6 +2453,7 @@ export class Neo4jClient {
         `
         MATCH (base:Resource {id: $entryId})-[r:ENTRY_RELATION]-(other:Resource)
         WHERE ($relationType IS NULL OR r.relation_type = $relationType)
+          AND ${nsScope("base")} AND ${nsScope("other")}
           AND EXISTS { MATCH (:User {id: $userId})-[:OWNS|HAS_ACCESS]->(other) }
         RETURN DISTINCT other
         ORDER BY other.updated_at DESC
@@ -2343,6 +2464,7 @@ export class Neo4jClient {
           entryId,
           relationType: relationType ?? null,
           limit: neo4j.int(limit),
+          namespaceScope: nsScopeParam(namespaceScope),
         },
       );
       return result.records.map(

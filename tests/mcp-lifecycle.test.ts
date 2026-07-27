@@ -1415,7 +1415,7 @@ describe("?lock_namespace query flag", () => {
     );
   });
 
-  it("injects session namespace into knowledge_search_entries when omitted (NAMESPACE_INJECT_TOOLS)", async () => {
+  it("passes the namespace scope to the handler without mutating search arguments", async () => {
     stubJwks();
     const token = await makeToken();
     const { app, searchTool } = buildAppWithStubTools();
@@ -1434,9 +1434,29 @@ describe("?lock_namespace query flag", () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.result.isError).toBe(false);
+    // The locked namespace is no longer injected into the arguments; it reaches
+    // the handler as ctx.namespaceScope and is applied in Cypher (D-033).
     expect(searchTool.handler).toHaveBeenCalledWith(
-      expect.objectContaining({ namespace: "homelab", query: "test" }),
-      expect.anything(),
+      { query: "test" },
+      expect.objectContaining({ namespaceScope: ["homelab"] }),
+    );
+  });
+
+  it("leaves the namespace scope null for an unlocked JWT session", async () => {
+    stubJwks();
+    const token = await makeToken();
+    const { app, searchTool } = buildAppWithStubTools();
+
+    const { sessionId } = await doInitialize(app, token, {
+      urlPath: "/mcp/homelab",
+    });
+    await callTool(app, token, sessionId, "knowledge_search_entries", {
+      query: "test",
+    });
+
+    expect(searchTool.handler).toHaveBeenCalledWith(
+      { query: "test" },
+      expect.objectContaining({ namespaceScope: null }),
     );
   });
 });
