@@ -113,6 +113,15 @@ function nsScope(nodeVar: string): string {
   return `($namespaceScope IS NULL OR ${nodeVar}.namespace IN $namespaceScope)`;
 }
 
+/**
+ * The read-access predicate for a single bound node variable. Expects `$userId`
+ * to be bound. Applied to the anchor as well as to counterparts so a grant
+ * revoked after a tool-layer preflight cannot still yield data.
+ */
+function canRead(nodeVar: string): string {
+  return `EXISTS { MATCH (:User {id: $userId})-[:OWNS|HAS_ACCESS]->(${nodeVar}) }`;
+}
+
 /** Converts a `NamespaceScope` into a Cypher parameter value. */
 function nsScopeParam(scope: NamespaceScope): string[] | null {
   return scope === null ? null : [...scope];
@@ -1662,7 +1671,7 @@ export class Neo4jClient {
         MATCH (r:Resource {id: $entryId})
         RETURN r,
                ${nsScope("r")} AS inScope,
-               EXISTS { MATCH (:User {id: $userId})-[:OWNS|HAS_ACCESS]->(r) } AS readable
+               ${canRead("r")} AS readable
         `,
         {
           userId,
@@ -1724,8 +1733,8 @@ export class Neo4jClient {
           MATCH (from:Resource {id: $fromId})
           MATCH (to:Resource {id: $toId})
           WHERE ${nsScope("from")} AND ${nsScope("to")}
-            AND EXISTS { MATCH (:User {id: $userId})-[:OWNS|HAS_ACCESS]->(from) }
-            AND EXISTS { MATCH (:User {id: $userId})-[:OWNS|HAS_ACCESS]->(to) }
+            AND ${canRead("from")}
+            AND ${canRead("to")}
           MERGE (from)-[r:ENTRY_RELATION {relation_type: $relationType}]->(to)
           ON CREATE SET r.created_at = $now
           SET r.label = $label
@@ -1875,8 +1884,8 @@ export class Neo4jClient {
     const columns =
       "r.relation_type AS relation_type, r.label AS label, r.created_at AS created_at, ";
     const visible = (other: string) =>
-      `${nsScope("base")} AND ${nsScope(other)}
-             AND EXISTS { MATCH (:User {id: $userId})-[:OWNS|HAS_ACCESS]->(${other}) }`;
+      `${nsScope("base")} AND ${canRead("base")}
+             AND ${nsScope(other)} AND ${canRead(other)}`;
 
     const session = this.driver.session();
     try {
@@ -1997,10 +2006,7 @@ export class Neo4jClient {
     const query = `
       MATCH path = ${pathPattern}
       WHERE ${neighborFilter}
-        AND ALL(n IN nodes(path) WHERE
-          ${nsScope("n")}
-          AND (n = start OR EXISTS { MATCH (:User {id: $userId})-[:OWNS|HAS_ACCESS]->(n) })
-        )
+        AND ALL(n IN nodes(path) WHERE ${nsScope("n")} AND ${canRead("n")})
         AND ($relTypes IS NULL OR ALL(r IN relationships(path) WHERE r.relation_type IN $relTypes))
       WITH neighbor, min(length(path)) AS distance
       ORDER BY distance, neighbor.id
@@ -2094,7 +2100,7 @@ export class Neo4jClient {
         MATCH path = ${pathPattern}
         WHERE ALL(n IN nodes(path) WHERE
             ${nsScope("n")}
-            AND EXISTS { MATCH (:User {id: $userId})-[:OWNS|HAS_ACCESS]->(n) })
+            AND ${canRead("n")})
           AND ($relTypes IS NULL OR ALL(r IN relationships(path) WHERE r.relation_type IN $relTypes))
         WITH path ORDER BY length(path), [n IN nodes(path) | n.id]
         LIMIT $maxPaths
@@ -2212,8 +2218,8 @@ export class Neo4jClient {
         `
         MATCH (a:Resource {id: $entryAId})-[r:ENTRY_RELATION]-(b:Resource {id: $entryBId})
         WHERE ${nsScope("a")} AND ${nsScope("b")}
-          AND EXISTS { MATCH (:User {id: $userId})-[:OWNS|HAS_ACCESS]->(a) }
-          AND EXISTS { MATCH (:User {id: $userId})-[:OWNS|HAS_ACCESS]->(b) }
+          AND ${canRead("a")}
+          AND ${canRead("b")}
         RETURN r.relation_type AS relation_type, r.label AS label,
                startNode(r).id AS from_id
         `,
@@ -2242,7 +2248,7 @@ export class Neo4jClient {
         MATCH path = (a:Resource {id: $entryAId})-[:ENTRY_RELATION*1..${depthLiteral}]-(b:Resource {id: $entryBId})
         WHERE ALL(n IN nodes(path) WHERE
             ${nsScope("n")}
-            AND EXISTS { MATCH (:User {id: $userId})-[:OWNS|HAS_ACCESS]->(n) })
+            AND ${canRead("n")})
         WITH path ORDER BY length(path), [n IN nodes(path) | n.id]
         LIMIT $maxPaths
         RETURN
@@ -2313,18 +2319,17 @@ export class Neo4jClient {
       const result = await session.run(
         `
         MATCH (r:Resource {id: $id})
+        WHERE ${nsScope("r")} AND ${canRead("r")}
         CALL {
           WITH r
           OPTIONAL MATCH (r)-[out:ENTRY_RELATION]->(other)
-            WHERE ${nsScope("other")}
-              AND EXISTS { MATCH (:User {id: $userId})-[:OWNS|HAS_ACCESS]->(other) }
+            WHERE ${nsScope("other")} AND ${canRead("other")}
           RETURN count(DISTINCT out) AS outbound
         }
         CALL {
           WITH r
           OPTIONAL MATCH (other2)-[in:ENTRY_RELATION]->(r)
-            WHERE ${nsScope("other2")}
-              AND EXISTS { MATCH (:User {id: $userId})-[:OWNS|HAS_ACCESS]->(other2) }
+            WHERE ${nsScope("other2")} AND ${canRead("other2")}
           RETURN count(DISTINCT in) AS inbound
         }
         RETURN outbound, inbound
@@ -2388,10 +2393,7 @@ export class Neo4jClient {
       const result = await session.run(
         `
         MATCH path = (impacted:Resource)-[:ENTRY_RELATION*1..${depthLiteral}]->(start:Resource {id: $entryId})
-        WHERE ALL(n IN nodes(path) WHERE
-            ${nsScope("n")}
-            AND (n = start OR EXISTS { MATCH (:User {id: $userId})-[:OWNS|HAS_ACCESS]->(n) })
-          )
+        WHERE ALL(n IN nodes(path) WHERE ${nsScope("n")} AND ${canRead("n")})
           AND ($relTypes IS NULL OR ALL(r IN relationships(path) WHERE r.relation_type IN $relTypes))
         WITH impacted, min(length(path)) AS distance
         ORDER BY distance, impacted.id
@@ -2453,8 +2455,8 @@ export class Neo4jClient {
         `
         MATCH (base:Resource {id: $entryId})-[r:ENTRY_RELATION]-(other:Resource)
         WHERE ($relationType IS NULL OR r.relation_type = $relationType)
-          AND ${nsScope("base")} AND ${nsScope("other")}
-          AND EXISTS { MATCH (:User {id: $userId})-[:OWNS|HAS_ACCESS]->(other) }
+          AND ${nsScope("base")} AND ${canRead("base")}
+          AND ${nsScope("other")} AND ${canRead("other")}
         RETURN DISTINCT other
         ORDER BY other.updated_at DESC
         LIMIT $limit

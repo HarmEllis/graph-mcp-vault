@@ -53,6 +53,13 @@ same-namespace rule. See [D-033](docs/DECISIONS.md) for the full rationale.
   entry's title, type or namespace.
 - Relation create and delete authorize inside the write transaction, closing the window between the
   permission check and the write.
+- Relation and traversal queries (`knowledge_list_relations`, `knowledge_expand_context`,
+  `knowledge_impact_analysis`, relation counts) now check read access on the **anchor** entry inside
+  the query as well, not only on the counterparts. The anchor was previously authorized in a
+  separate preflight read, so a grant revoked in between could still yield relation data.
+- Refusing an entry that lies outside the session scope no longer names that entry's namespace in
+  the error message. A scoped caller holding only an entry ID could otherwise learn which namespace
+  the entry lives in — the metadata an out-of-scope entry is supposed to withhold.
 - A namespace-locked session can no longer mint, list or revoke API keys for namespaces it cannot
   itself reach.
 - `knowledge_explain_relationship` now applies read-access and scope checks to its direct-relation

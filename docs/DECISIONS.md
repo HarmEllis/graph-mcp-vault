@@ -688,7 +688,13 @@ The scope **replaces `lockedNamespace` as the enforcement primitive**:
   `listNamespaces`, plus `createEntryRelation` and `deleteEntryRelation`. Traversal endpoints are
   resolved through `resolveEndpoint`, which combines existence, scope and read access in one query
   so an out-of-scope endpoint cannot leak its metadata.
-  Tool-layer preflight checks on this surface are retained only to classify errors.
+  The anchor entry of a traversal or relation listing is subject to the same two predicates as its
+  counterparts — it is not exempted on the grounds that a preflight already checked it, because a
+  grant revoked between the preflight and the query would otherwise still yield data.
+  Tool-layer preflight checks on this surface are retained only to classify errors. Where such a
+  check rejects a namespace read off a stored entry, its message omits the namespace
+  (`assertEntryNamespaceInScope`): echoing it back would tell a caller holding only an entry ID
+  which namespace an entry it cannot see belongs to.
 - Relation mutations (`createEntryRelation`, `deleteEntryRelation`) authorize inside the write
   transaction rather than in preceding reads.
 

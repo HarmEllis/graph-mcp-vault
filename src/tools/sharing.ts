@@ -9,7 +9,7 @@ import {
   type RegisteredTool,
   type ToolContext,
   ToolError,
-  assertNamespaceInScope,
+  assertEntryNamespaceInScope,
 } from "./registry.js";
 
 // ── Permission helpers ────────────────────────────────────────────────────────
@@ -28,7 +28,7 @@ async function requireOwner(
   if (!resource)
     throw new ToolError(ErrorCode.RESOURCE_NOT_FOUND, "Resource not found");
 
-  assertNamespaceInScope(ctx, resource.namespace);
+  assertEntryNamespaceInScope(ctx, resource.namespace);
 
   const role = await neo4jClient.getEffectiveRole(ctx.userId, entryId);
   if (role !== "owner") {
@@ -49,7 +49,7 @@ async function requireRead(
   if (!resource)
     throw new ToolError(ErrorCode.RESOURCE_NOT_FOUND, "Resource not found");
 
-  assertNamespaceInScope(ctx, resource.namespace);
+  assertEntryNamespaceInScope(ctx, resource.namespace);
 
   const role = await neo4jClient.getEffectiveRole(ctx.userId, entryId);
   if (role === null)
@@ -113,7 +113,7 @@ async function handleRevoke(
   if (!resource)
     throw new ToolError(ErrorCode.RESOURCE_NOT_FOUND, "Resource not found");
 
-  assertNamespaceInScope(ctx, resource.namespace);
+  assertEntryNamespaceInScope(ctx, resource.namespace);
 
   // Prevent revoking own access
   if (target_user_id === ctx.userId) {

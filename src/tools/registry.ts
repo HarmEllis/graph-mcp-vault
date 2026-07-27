@@ -68,7 +68,11 @@ export function isNamespaceInScope(
 }
 
 /**
- * Rejects a namespace the session is not scoped for.
+ * Rejects a caller-supplied namespace the session is not scoped for.
+ *
+ * Only for values the caller passed in: the message echoes the namespace back,
+ * which tells the caller nothing it did not already know. For a namespace read
+ * off a stored entry, use {@link assertEntryNamespaceInScope} instead.
  *
  * This is a preflight check for precise error reporting only — the security
  * boundary is the `$namespaceScope` predicate inside the Cypher queries.
@@ -82,6 +86,23 @@ export function assertNamespaceInScope(
       ErrorCode.PERMISSION_DENIED,
       `Namespace is outside the session scope: ${namespace}`,
     );
+  }
+}
+
+/**
+ * Rejects an entry whose namespace lies outside the session scope.
+ *
+ * The message deliberately omits the namespace. The value comes from a stored
+ * entry, so echoing it would tell a scoped caller holding only an entry ID
+ * which namespace an entry it cannot see lives in — exactly the metadata
+ * out-of-scope entries are supposed to withhold (DECISIONS.md D-033).
+ */
+export function assertEntryNamespaceInScope(
+  ctx: ToolContext,
+  namespace: string,
+): void {
+  if (!isNamespaceInScope(ctx.namespaceScope, namespace)) {
+    throw new ToolError(ErrorCode.PERMISSION_DENIED, "Permission denied");
   }
 }
 

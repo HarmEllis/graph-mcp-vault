@@ -1357,7 +1357,8 @@ describe("?lock_namespace query flag", () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.result.isError).toBe(false);
-    // knowledge_list_entries is not in NAMESPACE_INJECT_TOOLS; args pass through unchanged
+    // No namespace injection happens any more; args pass through unchanged and
+    // the scope is applied as a Cypher predicate instead (D-033).
     expect(readTool.handler).toHaveBeenCalledWith(
       expect.not.objectContaining({ namespace: expect.anything() }),
       expect.anything(),
