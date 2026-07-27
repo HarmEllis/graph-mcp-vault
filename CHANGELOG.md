@@ -5,7 +5,7 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.0.14] - 2026-07-27
 
 Relations can now connect entries in different namespaces. What a session is allowed to see is
 governed by an explicit **namespace scope** derived from the `?lock_namespace` flag and an API key's
@@ -83,6 +83,8 @@ same-namespace rule. See [D-033](docs/DECISIONS.md) for the full rationale.
 - The `fast-uri`, `ip-address`, `qs`, `tar` and `@hono/node-server` entries in
   `pnpm-workspace.yaml`, all of which existed only to patch the SDK's transitive tree. The
   overrides that remain are unchanged.
+
+**Full Changelog**: https://github.com/HarmEllis/graph-mcp-vault/compare/v0.0.13...v0.0.14
 
 ## [0.0.13] - 2026-07-08
 
