@@ -57,14 +57,25 @@ same-namespace rule. See [D-033](docs/DECISIONS.md) for the full rationale.
   itself reach.
 - `knowledge_explain_relationship` now applies read-access and scope checks to its direct-relation
   query, which previously had neither.
-- Override `fast-uri` to `>=3.1.4` (resolves to 4.1.1) to fix CVE-2026-13676 (HIGH): security policy
-  bypass via improper Unicode hostname canonicalization, and CVE-2026-16221 (HIGH). Pulled in
-  transitively through `@modelcontextprotocol/sdk` → `ajv`.
-- Bump `@hono/node-server` to `^2.0.12` and override it to `>=2.0.5` to fix GHSA-frvp-7c67-39w9
-  (MEDIUM): path traversal in `serve-static` on Windows via encoded segments. The override is
-  needed because `@modelcontextprotocol/sdk` pins `^1.19.9` and pulled the vulnerable copy back in.
-  This project only uses `serve`, so the advisory was not exploitable here, but the CI security gate
-  fails on any MEDIUM or higher finding.
+- Removing `@modelcontextprotocol/sdk` (see Removed) drops 76 packages from the production
+  dependency tree, eliminating the source of CVE-2026-13676 and CVE-2026-16221 (HIGH, via
+  `ajv` → `fast-uri`) rather than patching around them. The interim `fast-uri`, `ip-address` and
+  `qs` overrides added earlier in this cycle are no longer needed and have been removed.
+- `@hono/node-server` stays at `^2.0.12`, which fixes GHSA-frvp-7c67-39w9 (MEDIUM): path traversal
+  in `serve-static` on Windows via encoded segments. This project only uses `serve`, so the advisory
+  was not exploitable here. The `>=2.0.5` override added earlier in this cycle existed solely
+  because `@modelcontextprotocol/sdk` pinned `^1.19.9` and pulled the vulnerable copy back in; with
+  the SDK gone the direct dependency is the only consumer and the override has been removed.
+
+### Removed
+
+- **`@modelcontextprotocol/sdk`** is no longer a dependency. It was declared in the bootstrap commit
+  but never imported by any source or test file — the MCP protocol layer has always been implemented
+  by hand in `src/routers/mcp.ts`. No runtime behaviour changes. See
+  [D-034](docs/DECISIONS.md) for the full rationale.
+- The `fast-uri`, `ip-address`, `qs`, `tar` and `@hono/node-server` entries in
+  `pnpm-workspace.yaml`, all of which existed only to patch the SDK's transitive tree. The
+  overrides that remain are unchanged.
 
 ## [0.0.13] - 2026-07-08
 

@@ -17,7 +17,7 @@ Build an MCP proxy server that exposes Neo4j as a multi-tenant MCP tool server.
 
 TypeScript is the fixed implementation language for this project:
 
-- **Official MCP TypeScript SDK** (`@modelcontextprotocol/sdk`) is TypeScript-first and handles: protocol version negotiation, batch JSON-RPC, session headers, tool registry, and message routing — eliminating ~30% of manual protocol implementation work.
+- **MCP protocol layer** — hand-rolled JSON-RPC in `src/routers/mcp.ts`: protocol version negotiation, session headers, tool registry, and message routing. The original plan assumed the official `@modelcontextprotocol/sdk` would carry this (~30% less manual work), but the implementation never used it and the dependency was dropped — see [D-034](./DECISIONS.md).
 - **`jose`** (npm) — industry-standard JWT/JWKS for Node.js: RS256, kid-lookup, JWKS refresh, all built in.
 - **`neo4j-driver`** — full TypeScript support, officially maintained by Neo4j.
 - **`zod`** — schema validation.
