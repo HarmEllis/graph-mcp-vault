@@ -16,7 +16,7 @@ New decisions are added here before merging the code that implements them.
 
 **Rationale**:
 - The project owner works primarily in TypeScript; consistency across their stack.
-- The official MCP SDK (`@modelcontextprotocol/sdk`) is TypeScript-first and handles protocol-level complexity (version negotiation, batch JSON-RPC, session headers, tool registry) — eliminating significant manual implementation work.
+- The official MCP SDK (`@modelcontextprotocol/sdk`) is TypeScript-first and handles protocol-level complexity (version negotiation, batch JSON-RPC, session headers, tool registry) — eliminating significant manual implementation work. *(Superseded by [D-034](#d-034--drop-the-unused-modelcontextprotocolsdk-dependency): the SDK was never actually adopted; the protocol layer is hand-rolled. The remaining rationale below still stands.)*
 - `jose` (npm) is the standard for JWT/JWKS in Node.js — RS256, kid-lookup, JWKS refresh, all first-class.
 - `neo4j-driver` has full official TypeScript support.
 - Node.js 24 includes built-in `fetch`, removing the need for an HTTP client dependency.
@@ -744,3 +744,60 @@ rather than scoped.
 **Rejected alternative**: keep enforcing the scope only in the tool layer, as the `lockedNamespace`
 checks did. Rejected because it leaves the database queries themselves unconstrained, so every new
 query is one forgotten preflight call away from leaking out-of-scope entries.
+
+---
+
+## D-034 — Drop the unused `@modelcontextprotocol/sdk` dependency
+
+**Date**: 2026-07-27
+**Status**: Accepted
+
+**Decision**: Remove `@modelcontextprotocol/sdk` from `package.json`. The MCP protocol layer is,
+and remains, hand-rolled in `src/routers/mcp.ts`. This reverses the SDK half of [D-001](#d-001--implementation-language-typescript)
+and the corresponding claim in `docs/PLAN.md`.
+
+**What was actually true**: the SDK was declared as a runtime dependency (`^1.10.0`, resolving to
+1.29.0) in the bootstrap commit `e719c82`, but **no file under `src/` or `tests/` ever imported it**. Every
+piece of protocol handling D-001 credited to the SDK — JSON-RPC parsing and batching, protocol
+version negotiation, `Mcp-Session-Id` headers, the tool registry, message routing — is implemented
+by hand in `src/routers/mcp.ts` (~920 lines). The dependency was aspirational and was never adopted.
+
+**Rationale**:
+- **It was never load-bearing.** Removing it changes no behaviour: nothing imported it. This is
+  deleting a declaration, not replacing an implementation.
+- **It carried real cost.** The SDK pulled 76 packages — an Express 5 / `ajv` / `express-rate-limit`
+  subtree unrelated to anything this server does — and was the sole source of three version
+  overrides in `pnpm-workspace.yaml` (`fast-uri`, `ip-address`, `qs`), each added to clear a CVE in
+  the Trivy gate that fails from MEDIUM. It also pinned `@hono/node-server` to `^1.19.9`, forcing a
+  fourth override to hold the project on its own `^2.0.12`. All four are removed with it, along with
+  a `tar` entry that already matched nothing in the tree. Of the overrides that remain, `hono`
+  floors our own direct dependency and the rest patch transitive dev-dependency trees (vite /
+  vitest / testcontainers); none are affected.
+- **Adopting it now would be a regression, not a cleanup.** [D-002](#d-002--mcp-transport-streamable-http-2025-03-26-no-sse)
+  commits to Streamable HTTP with JSON-only responses and no SSE. A large share of the SDK's
+  transport surface exists to manage SSE streams, event IDs and reconnection — machinery this
+  project deliberately does not want. The hand-rolled router is also where per-request namespace
+  scope ([D-033](#d-033--cross-namespace-entry-relations-and-explicit-session-namespace-scope-breaking)),
+  API-key sessions ([D-032](#d-032--optional-api-key-authentication-alongside-oidc)) and DCR
+  suppression ([D-030](#d-030--mcp-auth-discovery-protected-resource-metadata-rfc-9728--dcr-suppression))
+  are enforced; routing those through the SDK's abstractions would mean re-deriving all three.
+
+**Regression guard**: `tests/dependency-policy.test.ts` asserts that every entry in `dependencies`
+is imported by at least one file under `src/`. This is deliberately the general invariant rather
+than a name-check against the SDK — the failure mode was "a runtime dependency nobody imports", and
+that can recur under any name.
+
+**Consequences**:
+- No runtime, API or schema change. No version bump beyond the changelog entry.
+- The security surface shrinks: 76 fewer packages in the production tree and five fewer overrides
+  to re-audit whenever the gate flags a transitive CVE.
+- If MCP protocol work later becomes burdensome enough to want the SDK, this decision is revisitable
+  — but it would be a new adoption with a real migration, not the resumption of an existing one.
+
+**Rejected alternative**: keep the dependency "in case we adopt it later". Rejected because an
+unimported dependency still ships to production, still expands the lockfile, and still fails the
+security gate; the option it preserves costs nothing to recreate later via `pnpm add`.
+
+**Rejected alternative**: move it to `devDependencies`. Rejected for the same reason — it is not
+used at development time either, so this would only hide it from the production-tree audit while
+keeping every transitive CVE in the lockfile that Trivy scans.

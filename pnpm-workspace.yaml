@@ -1,19 +1,18 @@
 packages:
   - .
 
+# The overrides that existed only to patch @modelcontextprotocol/sdk's transitive tree
+# (fast-uri, ip-address, qs, tar, @hono/node-server) were dropped together with the SDK
+# itself — see D-034. Of what remains, `hono` floors our own direct dependency; the rest
+# patch transitive dev-dependency trees (vite / vitest / testcontainers).
 overrides:
   protobufjs: ">=7.5.5"
-  tar: ">=7.5.11"
   minimatch: ">=9.0.7"
   picomatch: ">=4.0.4"
   brace-expansion: ">=2.0.3"
   uuid: ">=14.0.0"
   postcss: ">=8.5.10"
-  fast-uri: ">=3.1.4"
-  ip-address: ">=10.1.1"
   hono: ">=4.12.25"
-  "@hono/node-server": ">=2.0.5"
-  qs: ">=6.15.2"
 
 onlyBuiltDependencies:
   - '@biomejs/biome'

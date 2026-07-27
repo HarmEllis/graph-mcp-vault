@@ -17,7 +17,6 @@
   },
   "dependencies": {
     "@hono/node-server": "^2.0.12",
-    "@modelcontextprotocol/sdk": "^1.10.0",
     "dotenv": "^16.4.0",
     "hono": "^4.12.25",
     "jose": "^5.9.0",

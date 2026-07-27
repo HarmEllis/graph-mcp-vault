@@ -28,7 +28,7 @@ The project owner may communicate in Dutch; all project artifacts must be in Eng
 | Runtime | Node.js 24 |
 | Language | TypeScript 5.x (strict mode) |
 | HTTP framework | Hono |
-| MCP protocol | `@modelcontextprotocol/sdk` |
+| MCP protocol | Hand-rolled JSON-RPC in `src/routers/mcp.ts` (no SDK — see [D-034](./docs/DECISIONS.md)) |
 | Neo4j driver | `neo4j-driver` (official, async) |
 | JWT / JWKS | `jose` |
 | Schema validation | `zod` |
