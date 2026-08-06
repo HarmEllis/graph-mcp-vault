@@ -12,7 +12,7 @@ overrides:
   brace-expansion: ">=2.0.3"
   uuid: ">=14.0.0"
   postcss: ">=8.5.10"
-  hono: ">=4.12.25"
+  hono: ">=4.13.0"
 
 onlyBuiltDependencies:
   - '@biomejs/biome'
