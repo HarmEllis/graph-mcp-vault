@@ -11,7 +11,7 @@ overrides:
   brace-expansion: '>=2.0.3'
   uuid: '>=14.0.0'
   postcss: '>=8.5.10'
-  hono: '>=4.12.25'
+  hono: '>=4.12.34'
 
 importers:
 
@@ -19,13 +19,13 @@ importers:
     dependencies:
       '@hono/node-server':
         specifier: ^2.0.12
-        version: 2.0.12(hono@4.12.28)
+        version: 2.0.12(hono@4.12.34)
       dotenv:
         specifier: ^16.4.0
         version: 16.6.1
       hono:
-        specifier: '>=4.12.25'
-        version: 4.12.28
+        specifier: '>=4.12.34'
+        version: 4.12.34
       jose:
         specifier: ^5.9.0
         version: 5.10.0
@@ -456,7 +456,7 @@ packages:
     resolution: {integrity: sha512-eWpQYr67tqJLeaSUl0Q+TquuYfUdTibpOJlUMV2FfUP7+KqCC5TufnwnlXL6mobZBJbGAYRd7ZvEBDCbLInjhg==}
     engines: {node: '>=20'}
     peerDependencies:
-      hono: '>=4.12.25'
+      hono: '>=4.12.34'
 
   '@isaacs/cliui@8.0.2':
     resolution: {integrity: sha512-O8jcjabXaleOG9DQ0+ARXWZBTfnP4WNAqzuiJK7ll44AmxGKv/J2M4TPjxjY3znBCfvBXFzucm1twdyFybFqEA==}
@@ -997,8 +997,8 @@ packages:
   graceful-fs@4.2.11:
     resolution: {integrity: sha512-RbJ5/jmFcNNCcDV5o9eTnBLJ/HszWV0P73bc+Ff4nS/rJj+YaS6IGyiOL0VoBYX+l1Wrl3k63h/KrH+nhJ0XvQ==}
 
-  hono@4.12.28:
-    resolution: {integrity: sha512-YwUvVpSF7m1yOblFPrU3Hbo8XhPheBoiyfGuII6z19LnOr6JpDnyyp7LFNrfV56wS8tpvtBFGRISHN02pDdLOA==}
+  hono@4.12.34:
+    resolution: {integrity: sha512-GqXJqY/xJkJmuloTrnV1ZEXG3fqte+VjkUqoRNZXcrUidiUOP4fMSIHHY4tsqZBK++kVyWmt/AAfSUuy57/eSA==}
     engines: {node: '>=16.9.0'}
 
   ieee754@1.2.1:
@@ -1661,9 +1661,9 @@ snapshots:
       protobufjs: 7.5.7
       yargs: 17.7.2
 
-  '@hono/node-server@2.0.12(hono@4.12.28)':
+  '@hono/node-server@2.0.12(hono@4.12.34)':
     dependencies:
-      hono: 4.12.28
+      hono: 4.12.34
 
   '@isaacs/cliui@8.0.2':
     dependencies:
@@ -2193,7 +2193,7 @@ snapshots:
 
   graceful-fs@4.2.11: {}
 
-  hono@4.12.28: {}
+  hono@4.12.34: {}
 
   ieee754@1.2.1: {}
 
