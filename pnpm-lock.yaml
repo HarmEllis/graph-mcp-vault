@@ -19,13 +19,13 @@ importers:
     dependencies:
       '@hono/node-server':
         specifier: ^2.0.12
-        version: 2.0.12(hono@4.13.0)
+        version: 2.0.12(hono@4.13.5)
       dotenv:
         specifier: ^16.4.0
         version: 16.6.1
       hono:
         specifier: '>=4.13.0'
-        version: 4.13.0
+        version: 4.13.5
       jose:
         specifier: ^5.9.0
         version: 5.10.0
@@ -997,8 +997,8 @@ packages:
   graceful-fs@4.2.11:
     resolution: {integrity: sha512-RbJ5/jmFcNNCcDV5o9eTnBLJ/HszWV0P73bc+Ff4nS/rJj+YaS6IGyiOL0VoBYX+l1Wrl3k63h/KrH+nhJ0XvQ==}
 
-  hono@4.13.0:
-    resolution: {integrity: sha512-jhunvfHWxd7J5EFfSgH4xsYJzSe/lfqbUCxiyyeaQasUsXeEHXtzVid+7EOGByc5JnFa23SSFL3Y2RV/z1T+eQ==}
+  hono@4.13.5:
+    resolution: {integrity: sha512-O6+/eCYRkzzzy0rPWwKLiGBR1nFuUPZynnwjxN1MBA62NNqbT0wQEzQyK2gSO5yDIDB336sXQleAhOHrzlYyKw==}
     engines: {node: '>=16.9.0'}
 
   ieee754@1.2.1:
@@ -1661,9 +1661,9 @@ snapshots:
       protobufjs: 7.5.7
       yargs: 17.7.2
 
-  '@hono/node-server@2.0.12(hono@4.13.0)':
+  '@hono/node-server@2.0.12(hono@4.13.5)':
     dependencies:
-      hono: 4.13.0
+      hono: 4.13.5
 
   '@isaacs/cliui@8.0.2':
     dependencies:
@@ -2193,7 +2193,7 @@ snapshots:
 
   graceful-fs@4.2.11: {}
 
-  hono@4.13.0: {}
+  hono@4.13.5: {}
 
   ieee754@1.2.1: {}
 
