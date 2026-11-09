@@ -1,5 +1,5 @@
 # ── Build stage ───────────────────────────────────────────────────────────────
-FROM node:24-slim AS build
+FROM node:26-slim AS build
 
 RUN apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/*
 
@@ -16,7 +16,7 @@ COPY src ./src
 RUN pnpm build
 
 # ── Production stage ──────────────────────────────────────────────────────────
-FROM node:24-slim AS final
+FROM node:26-slim AS final
 
 RUN apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/*
 
